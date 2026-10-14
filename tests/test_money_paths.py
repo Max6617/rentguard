@@ -886,5 +886,34 @@ class GuardIdleIsBoundedByUptime(MoneyCase):
         self.assertIn("idle", guard.decide(snap) or "")
 
 
+class FlakyFirstSample(FakeProvider):
+    """The first reading says RUNNING and usable; the very next one says it is not."""
+
+    def wait_running(self, instance_id, timeout_minutes=12.0, poll_s=10.0, log=print):
+        pod = self.get(instance_id) or {}
+        return {**pod, "status": "RUNNING",
+                "runtime": {"uptime": 600, "ports": {"22": "tcp"},
+                            "gpus": [{"util": 50, "memoryUtil": 10}]}}
+
+
+class UpNeedsTwoAliveSamples(MoneyCase):
+    def test_up_does_not_declare_success_on_a_single_alive_sample(self):
+        """Sequence: `up` waits, one reading says the machine is up, the next read says it is not
+        (the real M2 run: RUNNING with uptime=None, ports=NULL, exited 0, and `run` refused it).
+
+        Effect: `up` exits non-zero and says the machine is not usable, rather than declaring a
+        rental that is not there.
+        """
+        provider = FlakyFirstSample(rate_usd_per_hour=2.0)
+
+        code, out = self.invoke(cli.cmd_up, cli_args("up", "--purpose", "flaky"), provider)
+
+        self.assertNotEqual(code, 0,
+                            f"up declared success on a machine that was not usable.\noutput:\n{out}")
+        lowered = out.lower()
+        self.assertTrue("not usable" in lowered or "unusable" in lowered,
+                        f"up did not say the machine is unusable.\noutput:\n{out}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

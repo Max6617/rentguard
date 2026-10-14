@@ -776,8 +776,24 @@ def cmd_up(args) -> int:
         _write_state(cfg, state)
         note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
         pod = provider.wait_running(pod["id"], log=lambda m: print(m, flush=True))
-        _open_if_needed(cfg, ledger, pod, args.purpose, provider)
+        run = _open_if_needed(cfg, ledger, pod, args.purpose, provider)
         _print_access(cfg, provider, pod)
+
+        # One alive reading is a claim, not a fact. On the real account `up` reported RUNNING with
+        # uptime=None and ports=NULL, exited 0 and opened a row, and `run` refused the machine
+        # seconds later. So a second, independent read decides success — and if it disagrees, the
+        # row is still open (that spend must not be hidden) but `up` does not claim a machine.
+        confirmed = provider.get(pod["id"]) or pod
+        if not is_alive(confirmed):
+            runtime = confirmed.get("runtime") or {}
+            note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is not "
+                 f"usable on a second read (uptime={runtime.get('uptime')}, ports="
+                 f"{'set' if runtime.get('ports') else 'NULL'}). A row is open, so the spend is "
+                 f"recorded rather than hidden; `rentguard down` stops the machine.")
+            emit(action="unusable", instance={"id": pod.get("id"),
+                                              "status": confirmed.get("status")},
+                 run=_run_dict(run))
+            return 1
 
         note(f"\ncap            : ${cfg.budget.cap_usd:.2f} total, "
               f"${cfg.budget.per_run_cap_usd:.2f} per run, {cfg.budget.max_hours_per_run:.1f} h max")
