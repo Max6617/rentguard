@@ -102,14 +102,20 @@ RENTGUARD_PROVIDER=fake rentguard doctor
 
 Its helper list, how to drive the real CLI with it across processes, and a runnable demonstration of
 the cap firing with nothing spent: **[Test the cap without spending](fake.md)**. The suite's money
-paths (`tests/test_money_paths.py`, 23 tests) run on it.
+paths (`tests/test_money_paths.py`, 28 tests) run on it.
 
 ## Adding Vast, Lambda, or a local box
 
+**Not supported yet.** What follows is the shape a second provider has to fit, not a path anyone has
+walked. RunPod and the fake are the only registered providers, `cli._rp` reads `cfg.runpod` so there is
+no `[vast]` section, and nothing here has been done end to end. Treat it as the map for the next
+person, not as a feature.
+
 1. Create `rentguard/vast.py` with a `Provider` subclass. The module must expose a class named
    `Provider` (the registry reads that name).
-2. Implement `get`, `list_pods`, `create`, `action` and `wait_running` in the canonical shape. If the
-   provider's own field names differ, do the translation in `normalise` and keep the names in one
+2. Implement `get`, `list_pods`, `create`, `action` and `wait_running` in the canonical shape. Today
+   the payload is used exactly as returned — `normalise` exists in the interface but nothing calls it —
+   so if the provider's field names differ, translate inside those methods and keep the names in one
    place.
 3. Implement `ssh_argv` — how a caller actually reaches the machine — and `pull_artifacts` if you can
    fetch files without ssh. If you cannot, leave `pull_artifacts` unimplemented and the CLI falls

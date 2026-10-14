@@ -20,7 +20,8 @@ gpu_preference = ["Fake GPU 24GB"]   # the fake only has this GPU; no stock mean
 
 Then every command behaves as it does against a provider, including across processes: the fake saves
 its machines to `.rentguard/fake-state.json`, so `up` in one shell, `status` in the next and `down` in
-a third all see the same instance.
+a third all see the same instance. A `FakeProvider()` built in a test without a state path stays in
+memory and never touches disk.
 
 ```console
 $ RENTGUARD_PROVIDER=fake rentguard doctor
