@@ -278,5 +278,100 @@ class DownNamesWhatItIsAboutToLose(PullCase):
             self.assertIn(pattern, out, f"{pattern} is not named as not pulled.\n{out}")
 
 
+class DownWithAPartialDelivery(PullCase):
+    """`down` from the other side: a partial delivery must read as a partial delivery, and the
+    machine must stop and the row close in both the partial case and the empty one."""
+
+    def down(self, *, child: list[str]) -> tuple[int, str]:
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
+                mock.patch.object(cli, "_ssh_argv", lambda cfg, pod, provider=None: (child, "x")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                code = cli.cmd_down(cli_args("down"))
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue()
+
+    def test_a_partial_delivery_stops_the_machine_and_names_the_gap_without_claiming_a_loss(self):
+        """Sequence: two patterns configured; the archive holds a member for the first only; tar
+        exits 2.
+
+        Effect required: the delivered file is on disk, the machine is stopped, the row is closed
+        with its cost, and the missed pattern is named. The "nothing was delivered / will be lost"
+        sentence must NOT appear, because a file landed — that sentence is for the case where
+        nothing arrived.
+        """
+        self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
+        child = [sys.executable, "-c", WRITER,
+                 tar_hex({"results/out.json": b'{"ok": true}'}), "2"]
+
+        code, out = self.down(child=child)
+
+        landed = Path(self.cfg.artefacts.local_dir) / "results" / "out.json"
+        self.assertTrue(landed.exists(), f"the delivered file was not written.\n{out}")
+        self.assertIn(("pod-A", "stop"), self.provider.actions, f"the machine was left billing.\n{out}")
+        self.assertIsNone(self.ledger.open_run(), f"the row was left open.\n{out}")
+        self.assertIsNotNone(self.ledger.entries()[0].get("estimated_usd"),
+                             f"the closed row has no cost.\n{out}")
+        self.assertIn("logs/*.log", out, f"the missed pattern was not named.\n{out}")
+        self.assertNotIn("nothing was delivered", out.lower(),
+                         f"a partial delivery was reported as a total loss.\n{out}")
+        self.assertNotIn("will be lost", out.lower(),
+                         f"files that did arrive were reported as lost.\n{out}")
+
+    def test_an_empty_archive_through_down_still_stops_closes_and_names_the_patterns(self):
+        """The other side of the same branch: nothing delivered at all. Effect: a non-zero exit, the
+        machine stopped, the row closed with its cost, and the sentence naming what may be lost."""
+        self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
+        child = [sys.executable, "-c", WRITER, tar_hex({}), "2"]
+
+        code, out = self.down(child=child)
+
+        self.assertNotEqual(code, 0, f"an empty archive exited 0.\n{out}")
+        self.assertIn(("pod-A", "stop"), self.provider.actions, f"the machine was left billing.\n{out}")
+        self.assertIsNone(self.ledger.open_run(), f"the row was left open.\n{out}")
+        self.assertIsNotNone(self.ledger.entries()[0].get("estimated_usd"),
+                             f"the closed row has no cost.\n{out}")
+        self.assertIn("will be lost", out, f"the loss was not stated.\n{out}")
+        for pattern in ("results/*.json", "logs/*.log"):
+            self.assertIn(pattern, out, f"{pattern} is not named.\n{out}")
+
+
+class TheSummaryIsNotFromAPreviousPull(PullCase):
+    def test_a_pull_that_crashes_does_not_borrow_the_previous_pulls_delivery(self):
+        """Sequence: a `pull` that delivered a file, then — in the same process — a `down` whose
+        pull blows up before it can report anything (the Cadence shape: the tar stream fails).
+
+        Effect required: `down` must not describe the crashed pull with the *previous* pull's
+        delivery. The summary is module state that survives between commands, so a sentence built
+        from it can be true of an earlier command and false of this one.
+        """
+        self.cfg.artefacts.pull = ["results/*.json"]
+        good_child = [sys.executable, "-c", WRITER, tar_hex({"results/out.json": b"x"}), "0"]
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
+                mock.patch.object(cli, "_ssh_argv", lambda cfg, pod, provider=None: (good_child, "x")), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            cli.cmd_pull(cli_args("pull", "--json"))
+
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
+                mock.patch.object(cli, "cmd_pull",
+                                  side_effect=OSError("cannot write the tar stream")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                cli.cmd_down(cli_args("down"))
+            except SystemExit:
+                pass
+
+        text = out.getvalue().lower()
+        self.assertNotIn("delivered 1 file", text,
+                         "`down` described a crashed pull with the delivery of the previous one: the "
+                         f"summary it reads is module state that outlives the command.\n{out.getvalue()}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
