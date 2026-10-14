@@ -6,13 +6,13 @@ is the only question that goes back to them.
 
 ## The revision this page describes
 
-Everything below was measured at **`7febd07`** (`7febd074f379710016f885e5b211238d44e30c96`) in a clean
+Everything below was measured at **`310f449`** (`310f449ffecc2af8d6cc6afbe067bede97f63ba4`) in a clean
 worktree, with the package path verified inside that worktree (`rentguard.mcp_server.__file__`).
 
 | Measurement | Value | How |
 | --- | --- | --- |
-| Suite | **322 passed, 0 failed, 50 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `7febd07`, and identical with and without `RENTGUARD_PROVIDER=fake` |
-| Coverage | **98.4% (2,347 / 2,384)** | `python tools/coverage.py` at `7febd07`; floor 98.0%, exits **0**, and the 94.0% target is met |
+| Suite | **350 passed, 0 failed, 54 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `310f449`, and identical with and without `RENTGUARD_PROVIDER=fake` |
+| Coverage | **98.1% (2,494 / 2,542)** | `python tools/coverage.py` at `310f449`; floor 98.0%, exits **0**, and the 94.0% target is met |
 | Features | **10 CLI commands, 11 MCP tools** | `tests/test_feature_matrix.py`, green here |
 
 The standard is **94% of the code and 100% of the features**. The feature matrix is the evidence for the
@@ -20,47 +20,49 @@ features half, because a line number says code was *reached*, never that its beh
 guard defect that stopped a 32-second-old pod lived in lines that all executed.
 
 **Two modules are individually below the 94% figure**, so the total is not a promise about each of them:
-`ledger.py` at 93.7% and `runpod.py` at 93.8%. `mcp_server.py`, the weakest at `458e128` (90.3%), is
-99.1%.
+`ledger.py` at 93.7% and `runpod.py` at 92.7%, the lowest here. `mcp_server.py`, the weakest at
+`458e128` (90.3%), is 98.7%.
 
 | Module | Cover | Note |
 | --- | --- | --- |
 | `fake.py` | 99.6% | only the tracer's sentinel line unhit |
-| `cli.py` | 99.6% | 98.6% at `f158396`, before the pull and rate branches were covered |
-| `mcp_server.py` | 99.1% | was 90.3% at `458e128` |
+| `cli.py` | 99.1% | — |
+| `guard.py` | 99.1% | — |
 | `config.py` | 99.0% | — |
-| `guard.py` | 99.0% | — |
-| `provider.py` | 96.6% | — |
-| `runpod.py` | 93.8% | below 94% on its own |
+| `mcp_server.py` | 98.7% | was 90.3% at `458e128` |
+| `provider.py` | 95.9% | — |
 | `ledger.py` | 93.7% | below 94% on its own |
+| `runpod.py` | 92.7% | below 94% on its own, and the lowest here |
 
-The figures move with the tree: `18b5fc0` measured 96.1% with `fake.py` at 87.7%; `458e128` measured
-97.5% with `mcp_server.py` at 90.3%; `cdd7113` measured 98.4% (295 tests); `f158396` measured 97.99%
-(318 tests, exit 1); `7febd07` is 98.4% (322 tests, exit 0). Each was re-measured when a measured module
-changed, never carried forward.
+The figures move with the tree: `18b5fc0` measured 96.1%; `458e128` 97.5%; `cdd7113` 98.4% (295 tests);
+`f158396` 97.99% (318 tests, **exit 1**, one line short); `7febd07` 98.4% (322 tests, exit 0); `310f449`
+is 98.1% (350 tests, exit 0). Each was re-measured when a measured module changed, never carried forward.
 
 ## 1. The tool is proven
 
-- [x] **M1 — the suite is green with no network and no spend.** 322 passed, 0 failed at `7febd07`,
+- [x] **M1 — the suite is green with no network and no spend.** 350 passed, 0 failed at `310f449`,
       driving the real CLI through the in-memory fake provider, and identical with and without
       `RENTGUARD_PROVIDER=fake`. `tests/test_ledger_paths.py` covers the ledger's own file paths,
       including the lock and a truncated line.
-- [x] **The coverage ratchet works, and it caught a regression this session.** Both readings belong
-      here, because the pair is the evidence the mechanism does its job:
+- [x] **The coverage ratchet works, and it caught a regression this session.** All three readings belong
+      here, because the series is the evidence the mechanism does its job:
       - at `f158396`: **2,336 / 2,384 = 97.99%**, floor 98.0%, `tools/coverage.py` **exits 1** — one
         line short. `e19c521` and `f158396` fixed two defects and added `cli.py` and `runpod.py` lines
         faster than tests;
       - at `7febd07`: **2,347 / 2,384 = 98.4%**, **exits 0**, after a test commit covered the new pull
-        and rate branches.
+        and rate branches;
+      - at `310f449`: **2,494 / 2,542 = 98.1%**, **exits 0**, after the cross-root claim, MCP-`run` and
+        bounded-stop work added lines with their tests.
       The floor was **not** lowered: it was flagged as an open gate (the ratchet's own comment says it
-      only moves upwards) and the tests closed it. That is the second regression the floor has caught.
+      only moves upwards) and the tests closed it.
 - [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total
       ($0.0091 + $0.0079 + $0.0094), three ledger rows reconciled by hand from the rows' own fields, and
       one artefact pulled from the right machine. The record is [M2 — the real rental](M2-REAL-RENTAL.md).
 - [x] **Money defects found and fixed, each with a test.**
       `up --dry-run` could rent (`ce69cea`, asserted on the provider call by `f7bf556`);
       `up` declared success on one alive sample (`4db7d3e`); the guard could stop a healthy pod (`d5fdaea`);
-      `adopt` mispriced an exited pod (`590c58e`); storage was invisible (`fb867b6`, `f4225ff`).
+      `adopt` mispriced an exited pod (`590c58e`); storage was invisible (`fb867b6`, `f4225ff`);
+      a pull could hold a machine open and a stop could hang (`03dd52d`).
 - [ ] **R4 — the guard has never run against a rented pod.** The stop decision is exercised in-process
       and through the CLI against the fake, but `watch` has never been armed on a real billing machine,
       so the sentence "a forgotten machine stops itself" is still unproven end to end. This is the one
@@ -90,7 +92,7 @@ changed, never carried forward.
       `tests/test_cli_branches.py` tests: **248 passed / 2 failed with the variable, 250 passed / 0 failed
       without it**, measured at `6f31c27` and again at `458e128`. Closed at `cdd7113`, which pins the
       provider *inside* those two tests rather than changing the CI step, and the suite is now
-      **322 passed / 0 failed both with the variable and without it**.
+      **350 passed / 0 failed both with the variable and without it**.
 
 ## 3. The docs are true
 
@@ -110,10 +112,12 @@ changed, never carried forward.
 
 ## 5. Publication state
 
-- **No git remote is configured** (`git remote -v` is empty), nothing has been pushed, and there are no
-  tags. Everything lives in one local repository.
-- **The user's publish action would**: create a public repository under Max6617's GitHub account and
-  push this history to it, and — separately — publish version `0.1.0` to PyPI if they choose to.
+- **The repository exists and the remote is wired; nothing has been pushed.** `git remote -v` shows
+  `origin  https://github.com/Max6617/rentguard.git (fetch and push)`, the repository at
+  <https://github.com/Max6617/rentguard> is public, and every commit is still local — no branch and no tag
+  has been pushed.
+- **The user's publish action would**: push this history to that repository, and — separately — publish
+  version `0.1.0` to PyPI if they choose to.
 - **What becomes irreversible**: a public repository can be deleted, though its forks and clones cannot;
   a published PyPI version cannot be unpublished, only yanked, and the name stays taken by this project.
 
@@ -132,10 +136,14 @@ changed, never carried forward.
 - **The network-volume attach path is dropped for lack of a volume, not untested.** The account's only
   volume was deleted on the user's instruction; with nothing left to attach, `[runpod].volume_id`
   cannot be exercised here. The transport seam is unit-covered (`da51005`). See `CHARTER.md` W3.
-- **Two modules are individually below the 94% figure**: `ledger.py` at 93.7% and `runpod.py` at 93.8%.
-  The 98.4% total clears the standard and the 98.0% floor; those two do not clear 94% on their own, so
-  read the total as the project's number, not as a promise about every module. `mcp_server.py`, the
-  weakest at the earlier pin (90.3%), is now 99.1%.
+- **The community-pod ssh route is unproven on hardware, and it currently fails.** A community pod has
+  no direct endpoint, so it is reached through the `ssh.runpod.io` proxy. The PTY opens with `-tt`, but
+  the command still does not execute and the pull reads prompt text back. Defect 9 is open; the direct
+  route is unaffected. Anyone renting a community pod should expect `run` not to work.
+- **Two modules are individually below the 94% figure**: `ledger.py` at 93.7% and `runpod.py` at 92.7%,
+  the lowest here. The 98.1% total clears the standard and the 98.0% floor; those two do not clear 94% on
+  their own, so read the total as the project's number, not as a promise about every module.
+  `mcp_server.py`, the weakest at the earlier pin (90.3%), is now 98.7%.
 - **`fake.py` is no longer a limitation.** It is 99.6% with nothing real unhit; the only line the tracer
   reports is its sentinel. It is the module where a fixture can manufacture a world that is not real, so
   the standing rule is recorded in `tests/test_storage.py`: a provider-payload fixture comes from a live

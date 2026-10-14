@@ -75,6 +75,11 @@ The direct route is a plain byte channel and is unchanged. `ssh_requires_pty` is
 tells the caller which case it holds, so the artefact logic never has to know which provider it is
 talking to.
 
+**The proxy route is implemented but unproven on hardware, and it currently fails.** Defect 9 is open:
+the PTY opens, and the command still does not execute and the pull reads prompt text back. The code and
+its tests are in place; the behaviour on a real community pod is not. Treat `ssh_requires_pty` as the
+contract it is, not as a working route.
+
 ## How a provider is selected
 
 The order is fixed: `RENTGUARD_PROVIDER` in the environment, then `provider = "..."` in

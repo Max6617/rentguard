@@ -99,10 +99,13 @@ you. Treat "is the heartbeat fresh" as a check you own.
 crosses the cap just after a check pays for up to one more interval before the stop is sent, and the
 provider's own stop latency is not modelled.
 
-**Spend that rentguard never recorded is invisible to the cap.** An instance billing on the account
-with no ledger row sits outside every check. `doctor` lists those and warns; `adopt` gives one a row,
-backdated from the provider's uptime. If you never run either, the cap compares your cap against a
-total that is missing that machine.
+**Spend that rentguard never recorded is invisible to the cap.** An instance billing on the account with
+no ledger row sits outside every check. `doctor` separates two cases by the machine's **name**: one
+carrying a `rentguard-<tag>` that is not this root's is another root's machine — that root's ledger owns
+it, and this one only warns, because stopping a machine someone else is paying for is worse than a
+warning; a name no project claims (including the old fixed `rentguard-workbench`) is a stray, and that is
+the hard error. `adopt` gives a machine a row, backdated from the provider's uptime. If you never run
+either, the cap compares your cap against a total that is missing that machine.
 
 **Recorded totals exclude the open row.** `ledger` and `doctor` sum closed rows only; `ledger` prints
 the open row's accrued cost on its own line under the table, and `status` prints the live estimate
@@ -138,11 +141,16 @@ which are attached to nothing; `ledger` states that its total covers rentals onl
 unit-covered, not exercised end to end — see [KNOWN-FAILURES](KNOWN-FAILURES.md), F-6.
 
 **Everything remote goes over ssh.** `run` and `pull` use the `ssh` binary on your PATH, with
-`StrictHostKeyChecking=no` and `UserKnownHostsFile=NUL` on Windows. No ssh client, no remote work.
-Where the provider reaches the machine through the `ssh.runpod.io` proxy — a community pod, which has no
-direct endpoint — the session is a PTY: `-tt` is passed, because without it the proxy answers
-`Error: Your SSH client doesn't support PTY` and the command never runs, and the artefact archive then
-travels base64-encoded because a PTY rewrites LF as CRLF. The direct route is unchanged.
+`StrictHostKeyChecking=no` and the local null device for known hosts (`NUL` on Windows, `/dev/null`
+elsewhere — the provider states the option, the CLI substitutes this platform's device). No ssh client, no
+remote work.
+
+**The community-pod route is unproven on hardware, and it currently fails.** A community pod has no
+direct endpoint, so it is reached through the `ssh.runpod.io` proxy, which only allocates a PTY: without
+`-tt` the proxy answers `Error: Your SSH client doesn't support PTY`, so `-tt` is passed and the archive
+travels base64-encoded (a PTY rewrites LF as CRLF). Even so, defect 9 is open: the PTY opens but the
+command still does not execute, and the pull reads prompt text back. Rent a secure pod, or expect `run`
+not to work. The direct route is unchanged and is what the real rentals in this project used.
 
 **Artefact patterns are expanded by the remote shell and joined without quoting.** A pattern
 containing a space breaks the pull; `**` behaves like `*` under a POSIX `sh`. Use plain globs.
@@ -155,6 +163,12 @@ the stop — it stops anyway, exits non-zero, and prints which patterns were los
 `down --keep-running` is the explicit opposite: leave the machine up so the copy can be retried, which
 keeps billing. The stop is the default because a machine that keeps billing is the worse loss. Call
 `rentguard pull` yourself between runs if you want a copy at any other moment.
+
+**A pull cannot hold a machine open, and a stop cannot hang.** An ssh pull is bounded by
+`[artefacts].pull_timeout_s` (120 s by default): when the bound expires the child is killed and the pull
+is reported as `ssh-timeout`, and `down` stops anyway. A stop is bounded by `[budget].stop_timeout_s`
+(45 s by default): if the ordinary call does not return within that, it escalates to the provider's own
+stop endpoint. Both bounds exist for the same reason — no socket is worth a machine that keeps billing.
 
 **`--json` splits the two streams, so merge them deliberately.** With `--json`, stdout carries exactly
 one JSON document and the human prose goes to stderr, so `json.loads(stdout)` works without hunting for

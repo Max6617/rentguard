@@ -23,7 +23,7 @@ spend crosses the cap. Everything below is about what that does and does not cov
 | Check | When | What it reads | What it does |
 | --- | --- | --- | --- |
 | Recorded spend against the cap | `rentguard up`, before anything is rented | closed rows **plus the accrued cost of the open row** | refuses, exit code 2, unless `--cap N` or `--force` |
-| A live instance with no ledger row | `rentguard up`, before renting | live instances on the account | refuses; `adopt` it or stop it |
+| A live instance with no ledger row **here** | `rentguard up`, before renting | live instances on the account, and the name that says whose they are | refuses an **unclaimed** machine (`adopt` it or stop it); a name another root tags is a warning, because that root's ledger owns it |
 | An open row naming a missing instance | `rentguard up`, before renting | the ledger and the provider | refuses; `down` closes the row |
 | The choice, without renting | `rentguard up --dry-run` | the GPU choice and the cap check, with no `create` call | prints what it would request and rents nothing (fixed at `ce69cea`; it used to rent behind the flag) |
 | Total cap | every `watch` poll | closed rows plus the live estimate of the open row | stops the instance, closes the row |
@@ -94,9 +94,11 @@ uptime is therefore not a cap on the row's wall clock.
 **It stops, it does not terminate.** `watch` sends `stop`. Whether a stopped machine still bills for
 its disk or volume is a provider question this ledger does not model.
 
-**It cannot stop what it does not know about.** An instance on the account with no ledger row is
-outside the cap entirely. That is the failure the tool is built around: `doctor` lists live instances
-with no row and warns, and `adopt` gives one a row.
+**It cannot stop what it does not know about.** An instance on the account with no ledger row *here* is
+outside the cap entirely. That is the failure the tool is built around: `doctor` lists those and uses the
+machine's name to say what can be done about it — an unclaimed name is a hard error (`adopt` it or stop
+it), while a name another root tags is only a warning, because that root's ledger owns it and a local
+missing file is not proof that nobody recorded it.
 
 **Two processes can share one ledger, with a lock.** `open` and `close` take an exclusive lock file
 (created with `O_EXCL`, broken if older than 60 seconds), so two `up`s in two terminals cannot both

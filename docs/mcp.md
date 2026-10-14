@@ -56,7 +56,7 @@ A client entry looks like this:
 | `rentguard_ledger` | read-only | every rental with wall clock and cost, and the total |
 | `rentguard_doctor` | read-only | config, key, recorded spend, heartbeat, and live instances with no ledger row |
 | `rentguard_start` | **spends** | rent or resume an instance; refuses when recorded spend reaches the cap |
-| `rentguard_run` | uses a rented machine | run a shell command remotely over ssh, then pull artefacts if configured |
+| `rentguard_run` | uses a rented machine | run a shell command remotely over ssh, then pull artefacts if configured; its result carries the command's `exit_code` and its output (`stdout`, `stderr`, the byte counts, and a `truncated` flag when the tail was cut) |
 | `rentguard_pull` | reads from the machine | pull the configured artefact patterns now |
 | `rentguard_stop` | stops spend | stop the instance and close the ledger row with its cost |
 | `rentguard_adopt` | records spend | give an already-running instance a ledger row, backdated from its uptime |
@@ -141,6 +141,14 @@ same answer as an object, so a Bot does not have to parse prose. The server asks
 on the fake provider — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt`,
 `watch_once`, `watch`, `init` — see [VERIFICATION](VERIFICATION.md). `run` was exercised on its
 "nothing is rented" path; remote execution needs ssh to a real machine and is M2's, not this page's.
+
+**A tool that spawns a child cannot leak onto the protocol stream.** `rentguard_run` starts an ssh
+child, and a child inherits the real file descriptor 1 — not the captured `sys.stdout`. Left alone, its
+output would appear between JSON-RPC messages and the client would read garbage. Two things prevent it:
+`run` returns the command's `stdout` and `stderr` **inside its result** (`exit_code`, `stdout`,
+`stderr`, the byte counts, and `truncated` when only the tail was kept), and for the duration of every
+tool call the server points fd 1 at fd 2, so anything that bypasses the capture lands on the server's log
+stream instead. The stream is reserved for every tool, not patched for one.
 
 ## Errors
 

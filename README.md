@@ -99,11 +99,13 @@ cap_usd = 25.0            # hard ceiling for the whole project, across all runs
 per_run_cap_usd = 5.0     # ceiling for a single open run
 max_hours_per_run = 6.0   # wall-clock ceiling for one rental
 idle_minutes = 10         # stop after this long with the GPU idle; 0 disables
+stop_timeout_s = 45       # a stop slower than this escalates to the provider's stop endpoint
 
 [artefacts]
 pull = ["results/**/*.json", "logs/*.log"]
 local_dir = "./artefacts"
 remote_dir = "/workspace"
+pull_timeout_s = 120      # one ssh pull may take this long, then it is killed and reported
 
 [runpod]
 cloud = "SECURE"
