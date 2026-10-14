@@ -156,6 +156,7 @@ class FakeProvider(Provider):
         self.offer_unavailable = False
         self.requested_gpus: list[list[str]] = []
         self.artifacts = ArtifactStore()
+        self._volumes: list[dict] = []
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
         #: Where this fake remembers itself between processes. ``None`` means "in memory only",
@@ -405,6 +406,20 @@ class FakeProvider(Provider):
         return [{"id": self.gpu_id, "name": self.display_name, "memory": 24,
                  "secure": "HIGH", "community": "HIGH",
                  "price": {"secure": self.rate, "community": self.rate}}]
+
+    # ------------------------------------------------------------ storage
+
+    def add_volume(self, name: str = "fake-vol", size_gb: float = 150.0, region: str = "FAKE-1",
+                   attached_to: str | None = None) -> dict:
+        """Give the account a network volume, so the storage path has something to report."""
+        volume = {"id": f"vol-{len(self._volumes) + 1}", "name": name, "size_gb": float(size_gb),
+                  "region": region, "attached_to": attached_to,
+                  "monthly_usd": self.volume_monthly_usd(size_gb)}
+        self._volumes.append(volume)
+        return dict(volume)
+
+    def volumes(self) -> list[dict]:
+        return [dict(volume) for volume in self._volumes]
 
     # ------------------------------------------------------------ access and artefacts
 

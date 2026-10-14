@@ -143,6 +143,30 @@ class RunPod(Provider):
     # choose_gpu and price_of are inherited: the availability and price fields in RunPod's catalog
     # are exactly the canonical ones documented in provider.py.
 
+    # ---------------------------------------------------------------- storage
+
+    def volumes(self) -> list[dict]:
+        """Network volumes, in the canonical shape, with what they cost while nothing runs.
+
+        RunPod bills a volume whether or not a pod exists, so this is a *continuous* cost that no
+        ledger row covers. ``attached_to`` is left to the caller, which is the only place that knows
+        which pods exist: a volume is attached when a pod names it.
+        """
+        payload = self._request("GET", "/v2/network-volumes")
+        rows = payload if isinstance(payload, list) else payload.get("volumes", [])
+        volumes: list[dict] = []
+        for row in rows:
+            size = float(row.get("size") or 0.0)
+            volumes.append({
+                "id": row.get("id"),
+                "name": row.get("name") or "(unnamed)",
+                "size_gb": size,
+                "region": row.get("dataCenterId") or row.get("dataCenterIds") or "",
+                "attached_to": None,
+                "monthly_usd": self.volume_monthly_usd(size),
+            })
+        return volumes
+
     # ---------------------------------------------------------------- access
 
     def normalise(self, instance: dict) -> dict:

@@ -195,6 +195,29 @@ class Provider:
         """
         raise NotImplementedError
 
+    # ------------------------------------------------------------------ storage
+
+    def volumes(self) -> list[dict]:
+        """Network volumes on the account, with what they cost while nothing runs.
+
+        Canonical shape::
+
+            volume = {"id": str, "name": str, "size_gb": float, "region": str,
+                      "attached_to": str | None,   # the instance using it, or None
+                      "monthly_usd": float}
+
+        This exists because a volume bills whether or not a pod exists. A cost that continues while
+        nothing is rented belongs in the same report as the cap, or the cap is a fraction of the
+        truth. A provider with no storage returns ``[]``.
+        """
+        return []
+
+    #: What a provider charges per GB per month for a network volume, when it charges a flat rate.
+    volume_usd_per_gb_month: float = 0.07
+
+    def volume_monthly_usd(self, size_gb: float) -> float:
+        return round(float(size_gb or 0.0) * self.volume_usd_per_gb_month, 4)
+
     # ------------------------------------------------------------------ helpers
 
     @staticmethod

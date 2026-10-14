@@ -492,6 +492,52 @@ def cmd_doctor(args) -> int:
         if not live:
             note("  (nothing is billing)")
 
+        # Storage bills whether or not a pod exists, so a report that lists only pods can be right
+        # about every instance and still miss the largest recurring cost on the account. Severity is
+        # "warn": keeping a volume is legitimate, but paying for one that nothing uses is not
+        # something anyone should have to remember. Doctor's hard errors stay reserved for a machine
+        # that is billing with no record of it.
+        try:
+            volumes = provider.volumes()
+            volumes_error = None
+        except ProviderError as exc:
+            volumes = []
+            volumes_error = str(exc)
+        used_volume_ids = {p.get("volumeId") for p in pods if p.get("volumeId")}
+
+        def attached_to(volume: dict) -> str | None:
+            return volume.get("attached_to") or (
+                volume.get("id") if volume.get("id") in used_volume_ids else None)
+
+        storage_monthly = round(sum(float(v.get("monthly_usd") or 0.0) for v in volumes), 2)
+        note(f"network volumes: {len(volumes)}  (${storage_monthly:.2f}/month, billed while nothing "
+             f"runs)")
+        for volume in volumes:
+            holder = attached_to(volume)
+            note(f"  {volume.get('name')}  {float(volume.get('size_gb') or 0):.0f} GB  "
+                 f"{volume.get('region') or '?'}  ${float(volume.get('monthly_usd') or 0):.2f}/month"
+                 f"  " + (f"attached to {holder}" if holder
+                          else "attached to NOTHING — it bills with nothing using it"))
+            if holder is None:
+                findings.append(Finding(
+                    code="storage-unattached", severity="warn",
+                    message=f"volume {volume.get('name')!r} "
+                            f"({float(volume.get('size_gb') or 0):.0f} GB, "
+                            f"{volume.get('region')}) costs "
+                            f"${float(volume.get('monthly_usd') or 0):.2f}/month and is attached to "
+                            f"no instance; delete it if it is not wanted"))
+        if volumes:
+            findings.append(Finding(
+                code="storage-not-in-ledger", severity="warn",
+                message=f"${storage_monthly:.2f}/month of network storage is NOT in the ledger "
+                        f"total, which covers rentals only"))
+        if volumes_error:
+            findings.append(Finding(code="provider-error", severity="warn",
+                                    message=f"could not list network volumes: {volumes_error}"))
+
+        emit(network_volumes=[{**v, "attached_to": attached_to(v)} for v in volumes],
+             storage_monthly_usd=storage_monthly)
+
         untracked = [p for p in live if p.get("id") != tracked]
         if untracked:
             findings.append(Finding(
@@ -620,25 +666,31 @@ def cmd_ledger(args) -> int:
              malformed_lines=ledger.parse_errors())
         if not rows:
             note("no runs recorded")
-            return 0
-        note(f"{'run':<22} {'gpu':<26} {'hours':>7} {'usd':>8}  {'closed by':<18} purpose")
-        note("-" * 118)
-        for row in rows:
-            hours = row.get("wall_clock_hours")
-            usd = row.get("estimated_usd")
-            note(f"{str(row.get('run_id'))[:22]:<22} {str(row.get('gpu_id'))[:26]:<26} "
-                  f"{(f'{hours:.2f}' if hours is not None else 'OPEN'):>7} "
-                  f"{(f'{usd:.4f}' if usd is not None else '-'):>8}  "
-                  f"{str(row.get('closed_by') or '-'):<18} {row.get('purpose')}")
-        note("-" * 118)
-        note(f"{'total':<22} {'':<26} "
-              f"{sum(float(r.get('wall_clock_hours') or 0) for r in rows):>7.2f} "
-              f"{ledger.total_usd():>8.4f}")
-        if open_run:
-            note(f"open row       : {open_run.get('run_id')}  accrued "
-                  f"${ledger.live_usd():.4f} (not in the total until closed)")
-        note(f"cap: ${cfg.budget.cap_usd:.2f}   remaining: "
-              f"${cfg.budget.cap_usd - ledger.total_usd():.2f}")
+        else:
+            note(f"{'run':<22} {'gpu':<26} {'hours':>7} {'usd':>8}  {'closed by':<18} purpose")
+            note("-" * 118)
+            for row in rows:
+                hours = row.get("wall_clock_hours")
+                usd = row.get("estimated_usd")
+                note(f"{str(row.get('run_id'))[:22]:<22} {str(row.get('gpu_id'))[:26]:<26} "
+                      f"{(f'{hours:.2f}' if hours is not None else 'OPEN'):>7} "
+                      f"{(f'{usd:.4f}' if usd is not None else '-'):>8}  "
+                      f"{str(row.get('closed_by') or '-'):<18} {row.get('purpose')}")
+            note("-" * 118)
+            note(f"{'total':<22} {'':<26} "
+                  f"{sum(float(r.get('wall_clock_hours') or 0) for r in rows):>7.2f} "
+                  f"{ledger.total_usd():>8.4f}")
+            if open_run:
+                note(f"open row       : {open_run.get('run_id')}  accrued "
+                      f"${ledger.live_usd():.4f} (not in the total until closed)")
+            note(f"cap: ${cfg.budget.cap_usd:.2f}   remaining: "
+                  f"${cfg.budget.cap_usd - ledger.total_usd():.2f}")
+        # Always shown, including when nothing has ever been rented — which is exactly when a
+        # standing storage cost is easiest to miss. A volume bills every month whether or not a pod
+        # exists, so this line is the difference between a total and a fraction of the truth.
+        note("storage: NOT included above — network volumes bill monthly while nothing runs; "
+             "`rentguard doctor` lists them with their cost")
+        emit(storage_excluded_from_total=True)
     return 0
 
 
