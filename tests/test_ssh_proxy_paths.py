@@ -28,6 +28,7 @@ import base64
 import contextlib
 import io
 import json
+import os
 import sys
 import tarfile
 import unittest
@@ -195,6 +196,27 @@ class ArgvTest(unittest.TestCase):
         self.assertTrue(self.pod.ssh_requires_pty(nested))
         args, _ = self.pod.ssh_argv(nested, None)
         self.assertIn("-tt", args)
+
+    def test_the_known_hosts_null_device_is_the_local_platforms_name(self):
+        """The provider says *where* to look; the CLI says what this platform's null device is called.
+
+        A hardcoded ``NUL`` is a Windows name, and on Linux or macOS it is a file literally called
+        ``NUL`` written into the user's working directory — on the very route whose known-hosts file
+        it names. The provider therefore hands over a ``{null}`` placeholder, which ``cli._ssh``
+        substitutes, and this host can exercise both substitutions.
+        """
+        args, _ = self.pod.ssh_argv({"ssh": dict(DIRECT_SSH)}, None)
+        self.assertIn("UserKnownHostsFile={null}", args,
+                      f"the provider named a platform device itself: {args}")
+
+        cfg = Config()
+        argv, _ = cli._ssh_argv(cfg, self.pod, {"ssh": dict(DIRECT_SSH)})
+        here = "UserKnownHostsFile=" + ("NUL" if os.name == "nt" else "/dev/null")
+        self.assertIn(here, argv, f"the CLI did not substitute this platform's device: {argv}")
+
+        with mock.patch.object(cli.os, "name", "posix"):
+            self.assertEqual(cli._ssh("UserKnownHostsFile={null}"),
+                             "UserKnownHostsFile=/dev/null")
 
 
 class PullTest(ProxyCase):

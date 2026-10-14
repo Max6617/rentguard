@@ -198,7 +198,10 @@ class RunPod(Provider):
 
     def ssh_argv(self, instance: dict, key: Path | None) -> tuple[list[str], str]:
         kind, route = self._ssh_route(instance)
-        common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL"]
+        # ``{null}`` is a placeholder, substituted by the caller: the local null device is ``NUL`` on
+        # Windows and ``/dev/null`` everywhere else, and a provider that hardcodes one of them writes
+        # a file called ``NUL`` into a stranger's working directory everywhere else.
+        common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile={null}"]
         if key:
             common = ["-i", str(key), *common]
         if kind == "direct":
