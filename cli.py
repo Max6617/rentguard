@@ -29,6 +29,8 @@ The rule this file encodes, in the two places it matters:
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import contextlib
 import hashlib
 import json
@@ -238,6 +240,17 @@ def _ssh_argv(cfg: Config, provider: Provider, pod: dict) -> tuple[list[str], st
     args = [cfg.ssh_binary, *args]
     # ssh wants the port before the target, which the provider has already arranged.
     return args, target
+
+
+def _ssh_pty(provider: Provider, pod: dict) -> bool:
+    """Whether this route's session is a PTY, so an archive cannot go down it unchanged.
+
+    The provider owns the answer (it owns the route); this only asks it. A provider that predates
+    the question — a foreign subclass, a test double — is treated as the plain byte channel, which
+    is the behaviour every provider had before the proxy route was understood.
+    """
+    ask = getattr(provider, "ssh_requires_pty", None)
+    return bool(ask(pod)) if callable(ask) else False
 
 
 def _require_alive(provider: Provider, pod: dict) -> None:
@@ -1298,6 +1311,60 @@ def _temp_tar(directory: Path | None = None):
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> str:
+    """The command the remote shell runs to hand the archive back.
+
+    A direct endpoint is a plain byte channel, so the tar stream goes straight down it: that is the
+    shortest path, and it is the one every secure-cloud rental used. A PTY is a *text* channel — it
+    rewrites LF as CRLF and folds the remote stderr into stdout — so there the archive is written to
+    a file on the machine, base64-encoded out of it, and decoded again on this side. A gzip stream
+    cannot survive the translation; measured on a community pod, 2026-10-14, the result was
+    ``ReadError: not a gzip file``.
+
+    The remote tar's exit status is carried out with ``rc=$?`` rather than through a pipe, because a
+    pipeline reports the status of its *last* command: with ``tar czf - … | base64`` a tar that
+    failed on a missing member still exits 0 overall, and the empty archive that arrives would be
+    reported as a successful pull of nothing. A lost result read as a kept one is the failure this
+    whole path exists to avoid.
+    """
+    members = " ".join(patterns)
+    if not pty:
+        return f"cd {remote_dir} && tar czf - {members}"
+    tmp = "/tmp/.rentguard-pull-$$.tar.gz"
+    return (f"cd {remote_dir} && tar czf {tmp} {members}; rc=$?; "
+            f"if [ $rc -eq 0 ]; then base64 {tmp}; fi; rm -f {tmp}; exit $rc")
+
+
+def _decode_pty_stream(archive: Path) -> Path:
+    """Turn the base64 text a PTY session delivered back into the bytes it encoded.
+
+    Decoded in blocks rather than in one read: the archive may be far larger than is comfortable to
+    hold in memory, and this is the path a trained model's results come down. Whitespace is dropped
+    (a PTY turns every LF into CRLF, and base64 wraps its own lines), and any other non-base64
+    character is an error rather than something to skip — quietly dropping characters out of an
+    archive is how a corrupt stream decodes into a partial one that looks fine.
+    """
+    decoded = archive.with_name(archive.name + ".decoded")
+    remainder = b""
+    with archive.open("rb") as src, decoded.open("wb") as dst:
+        while True:
+            block = src.read(1 << 16)
+            if not block:
+                break
+            buffer = remainder + b"".join(block.split())
+            whole = len(buffer) - (len(buffer) % 4)
+            if whole:
+                try:
+                    dst.write(base64.b64decode(buffer[:whole], validate=True))
+                except binascii.Error as exc:
+                    raise ValueError(f"the session's output is not base64 ({exc})") from exc
+            remainder = buffer[whole:]
+    if remainder:
+        raise ValueError(f"the session's output ends inside a base64 group ({len(remainder)} "
+                         f"characters)")
+    return decoded
+
+
 def cmd_pull(args) -> int:
     cfg = _config()
     provider = _provider(cfg)
@@ -1333,18 +1400,42 @@ def cmd_pull(args) -> int:
             return 0
 
         argv, target = _ssh_argv(cfg, provider, pod)
-        remote = f"cd {cfg.artefacts.remote_dir} && tar czf - {' '.join(patterns)}"
+        pty = _ssh_pty(provider, pod)
         with _temp_tar(cfg.state_dir) as (handle, archive):
+            remote = _pull_remote_command(cfg.artefacts.remote_dir, patterns, pty=pty)
             code = subprocess.call([*argv, target, remote], stdout=handle)
             handle.flush()
             if code != 0:
                 note(f"pull failed (ssh exited {code})")
                 emit(pulled=False, reason="ssh-failed", exit_code=code, files=[])
                 return 1
+            if pty:
+                # What landed in the file is base64 text, not the archive: decode it back. Every
+                # failure here is reported, never raised, because `down` pulls through this function
+                # and an exception between "pull" and "stop" leaves a machine billing.
+                try:
+                    archive = _decode_pty_stream(archive)
+                except ValueError as exc:
+                    note(f"pull failed: the stream from {pod.get('id')} is not an archive "
+                         f"({archive.stat().st_size} bytes): {exc}")
+                    emit(pulled=False, reason="stream-not-base64", exit_code=1, files=[])
+                    return 1
             dest.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(archive, mode="r:gz") as tar:
-                names = tar.getnames()
-                tar.extractall(dest, filter="data")
+            try:
+                with tarfile.open(archive, mode="r:gz") as tar:
+                    names = tar.getnames()
+                    tar.extractall(dest, filter="data")
+            except (tarfile.TarError, OSError) as exc:
+                # ssh exited 0, so the remote command ran — but what came back is not an archive.
+                # On the real account that was the proxy's "your ssh client doesn't support PTY"
+                # sentence, and tarfile's ReadError used to escape this command as a traceback.
+                size = archive.stat().st_size
+                head = archive.read_bytes()[:80]
+                note(f"pull failed: the stream from {pod.get('id')} is not an archive "
+                     f"({size} bytes, starting {head!r}): {exc}")
+                emit(pulled=False, reason="stream-not-an-archive", exit_code=1, files=[],
+                     bytes=size, head=head.decode("utf-8", "replace"))
+                return 1
         note(f"pulled {len(names)} file(s) into {dest}")
         for name in names[:20]:
             note(f"  {name}")

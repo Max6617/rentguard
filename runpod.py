@@ -182,19 +182,39 @@ class RunPod(Provider):
                           "dataCenterId": instance.get("dataCenterId")}
         return pod
 
-    def ssh_argv(self, instance: dict, key: Path | None) -> tuple[list[str], str]:
+    @staticmethod
+    def _ssh_route(instance: dict) -> tuple[str | None, dict | None]:
+        """Which way in RunPod offers for this pod: ``(kind, payload)``, kind in direct/proxy/None.
+
+        One function so ``ssh_argv`` and ``ssh_requires_pty`` cannot disagree about the route: the
+        proxy needs ``-tt`` *and* a text-safe stream, and those are one fact, not two.
+        """
         pod = instance.get("machine") if "machine" in instance else instance
         ssh = (pod or {}).get("ssh") or {}
-        direct = ssh.get("direct")
-        proxy = ssh.get("proxy")
+        for kind in ("direct", "proxy"):
+            if ssh.get(kind):
+                return kind, ssh[kind]
+        return None, None
+
+    def ssh_argv(self, instance: dict, key: Path | None) -> tuple[list[str], str]:
+        kind, route = self._ssh_route(instance)
         common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL"]
         if key:
             common = ["-i", str(key), *common]
-        if direct:
-            return [*common, "-p", str(direct["port"])], f"{direct['username']}@{direct['host']}"
-        if proxy:
-            return common, f"{proxy['username']}@{proxy['host']}"
+        if kind == "direct":
+            return [*common, "-p", str(route["port"])], f"{route['username']}@{route['host']}"
+        if kind == "proxy":
+            # ssh.runpod.io only speaks through a PTY: an exec request without one is answered
+            # "Error: Your SSH client doesn't support PTY" and the command never runs (measured on
+            # a community pod, 2026-10-14, where `run` failed and the pull then read that sentence
+            # as an archive). `-tt` forces the allocation even with no local terminal, which is
+            # this case: the CLI runs under subprocess, not in a tty.
+            return [*common, "-tt"], f"{route['username']}@{route['host']}"
         raise ProviderError("the instance has no ssh endpoint yet (is it RUNNING?)")
+
+    def ssh_requires_pty(self, instance: dict) -> bool:
+        """The proxy route is a PTY; the direct route (a plain byte channel) is not."""
+        return self._ssh_route(instance)[0] == "proxy"
 
     #: The pre-interface spelling, kept pointed at the one implementation so old imports work and
     #: new ones cannot drift from them.

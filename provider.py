@@ -186,6 +186,21 @@ class Provider:
             return [], f"{proxy['username']}@{proxy['host']}"
         raise ProviderError("the instance has no ssh endpoint yet (is it RUNNING?)")
 
+    def ssh_requires_pty(self, instance: Instance) -> bool:
+        """Whether a session to this instance is a **PTY**, so bytes have to travel as text.
+
+        ``False`` here, which means the plain byte channel. A provider whose route is a proxy that
+        only allocates a PTY — RunPod's ``ssh.runpod.io``; measured on a community pod, 2026-10-14 —
+        returns ``True``, and its ``ssh_argv`` must then include ``-tt``: the flag and this answer
+        are the same fact, and a provider that said one without the other would either send a
+        PTY-translated stream through a non-PTY session or the reverse.
+
+        It lives on the provider because it is a property of the *route*, which the provider owns,
+        not of the artefacts, which it does not: the caller uses this to decide whether an archive
+        can go down the channel as it is, or has to be encoded first.
+        """
+        return False
+
     def pull_artifacts(self, instance: Instance, patterns: list[str]) -> dict[str, bytes]:
         """Fetch the matching remote files into memory.
 
