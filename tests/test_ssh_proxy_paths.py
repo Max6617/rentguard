@@ -79,26 +79,42 @@ class SshTransport:
         self.calls: list[list[str]] = []
         self.executed: list[str] = []   # remote commands that really ran
         self.refused: list[str] = []    # remote commands the endpoint never ran
+        #: The pull starts its ssh through ``Popen`` (so the wait can be bounded); `run` still uses
+        #: ``call``. One double, two shapes, because the tests below drive both commands.
+        self.popen_mode = True
+        self.stdin = None
+        self.timeout: float | None = None
+        self.killed = False
 
     def __call__(self, argv, *args, **kwargs):
         self.calls.append(list(argv))
         target, remote = argv[-2], argv[-1]
         sink = kwargs.get("stdout")
+        self.stdin = kwargs.get("stdin", self.stdin)
         proxy = PROXY_HOST in target
         if proxy and "-tt" not in argv:
             # Observed: without a PTY the proxy answers with this line and exits 0. The command
             # never runs, so a caller that trusts the exit code believes it did.
             self.refused.append(remote)
             self._text(sink, self.PTY_ERROR + "\n")
-            return 0
-        self.executed.append(remote)
-        if self.body is not None:
-            self._bytes(sink, self.body)
-        elif "base64" in remote:
-            self._text(sink, base64.b64encode(self.archive).decode() + "\n")
+            self.exit_code = 0
         else:
-            self._bytes(sink, self.archive)
+            self.executed.append(remote)
+            if self.body is not None:
+                self._bytes(sink, self.body)
+            elif "base64" in remote:
+                self._text(sink, base64.b64encode(self.archive).decode() + "\n")
+            else:
+                self._bytes(sink, self.archive)
+        return self if self.popen_mode else self.exit_code
+
+    def wait(self, timeout=None):
+        """``Popen.wait``: the pull's child. The bound is recorded, not waited for."""
+        self.timeout = timeout
         return self.exit_code
+
+    def kill(self):
+        self.killed = True
 
     def _text(self, sink, text: str) -> None:
         """A PTY session: LF becomes CRLF on the way back to the client."""
@@ -138,7 +154,9 @@ class ProxyCase(unittest.TestCase):
         self.cfg.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.state_path.write_text(json.dumps(state), encoding="utf-8")
 
-    def invoke(self, func, argv: list[str], transport) -> tuple[int, str]:
+    def invoke(self, func, argv: list[str], transport, *, patch: str = "Popen") -> tuple[int, str]:
+        """Run a command with the transport installed: ``Popen`` for the pull, ``call`` for `run`."""
+        transport.popen_mode = patch == "Popen"
         args = cli.build_parser().parse_args(argv)
         out = io.StringIO()
         with mock.patch.object(cli, "_config", lambda: self.cfg), \
@@ -146,7 +164,7 @@ class ProxyCase(unittest.TestCase):
                 mock.patch.object(self.provider, "get", lambda instance_id: self.pod), \
                 mock.patch("urllib.request.urlopen",
                            side_effect=AssertionError("a test reached the live API")), \
-                mock.patch.object(cli.subprocess, "call", transport), \
+                mock.patch.object(cli.subprocess, patch, transport), \
                 contextlib.redirect_stdout(out):
             try:
                 code = func(args)
@@ -339,7 +357,8 @@ class RunTest(ProxyCase):
         """
         transport = SshTransport()
 
-        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport)
+        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport,
+                                patch="call")
 
         self.assertEqual(code, 0, f"the run through the proxy failed.\noutput:\n{out}")
         self.assertIn("-tt", transport.calls[0], "the proxy session did not ask for a PTY")
@@ -351,7 +370,8 @@ class RunTest(ProxyCase):
         self.use_route(DIRECT_SSH)
         transport = SshTransport()
 
-        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport)
+        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport,
+                                patch="call")
 
         self.assertEqual(code, 0, f"the direct run failed.\noutput:\n{out}")
         self.assertNotIn("-tt", transport.calls[0])
