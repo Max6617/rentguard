@@ -3,6 +3,17 @@
 The account carried a 150 GB network volume from a finished project — $10.50 a month, billing every
 day, named in no report for three days, and larger than every rental in this project's ledger put
 together. Instance drift has a detector; this is storage drift's.
+
+**Fixture rule, and it is here because this file broke it.** A fixture that manufactures a provider's
+JSON is not a test of the transport seam, it is a test of the fixture: the first version of
+``RunPodVolumes`` invented the response key and the region field, passed, and hid the fact that
+``volumes()`` read nothing at all from the live API. So, in this repo:
+
+* a provider-payload fixture must be copied from a **live response** or from the provider's own
+  schema — not written from memory;
+* a fixture that is deliberately invented (a minimal shape, an error body) says so in the test that
+  uses it, so nobody mistakes it for the real payload;
+* the live response it was copied from is quoted, with the date, next to the test.
 """
 
 from __future__ import annotations
@@ -103,20 +114,26 @@ class LedgerExcludesStorage(StorageCase):
 
 
 class RunPodVolumes(unittest.TestCase):
-    def test_runpod_volumes_use_the_real_payload_shape(self):
-        """The transport seam, scripted with the live shape — verified against the account.
+    #: PROVENANCE: copied verbatim from a live response, 2026-10-14, `GET /v2/network-volumes` on
+    #: api.runpod.io, for the account's only volume. Not invented, not from memory — see the fixture
+    #: rule in this module's docstring for why that distinction is recorded.
+    LIVE_RESPONSE = {
+        "networkVolumes": [{"dataCenter": "US-IL-1", "id": "ii4wouejo8",
+                            "name": "small-agents-vol", "size": 150, "type": "STANDARD"}],
+        "pagination": {"hasNextPage": False, "nextCursor": None}}
 
-        The response key is ``networkVolumes`` and the region field is ``dataCenter``. A test that
-        invents its own field names passes while the real call returns nothing, which is exactly the
-        mistake this one used to make.
+    def test_runpod_volumes_use_the_real_payload_shape(self):
+        """The transport seam, scripted with the account's own response.
+
+        The response key is ``networkVolumes`` and the region field is ``dataCenter``. A fixture that
+        invents its field names passes while the real call reads nothing — which is what the first
+        version of this test did, and why the fixture above is quoted from the live API.
         """
         from rentguard.runpod import RunPod
 
         provider = RunPod("test-key-not-real")
-        provider._request = lambda method, path, body=None, params=None, retries=3: {
-            "networkVolumes": [{"id": "ii4wouejo8", "name": "small-agents-vol", "size": 150,
-                                "dataCenter": "US-IL-1", "type": "STANDARD"}],
-            "pagination": {"hasNextPage": False, "nextCursor": None}}
+        provider._request = lambda method, path, body=None, params=None, retries=3: (
+            self.LIVE_RESPONSE)
 
         volumes = provider.volumes()
 
