@@ -205,6 +205,16 @@ fail with the key error rather than "no instance recorded". `doctor` and `ledger
 **RunPod only, for v0.1.** The provider interface is small and the in-memory fake implements it for
 tests; see [Providers](providers.md) for what a second provider must supply.
 
+**The fake provider models a world that is not RunPod.** It is 99.6% covered with nothing real unhit
+(`mcp_server.py` is now the weakest module), but coverage is not fidelity: the fake is the one place a
+fixture can manufacture a payload that never existed. The rule, recorded in `tests/test_storage.py`'s
+docstring, is that a provider-payload fixture comes from a live response or the provider's schema, and an
+invented one says so. The volume read is the case in point: the first version invented the response key,
+passed, and hid that the live call returned nothing (`f4225ff`). The fake is also a program that can be
+wrong on its own terms — a helper that never saved the machine it added was found and fixed at
+`458e128` — so "green against the fake" means the decisions and the arithmetic are right, never that the
+provider was understood.
+
 **The MCP server is stdio-only and has no authentication of its own.** Whoever can call its tools can
 rent a machine. The approval rule — renting needs the Main Bot's approval, and the cap is the backstop
 rather than the permission — is a team policy, not something the server can enforce on its own. See
