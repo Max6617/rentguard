@@ -826,11 +826,16 @@ class DryRunSpendsNothing(MoneyCase):
         self.cfg.runpod = {"gpu_preference": ["GPU-A", "GPU-B"]}
         provider = FakeProvider(rate_usd_per_hour=2.0)
 
-        code, out = self.invoke(cli.cmd_up, cli_args("up", "--dry-run"), provider)
+        with mock.patch.object(provider, "create", wraps=provider.create) as create_call:
+            code, out = self.invoke(cli.cmd_up, cli_args("up", "--dry-run"), provider)
 
-        self.assertEqual(provider.created, [],
-                         f"a dry run called provider.create {len(provider.created)} time(s).\n"
+        # Assert on the provider API, not on the sentence: the sentence is what lied. On the real
+        # account `--dry-run` walked the preference list and made three create calls while printing
+        # "nothing was rented".
+        self.assertFalse(create_call.called,
+                         f"a dry run called provider.create {create_call.call_count} time(s).\n"
                          f"output:\n{out}")
+        self.assertEqual(provider.created, [], f"the provider recorded a create.\noutput:\n{out}")
         self.assertEqual(code, 0, f"a dry run failed.\noutput:\n{out}")
         self.assertIn("nothing was rented", out, f"the dry run did not say so.\noutput:\n{out}")
 
