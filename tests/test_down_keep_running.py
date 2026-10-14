@@ -17,7 +17,6 @@ import contextlib
 import io
 import json
 import sys
-import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -29,15 +28,14 @@ from rentguard import cli  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger  # noqa: E402
+from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 PATTERN = "results/*.json"
 
 
 class DownWithFailedPull(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        root = Path(self.tmp.name)
+        root = scratch_dir(self)
         self.cfg = Config(budget=Budget(cap_usd=10.0, per_run_cap_usd=5.0),
                           state_dir=root / ".rentguard")
         self.cfg.artefacts.pull = [PATTERN]
