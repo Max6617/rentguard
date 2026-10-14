@@ -27,7 +27,7 @@ from trace import _find_executable_linenos
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FLOOR = 0.88  # measured 88.8% on 2026-10-14 after the ledger and feature-matrix tests; ratchet only upwards
+DEFAULT_FLOOR = 0.89  # measured 89.7% on 2026-10-14; ratchet only upwards
 TARGET = 0.94
 
 

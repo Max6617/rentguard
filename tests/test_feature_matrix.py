@@ -24,6 +24,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -170,10 +171,18 @@ class CliSurface(MatrixCase):
 class McpSurface(MatrixCase):
     """The MCP server, over its own stdio transport, one message per line."""
 
-    #: The tools `docs/mcp.md` documents, in its own words. `rentguard_watch`,
-    #: `rentguard_watch_once` and `rentguard_init` exist in the server and are documented nowhere.
-    DOCUMENTED = ["rentguard_status", "rentguard_ledger", "rentguard_doctor", "rentguard_start",
-                  "rentguard_run", "rentguard_pull", "rentguard_stop", "rentguard_adopt"]
+    @staticmethod
+    def documented_tools() -> list[str]:
+        """The MCP tools `docs/mcp.md` actually names — read from the page, not mirrored.
+
+        This was a hardcoded list of the eight tools the page documented, which made it a record of
+        the gap rather than a guard against it: documenting the missing three could not turn it
+        green, and a tool added to the server later without a line on the page would have gone
+        unnoticed. Reading the page is what turns it into a guard, and the page is the thing R10
+        says must stay true.
+        """
+        page = Path(__file__).resolve().parents[1] / "docs" / "mcp.md"
+        return sorted(set(re.findall(r"rentguard_[a-z_]+", page.read_text(encoding="utf-8"))))
 
     def session(self, requests: list[dict]) -> list[dict]:
         lines = "\n".join(json.dumps(request) for request in requests) + "\n"
@@ -238,7 +247,8 @@ class McpSurface(MatrixCase):
         they exist.
         """
         advertised = sorted(tool["name"] for tool in mcp_server.TOOLS)
-        self.assertEqual(advertised, sorted(self.DOCUMENTED),
+        documented = self.documented_tools()
+        self.assertEqual(advertised, documented,
                          "the server advertises tools that docs/mcp.md does not document, or the "
                          f"page documents tools the server does not offer: {advertised}")
 
