@@ -6,13 +6,13 @@ is the only question that goes back to them.
 
 ## The revision this page describes
 
-Everything below was measured at **`310f449`** (`310f449ffecc2af8d6cc6afbe067bede97f63ba4`) in a clean
+Everything below was measured at **`721436a`** (`721436a6183a4f2ef5500e3f7c2f984d7f52a299`) in a clean
 worktree, with the package path verified inside that worktree (`rentguard.mcp_server.__file__`).
 
 | Measurement | Value | How |
 | --- | --- | --- |
-| Suite | **350 passed, 0 failed, 54 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `310f449`, and identical with and without `RENTGUARD_PROVIDER=fake` |
-| Coverage | **98.1% (2,494 / 2,542)** | `python tools/coverage.py` at `310f449`; floor 98.0%, exits **0**, and the 94.0% target is met |
+| Suite | **355 passed, 0 failed, 54 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `721436a`, and identical with and without `RENTGUARD_PROVIDER=fake` |
+| Coverage | **98.1% (2,494 / 2,542)** | `python tools/coverage.py` at `721436a`; floor 98.0%, exits **0**, and the 94.0% target is met |
 | Features | **10 CLI commands, 11 MCP tools** | `tests/test_feature_matrix.py`, green here |
 
 The standard is **94% of the code and 100% of the features**. The feature matrix is the evidence for the
@@ -36,11 +36,13 @@ guard defect that stopped a 32-second-old pod lived in lines that all executed.
 
 The figures move with the tree: `18b5fc0` measured 96.1%; `458e128` 97.5%; `cdd7113` 98.4% (295 tests);
 `f158396` 97.99% (318 tests, **exit 1**, one line short); `7febd07` 98.4% (322 tests, exit 0); `310f449`
-is 98.1% (350 tests, exit 0). Each was re-measured when a measured module changed, never carried forward.
+98.1% (350 tests, exit 0); `721436a` 98.1% (355 tests, exit 0 — the extra tests covered lines already
+hit, so the totals did not move). Each was re-measured when a measured module changed, never carried
+forward.
 
 ## 1. The tool is proven
 
-- [x] **M1 — the suite is green with no network and no spend.** 350 passed, 0 failed at `310f449`,
+- [x] **M1 — the suite is green with no network and no spend.** 355 passed, 0 failed at `721436a`,
       driving the real CLI through the in-memory fake provider, and identical with and without
       `RENTGUARD_PROVIDER=fake`. `tests/test_ledger_paths.py` covers the ledger's own file paths,
       including the lock and a truncated line.
@@ -52,7 +54,8 @@ is 98.1% (350 tests, exit 0). Each was re-measured when a measured module change
       - at `7febd07`: **2,347 / 2,384 = 98.4%**, **exits 0**, after a test commit covered the new pull
         and rate branches;
       - at `310f449`: **2,494 / 2,542 = 98.1%**, **exits 0**, after the cross-root claim, MCP-`run` and
-        bounded-stop work added lines with their tests.
+        bounded-stop work added lines with their tests. `721436a` adds tests only and holds 98.1%
+        (**355 passed**), so the totals did not move.
       The floor was **not** lowered: it was flagged as an open gate (the ratchet's own comment says it
       only moves upwards) and the tests closed it.
 - [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total
@@ -92,7 +95,7 @@ is 98.1% (350 tests, exit 0). Each was re-measured when a measured module change
       `tests/test_cli_branches.py` tests: **248 passed / 2 failed with the variable, 250 passed / 0 failed
       without it**, measured at `6f31c27` and again at `458e128`. Closed at `cdd7113`, which pins the
       provider *inside* those two tests rather than changing the CI step, and the suite is now
-      **350 passed / 0 failed both with the variable and without it**.
+      **355 passed / 0 failed both with the variable and without it**.
 
 ## 3. The docs are true
 
