@@ -313,14 +313,15 @@ class ACorruptStartDoesNotKillTheGuard(IdleCase):
 
         self.assertIsNotNone(reason, "the guard returned no reason")
 
-    def test_a_corrupt_start_does_not_price_the_unreadable_run_as_a_silent_zero(self):
+    def test_a_corrupt_start_prices_the_run_from_the_pods_uptime_and_still_names_the_row(self):
         """Sequence: the same corrupt open row, two hours old at $2/h, on a machine the provider
         reports with 7,200 s of uptime; the guard takes one reading.
 
-        Effect required (half 2): the run is **not** silently worth nothing. Either it is priced
-        from something readable — the provider's uptime supports about $4.00 — or the unreadable
-        field is named in the guard's own output. A heartbeat with `run_usd == 0.0` and no mention
-        of the corrupt field is the failure: the cap would read low and let a rental start.
+        Effect required (half 2, Gilbert's ruling): the run is **priced from the uptime witness** —
+        about $4.00 — and the row is named as unreadable *alongside* that number, not instead of it.
+        A heartbeat with `run_usd == 0.0` while `uptime_hours=2.0` is in hand is the failure: the
+        guard's decision would run on zero, the cap could not fire on the one run whose accrual is
+        unknown, and the log would know better than the number the decision used.
         """
         self.corrupt_open_row(hours_ago=2.0)
         provider = ScriptedProvider(pod_payload(uptime=7200, util=90.0))
@@ -334,14 +335,16 @@ class ACorruptStartDoesNotKillTheGuard(IdleCase):
                       f"{type(exc).__name__}: {exc}")
 
         heartbeat = json.loads(self.cfg.heartbeat_path.read_text(encoding="utf-8"))
+        priced = float(heartbeat.get("run_usd") or 0.0)
+        self.assertAlmostEqual(
+            priced, 4.0, delta=0.1,
+            msg=f"a corrupt start on a machine with 7,200 s of uptime priced the run at ${priced:.2f}: "
+                f"the uptime witness was in hand and the decision ran on zero instead, so the cap "
+                f"cannot fire on this run. heartbeat={heartbeat}")
         named = any(word in " ".join(lines).lower()
                     for word in ("unreadable", "corrupt", "cannot read", "started_at"))
-        self.assertTrue(
-            float(heartbeat.get("run_usd") or 0.0) > 0.0 or named,
-            "the guard survived the corrupt row by making the money disappear: the heartbeat "
-            f"reports run_usd={heartbeat.get('run_usd')} and nothing in the guard's output names the "
-            f"unreadable field {list(heartbeat)[:6]}. Price the run from the provider's uptime, or "
-            f"name the condition — a cap that reads low lets a rental start.")
+        self.assertTrue(named, "the row was priced but not named as unreadable: the quarantine line "
+                               "belongs alongside the number, not instead of it")
 
 
 if __name__ == "__main__":
