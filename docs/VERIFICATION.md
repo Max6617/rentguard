@@ -95,8 +95,9 @@ next           : `rentguard doctor`, then `rentguard up --purpose ...`
 ```
 
 The generated file writes the defaults: `cap_usd = 25.0`, `per_run_cap_usd = 5.0`,
-`max_hours_per_run = 6.0`, `idle_minutes = 10`, `gpu_preference = [...4090, L40S, A6000]`. It also
-writes `volume_name = ""` while the rent path reads `volume_id` (see limitations).
+`max_hours_per_run = 6.0`, `idle_minutes = 10`, `gpu_preference = [...4090, L40S, A6000]`, and
+`state_dir` **above** the first table. Earlier in the day it wrote `volume_name = ""` while the rent
+path reads `volume_id`; at `af1ba5a` it writes `volume_id` and `volume_mount` (see below).
 
 ## `rentguard doctor`, no key
 

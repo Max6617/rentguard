@@ -27,7 +27,7 @@ from trace import _find_executable_linenos
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FLOOR = 0.74  # the measured 74.8%, rounded down; raise it when the number rises
+DEFAULT_FLOOR = 0.75  # measured 75.5% on 2026-10-14 after the provider tests; ratchet only upwards
 TARGET = 0.94
 
 

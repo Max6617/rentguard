@@ -40,6 +40,7 @@ shows the same text without writing. The parts worth reading:
 
 ```toml
 provider = "runpod"       # or "fake": in-memory, no network, no money
+state_dir = ".rentguard"  # top-level keys go ABOVE the first [table], or they land inside it
 
 [budget]
 cap_usd = 25.0            # hard ceiling for the whole project, across all runs
@@ -55,15 +56,15 @@ remote_dir = "/workspace"
 [runpod]
 gpu_preference = ["NVIDIA GeForce RTX 4090", "NVIDIA L40S", "NVIDIA RTX A6000"]
 volume_id = ""            # empty: no network volume, so the container disk dies with the instance
-
-state_dir = ".rentguard"
+volume_mount = "/workspace"
 ```
 
-If `[artefacts].pull` is non-empty, `run` pulls those patterns when each run finishes — whatever its
-exit code — and `down` pulls again before it stops the machine. A failed pull at `down` does not cancel
-the stop: it stops anyway, exits non-zero, and prints which patterns were lost, because a machine left
-running to retry a copy is money spent by default. Note that the generated file says `volume_name`
-where the code reads `volume_id` — edit it if you need a volume. See [limitations](limitations.md).
+The generated file is valid TOML with the keys the rent path actually reads (`volume_id`, not the old
+`volume_name` that used to be written and silently ignored). If `[artefacts].pull` is non-empty, `run`
+pulls those patterns when each run finishes — whatever its exit code — and `down` pulls again before it
+stops the machine. A failed pull at `down` does not cancel the stop: it stops anyway, exits non-zero, and
+prints which patterns were lost, because a machine left running to retry a copy is money spent by
+default. `down --keep-running` is the deliberate opposite. See [limitations](limitations.md).
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.

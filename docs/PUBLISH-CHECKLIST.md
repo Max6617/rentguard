@@ -7,7 +7,7 @@ question that goes to them is the last section.
 
 | section | state |
 |---|---|
-| 1. proven | M1 green (58 tests, fake provider, no network). M2 **passed** on a real rented 4090 — artefact pulled from the right machine, ledger reconciled by hand, pod stopped. |
+| 1. proven | M1 green (74 tests at `af1ba5a`, fake provider, no network). M2 **passed** on a real rented 4090 — artefact pulled from the right machine, ledger reconciled by hand, pod stopped. |
 | 2. repo | `.gitignore` thorough; no secrets in the working tree or in history (env-var *names* only); `LICENSE` (MIT) added; `CHANGELOG.md` added; CI workflow added; `pyproject.toml` has authors, keywords, classifiers; `rentguard.egg-info` and `cli.py.bak` removed. |
 | 3. docs | quickstart, cap semantics, provider guide, MCP page, limitations, M2 record, verification notes — all written and run against real output. |
 | 4. name | **`rentguard` is free on PyPI** — the JSON API returns 404. |

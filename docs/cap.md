@@ -25,7 +25,7 @@ Until this is fixed, use `idle_minutes` with care or run `watch` with a large in
 [KNOWN-FAILURES](KNOWN-FAILURES.md), and the wording here comes out when the fix lands with a test.
 
 **The short version.** While `rentguard watch` is running, it stops the instance when the estimate for
-spend crosses the cap. `watch` is a foreground process. If it is not running, the cap does not fire.
+spend crosses the cap. Everything below is about what that does and does not cover.
 
 ## Where the money is checked
 
