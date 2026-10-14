@@ -1659,6 +1659,23 @@ def _temp_tar(directory: Path | None = None):
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _unmatched_patterns(patterns: list[str], names: list[str]) -> list[str]:
+    """The configured patterns that no archived member answers.
+
+    Compared by each pattern's **literal prefix** — everything before its first wildcard — rather than
+    by full glob semantics, which this module does not own. ``results/*.json`` is answered by anything
+    under ``results/``; ``logs/*.log`` is answered by nothing under ``logs/``. A prefix comparison can
+    over-claim a match for a deeply nested pattern, which mis-names a pattern and loses no file; the
+    other direction would name a pattern that did match, which is what makes a finding untrustworthy.
+    """
+    unmatched: list[str] = []
+    for pattern in patterns:
+        prefix = re.split(r"[*?\[]", str(pattern), maxsplit=1)[0]
+        if not any(str(name).startswith(prefix) for name in names):
+            unmatched.append(pattern)
+    return unmatched
+
+
 def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> str:
     """The command the remote shell runs to hand the archive back.
 
@@ -1763,10 +1780,6 @@ def cmd_pull(args) -> int:
                 emit(pulled=False, reason="ssh-timeout", exit_code=None, files=[],
                      timeout_s=timeout)
                 return 1
-            if code != 0:
-                note(f"pull failed (ssh exited {code})")
-                emit(pulled=False, reason="ssh-failed", exit_code=code, files=[])
-                return 1
             if pty:
                 # What landed in the file is base64 text, not the archive: decode it back. Every
                 # failure here is reported, never raised, because `down` pulls through this function
@@ -1776,7 +1789,7 @@ def cmd_pull(args) -> int:
                 except ValueError as exc:
                     note(f"pull failed: the stream from {pod.get('id')} is not an archive "
                          f"({archive.stat().st_size} bytes): {exc}")
-                    emit(pulled=False, reason="stream-not-base64", exit_code=1, files=[])
+                    emit(pulled=False, reason="stream-not-base64", exit_code=code, files=[])
                     return 1
             dest.mkdir(parents=True, exist_ok=True)
             try:
@@ -1784,6 +1797,15 @@ def cmd_pull(args) -> int:
                     names = tar.getnames()
                     tar.extractall(dest, filter="data")
             except (tarfile.TarError, OSError) as exc:
+                if code != 0:
+                    # tar's own status with nothing usable behind it: the configured patterns matched
+                    # nothing at all. That is a named reason, not an ssh failure — and it is the one
+                    # case where there is genuinely nothing to deliver.
+                    note(f"pull failed: tar exited {code} and no member was archived — the configured "
+                         f"patterns matched nothing ({', '.join(patterns)})")
+                    emit(pulled=False, reason="patterns-matched-nothing", exit_code=code, files=[],
+                         unmatched_patterns=list(patterns))
+                    return 1
                 # ssh exited 0, so the remote command ran — but what came back is not an archive.
                 # On the real account that was the proxy's "your ssh client doesn't support PTY"
                 # sentence, and tarfile's ReadError used to escape this command as a traceback.
@@ -1794,12 +1816,22 @@ def cmd_pull(args) -> int:
                 emit(pulled=False, reason="stream-not-an-archive", exit_code=1, files=[],
                      bytes=size, head=head.decode("utf-8", "replace"))
                 return 1
+            # GNU tar writes the members it did match and exits non-zero for the patterns it could
+            # not. The results are in hand, so the pattern is the finding and the pull is not a
+            # failure: reading the exit code alone lost a successful run's only copy of its results
+            # and then let the container holding them be stopped (measured 2026-10-14).
+            unmatched = _unmatched_patterns(patterns, names)
+            if code != 0:
+                note(f"tar exited {code}: at least one configured pattern matched nothing, and the "
+                     f"members that did match are extracted")
+            for pattern in unmatched:
+                note(f"matched nothing : {pattern}")
         note(f"pulled {len(names)} file(s) into {dest}")
         for name in names[:20]:
             note(f"  {name}")
         if len(names) > 20:
             note(f"  ... and {len(names) - 20} more")
-        emit(pulled=True, files=list(names))
+        emit(pulled=True, files=list(names), unmatched_patterns=unmatched, tar_exit_code=code)
     return 0
 
 
