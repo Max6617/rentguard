@@ -21,9 +21,13 @@ The rule this file encodes, in the two places it matters:
 - **Before renting**, ``up`` checks three things: the recorded spend against the cap, whether a
   live instance exists that nothing has a row for, and whether an open row names an instance that
   is not there. All three are ways a second bill appears, and all three refuse.
-- **After renting**, the row is backdated from the provider's own uptime, so an instance that has
-  already been billing for hours is recorded at its real cost instead of starting the clock at
-  zero. Starting the clock at zero is how overspend becomes invisible.
+- **The row comes before the machine.** ``up`` opens a provisional row before it calls ``create``,
+  because a machine that bills with no record of it is the worst state this tool can leave behind —
+  worse than a row that has to be corrected, and worse than a machine that is stopped. The row is
+  finalised with the instance the provider names, and voided if nothing was ever created.
+- **After the machine answers**, a row opened for an instance that was already billing (a resume, an
+  ``adopt``) is backdated from the provider's own uptime, so hours that were never recorded are
+  recorded at their real cost instead of starting the clock at zero.
 """
 
 from __future__ import annotations
@@ -74,6 +78,10 @@ DEFAULTS = {
 }
 
 LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
+
+#: The tag on a row that was opened before its machine existed and has not been corrected yet. It is
+#: what tells a row that merely *intended* a rental (void it) from one that recorded a real one.
+PROVISIONAL_TAG = "provisional"
 
 # The JSON document a command prints is accumulated here, so a command body reads as ordinary
 # printing code and the structured form is assembled in one place.
@@ -845,6 +853,14 @@ def cmd_up(args) -> int:
             emit(action="dry-run", gpu_id=first, candidates=list(offered), instance_id=None)
             return 0
 
+        # The row opens *before* the create loop. `create` is the irreversible step and the moment
+        # money starts, so everything after this line has a row behind it, whatever happens next —
+        # including a kill the process cannot catch. Defect 10 was this window: the row used to open
+        # only after the second alive reading, so an interruption during `wait_running` (minutes on a
+        # real pod) left a machine billing that no ledger named. See `_open_provisional`.
+        provisional = _open_provisional(cfg, ledger, provider, offered[0], args.purpose,
+                                        cloud=_rp(cfg, "cloud"))
+
         chosen: str | None = None
         pod: dict | None = None
         for attempt, candidate in enumerate(offered, start=1):
@@ -860,43 +876,72 @@ def cmd_up(args) -> int:
             break
 
         if pod is None or chosen is None:
+            # Nothing was created, so the row records an attempt and nothing else. Voiding keeps it
+            # in the file with its reason: a row that disappears is a worse record than one that
+            # says "no machine was ever made for this".
+            ledger.close(note="create-failed-nothing-created", void=True)
             note("error: every preferred GPU was refused at creation:")
             for line in errors:
                 note(f"  {line}")
             emit(action="refused", reason="create-failed", attempts=errors, gpu_preference=offered)
             return 3
 
-        state = _read_state(cfg)
-        state.update({"instance_id": pod.get("id"), "provider": provider_name(cfg),
-                      "gpu_id": chosen})
-        _write_state(cfg, state)
-        note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
-        pod = provider.wait_running(pod["id"], log=note)
+        try:
+            run = ledger.finalise(provisional["run_id"], instance_id=pod["id"], gpu_id=chosen,
+                                  rate_usd_per_hour=float(pod.get("cost") or 0.0)
+                                  or float(provisional.get("rate_usd_per_hour") or 0.0))
+            if run is None:
+                # The row is not ours any more — another process closed or replaced it. The machine
+                # is billing with nothing recording it, which is the one state this tool must never
+                # leave behind, so it is stopped rather than kept, and the row that is open (if any)
+                # is closed: an open row accrues against the cap until someone closes it.
+                note(f"error: the ledger row for {pod['id']} is gone; stopping the machine rather "
+                     f"than leaving it billing with no record")
+                _abandon_created(provider, ledger, pod)
+                emit(action="unrecorded", instance={"id": pod.get("id"),
+                                                    "status": pod.get("status")}, stopped=True)
+                return 1
+            state = _read_state(cfg)
+            state.update({"instance_id": pod.get("id"), "provider": provider_name(cfg),
+                          "gpu_id": chosen})
+            _write_state(cfg, state)
+            note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
+            pod = provider.wait_running(pod["id"], log=note)
 
-        # Two consecutive alive readings, not one. `wait_running` returns the first payload that
-        # merely looks alive; on the real account `up` reported RUNNING with uptime=None and
-        # ports=NULL, exited 0 and opened a row, and `run` refused the machine seconds later. A
-        # ledger row for a machine that is not usable is a rental the tool believes in and the user
-        # does not have — so the row opens only after the second reading agrees. And because a
-        # crash-looping machine must not be left billing *unrecorded* either, it is stopped.
-        confirmed = provider.get(pod["id"]) or pod
-        if not is_alive(confirmed):
-            runtime = confirmed.get("runtime") or {}
-            note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is not "
-                 f"usable on a second read (uptime={runtime.get('uptime')}, ports="
-                 f"{'set' if runtime.get('ports') else 'NULL'}); no rental was recorded because "
-                 f"there is none, and the machine is being stopped so it cannot bill unrecorded")
-            try:
-                provider.action(pod["id"], "stop")
-            except ProviderError as exc:
-                note(f"  could not stop it ({exc}); it may still be billing — check `rentguard "
-                     f"doctor`")
-            emit(action="unusable", instance={"id": pod.get("id"),
-                                              "status": confirmed.get("status")}, stopped=True)
-            return 1
-        pod = confirmed
+            # Two consecutive alive readings, not one. `wait_running` returns the first payload that
+            # merely looks alive; on the real account `up` reported RUNNING with uptime=None and
+            # ports=NULL, exited 0, and `run` refused the machine seconds later. A machine that is
+            # not usable is not a rental — so success is declared only once a second reading agrees.
+            # The row already exists by then (it was opened before the machine), and this is the
+            # point the two designs meet: a crash-looping machine is stopped, and the seconds it did
+            # bill are closed out rather than voided or hidden.
+            confirmed = provider.get(pod["id"]) or pod
+            if not is_alive(confirmed):
+                runtime = confirmed.get("runtime") or {}
+                note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is "
+                     f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
+                     f"{'set' if runtime.get('ports') else 'NULL'}); no rental was confirmed, and "
+                     f"the machine is being stopped so it cannot bill unrecorded")
+                try:
+                    provider.action(pod["id"], "stop")
+                except ProviderError as exc:
+                    note(f"  could not stop it ({exc}); it may still be billing — check `rentguard "
+                         f"doctor`")
+                closed = ledger.close(note="up-unusable", instance_status=confirmed.get("status"))
+                if closed is not None:
+                    note(f"run closed     : {closed['run_id']}  "
+                         f"${closed['estimated_usd']}  (the seconds it existed are recorded)")
+                emit(action="unusable", instance={"id": pod.get("id"),
+                                                  "status": confirmed.get("status")},
+                     stopped=True, run=_closed_dict(closed))
+                return 1
+            pod = confirmed
+        except BaseException:
+            # Interrupted, or the wait failed: the row is already open (that is the invariant), and
+            # when the process is still alive the better outcome is a machine that stops too.
+            _abandon_created(provider, ledger, pod)
+            raise
 
-        run = _open_if_needed(cfg, ledger, pod, args.purpose, provider)
         _print_access(cfg, provider, pod)
 
         note(f"\ncap            : ${cfg.budget.cap_usd:.2f} total, "
@@ -929,10 +974,7 @@ def _open_if_needed(cfg: Config, ledger: Ledger, pod: dict, purpose: str | None,
     if open_run is not None:
         if open_run.get("instance_id") == pod_id:
             return open_run
-        closed = ledger.close(note="superseded-open-run")
-        if closed is not None:
-            note(f"closed stale row: {closed['run_id']} (${closed['estimated_usd']}) was open "
-                 f"against {closed.get('instance_id')!r}; this instance is {pod_id!r}")
+        _release_open_run(ledger)
     uptime_seconds = float((pod.get("runtime") or {}).get("uptime") or 0.0)
     started = now_utc() - timedelta(seconds=uptime_seconds)
     run = ledger.open(
@@ -948,6 +990,90 @@ def _open_if_needed(cfg: Config, ledger: Ledger, pod: dict, purpose: str | None,
         note(f"backdated start: {run['started_at']}  (uptime {uptime_seconds / 3600:.2f} h from "
              f"the provider; ${ledger.live_usd():.2f} was already on the clock)")
     return run
+
+
+def _release_open_run(ledger: Ledger) -> dict | None:
+    """Close the open row, if there is one, because the instance in hand is not its instance.
+
+    A row open against a machine that has vanished is money that was really spent; it is closed with
+    its cost, and refusing instead would leave the machine billing now with no row at all.
+
+    The exception is a **provisional** row that never reached a machine. It recorded an intention,
+    not a rental, and the row that replaces it backdates to the machine's own start — so counting
+    both would count the same minutes twice. It is voided, and the void keeps it in the file.
+    """
+    open_run = ledger.open_run()
+    if open_run is None:
+        return None
+    if str(open_run.get("tag") or "") == PROVISIONAL_TAG and not open_run.get("instance_id"):
+        closed = ledger.close(note="superseded-provisional", void=True)
+    else:
+        closed = ledger.close(note="superseded-open-run")
+    if closed is not None:
+        note(f"closed stale row: {closed['run_id']} (${closed['estimated_usd']}) was open "
+             f"against {closed.get('instance_id')!r}; continuing with the instance in hand")
+    return closed
+
+
+def _estimated_rate(provider: Provider, gpu_id: str, cloud: str) -> float:
+    """What the catalogue says this GPU costs, for a row that must exist before the machine does.
+
+    A catalogue number is not a bill, and the pod's own rate replaces it seconds later. It is here
+    so that an interruption between asking for a machine and being told its id cannot leave money
+    that accrues at zero.
+    """
+    try:
+        price = provider.price_of(gpu_id, cloud)
+    except ProviderError:
+        price = None
+    return float(price or 0.0)
+
+
+def _open_provisional(cfg: Config, ledger: Ledger, provider: Provider, gpu_id: str,
+                      purpose: str | None, cloud: str) -> dict:
+    """Open the rental row **before** the machine can exist.
+
+    ``create`` is the irreversible step: from the moment it returns, a machine is billing. Opening
+    the row after a confirmation that can take minutes left a window in which an interruption — a
+    Ctrl-C, a dropped connection, a killed shell — produced a live pod that no ledger named. That is
+    defect 10, found on the real account as pod ``2abx0hz2boe6ow``.
+
+    So the row comes first, marked provisional because it names no instance yet, at the catalogue's
+    rate and a few seconds *before* the machine starts billing. Over-counting by the create latency
+    is the safe direction, and a row written before the irreversible step is the only guarantee that
+    survives a SIGKILL. The gap it leaves is a row that names no machine, which `doctor` already
+    reports as an error rather than treating as normal.
+    """
+    _release_open_run(ledger)
+    run = ledger.open(purpose=purpose or "(unstated)", provider=provider.name, instance_id=None,
+                      gpu_id=gpu_id, rate_usd_per_hour=_estimated_rate(provider, gpu_id, cloud),
+                      tag=PROVISIONAL_TAG)
+    note(f"ledger row     : {run['run_id']}  (provisional: opened before the machine exists)")
+    return run
+
+
+def _abandon_created(provider: Provider, ledger: Ledger, pod: dict) -> None:
+    """The way out of a `create` whose rental will not be confirmed: stop it, and close the row.
+
+    Every step is best-effort and says what it did. Raising here would replace the exception that
+    brought us here, and — the rule the shutdown path learned — a refused stop must not skip the
+    ledger close: the cost is recorded either way, and a machine that is somehow still billing is
+    then visible to `doctor` as a live instance with no open row, which is an error.
+    """
+    instance_id = pod.get("id")
+    try:
+        provider.action(instance_id, "stop")
+        note(f"stopping {instance_id}: the rental was not confirmed, and a machine that is not "
+             f"confirmed is not kept")
+    except ProviderError as exc:
+        note(f"could not stop {instance_id}: {exc}")
+        note("the cost is recorded below anyway; the machine may still be billing — check "
+             "`rentguard doctor`")
+    row = ledger.close(note="up-interrupted", instance_status=pod.get("status"))
+    if row:
+        note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
+             f"${row['estimated_usd']}")
+    note(f"total spend    : ${ledger.total_usd():.2f}")
 
 
 def _print_access(cfg: Config, provider: Provider, pod: dict) -> None:

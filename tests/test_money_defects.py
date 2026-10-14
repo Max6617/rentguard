@@ -176,9 +176,10 @@ class UpNeedsMoreThanOneAliveSample(unittest.TestCase):
         """Sequence: the pod reports RUNNING, uptime 3 min, ports set (one usable reading), then
         RUNNING with uptime 0 and null ports for every later reading, and finally it is gone.
 
-        Effect required: `up` does not report success, and no ledger row claims that machine. A
-        crash loop that flickers usable once is exactly the pod the paid run wasted an hour on, and
-        a ledger row for it is a rental the tool believes in and the user does not have.
+        Effect required: `up` does not report success, and no *open* row claims that machine. The
+        row that was opened before the machine existed is closed and names the machine, so the
+        seconds it did bill are recorded — the rental is not believed in, and the cost is not
+        hidden either (which is the other way this defect could be fixed wrongly).
         """
         alive = pod_payload(status="RUNNING", uptime=180, ports=True)
         crash = pod_payload(status="RUNNING", uptime=0, ports=False)
@@ -192,7 +193,12 @@ class UpNeedsMoreThanOneAliveSample(unittest.TestCase):
             f"crash-looping immediately afterwards. calls={calls!r}\noutput:\n{out}")
         run = self.ledger.open_run()
         self.assertIsNone(
-            run, f"a ledger row was opened for a machine that was never usable: {run}")
+            run, f"an open ledger row claims a machine that was never usable: {run}")
+        rows = self.ledger.entries()
+        self.assertEqual(len(rows), 1, f"{len(rows)} rows for one created machine: {rows}")
+        self.assertEqual(rows[0].get("instance_id"), "pod-1",
+                         f"the machine that billed was not recorded: {rows[0]}")
+        self.assertTrue(rows[0].get("stopped_at"), f"the row was left open: {rows[0]}")
 
     def test_up_still_succeeds_for_a_machine_that_stays_alive(self):
         """Control: a machine that is usable on every reading is a successful `up` with an open

@@ -174,6 +174,33 @@ class Ledger:
 
     # ---------------------------------------------------------------- helpers
 
+    def finalise(self, run_id: str, **fields) -> dict | None:
+        """Fill in the facts that were unknown when a row was opened provisionally, in place.
+
+        A provisional row exists *before* the machine does, so the money is recorded from the moment
+        it can start. When the provider then names the instance it actually created, the row is
+        corrected rather than replaced: a second row beside the first would count the same minutes
+        twice, and close-then-reopen would put the seconds between them outside the ledger.
+
+        The row keeps its ``run_id`` and its start — finalising is not closing, and the start is
+        when the rental began, which was deliberately a moment before the machine billed. Setting
+        ``stopped_at`` here is refused rather than ignored, because the one thing this must never
+        become is a second, lenient spelling of ``close``.
+        """
+        with self._lock():
+            rows = self.entries()
+            idx = next((i for i in range(len(rows) - 1, -1, -1)
+                        if rows[i].get("run_id") == run_id), None)
+            if idx is None or rows[idx].get("stopped_at"):
+                return None
+            forbidden = sorted({"stopped_at", "estimated_usd", "wall_clock_seconds",
+                                "wall_clock_hours"} & set(fields))
+            if forbidden:
+                raise ValueError(f"finalise cannot set {forbidden}; closing a row is `close`")
+            rows[idx].update(fields)
+            self._rewrite(rows)
+            return rows[idx]
+
     @staticmethod
     def _cost(row: dict) -> float:
         seconds = float(row.get("wall_clock_seconds") or 0.0)
