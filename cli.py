@@ -453,10 +453,14 @@ def cmd_doctor(args) -> int:
         try:
             provider = _provider(cfg)
         except SystemExit as exc:
-            note(f"provider       : {exc}")
             findings.append(Finding(code="provider-unavailable", severity="error",
                                     message=str(exc)))
             emit(findings=_findings_dicts(findings), live_instances=[])
+            # Print the finding, not just the raw error: a script and a person both look for the
+            # code, and the branch used to record it and return without ever showing it.
+            note("")
+            for finding in findings:
+                note(f"  {finding.severity.upper():<5} {finding.code}: {finding.message}")
             return 1
 
         state = _read_state(cfg)
@@ -1008,24 +1012,37 @@ def cmd_down(args) -> int:
                 note("--keep-running would leave the machine up to retry; stopping is "
                      "the default because a machine that keeps billing is the worse loss.")
 
+        stop_failed = False
         if live:
-            provider.action(pod["id"], "stop")
-            note(f"stopping {pod['id']}")
+            try:
+                provider.action(pod["id"], "stop")
+                note(f"stopping {pod['id']}")
+            except ProviderError as exc:
+                # The shutdown-path failure class, second instance: anything that raises between the
+                # decision and the ledger close must not skip the close. A refused stop used to
+                # escape here with the row still open — a machine probably billing with its cost
+                # never recorded. The row is closed anyway, and the exit code is non-zero.
+                stop_failed = True
+                note(f"could not stop {pod['id']}: {exc}")
+                note("the row is still closed below, so the cost is recorded; the machine may still "
+                     "be billing — check `rentguard doctor`")
         row = ledger.close(note="down", instance_status=status)
         if row:
             note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
                   f"${row['estimated_usd']}")
         note(f"total spend    : ${ledger.total_usd():.2f} of ${cfg.budget.cap_usd:.2f}")
-        if pod.get("volume"):
+        # The canonical instance shape carries ``volumeId``; ``volume`` was this command reading a
+        # key no provider returns, so a machine with a network volume was never told it survives.
+        if pod.get("volumeId") or pod.get("volume"):
             note("volume survives; the container disk does not.")
-        emit(action="stopped" if live else "already-stopped",
-             stopped=live,
+        emit(action="stop-failed" if stop_failed else ("stopped" if live else "already-stopped"),
+             stopped=live and not stop_failed,
              instance={"id": pod.get("id"), "status": status},
              run=_closed_dict(row),
              pulled=(pull_exit == 0) if cfg.artefacts.pull and live else None,
              pull_exit_code=pull_exit,
              total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
-    if pull_exit not in (None, 0):
+    if stop_failed or pull_exit not in (None, 0):
         return 1
     return 0
 
