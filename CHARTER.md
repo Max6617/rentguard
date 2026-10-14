@@ -56,11 +56,13 @@ deliberately not built. A bounded, honest guard over a supervisor nobody watches
 public remote. Given R8 matters to the user, "no remote configured" is a fact today and could stop
 being one silently.
 
-**W3 — the network-volume path is unexercised, and about to become unexercisable.** The account's
-only volume (`small-agents-vol`, 150 GB, US-IL-1, $10.50/month) was found unattached and billing
-while no pod ran, and the user has instructed its deletion. With nothing left to attach, the
+**W3 — the network-volume path is unexercised, and now unexercisable.** The account's
+only volume (`small-agents-vol`, 150 GB, US-IL-1, $10.50/month) was found billing while no pod ran
+and has since been deleted (`DELETE` returned 204 after the EXITED pod still referencing it was
+terminated; a read-only check at 16:54 shows zero volumes on the account). With nothing left to attach, the
 `[runpod].volume_id` path cannot be exercised on this account; the transport seam is unit-covered
-(`da51005`). Recorded as dropped for lack of a volume, not as untested.
+(`da51005`). Recorded as dropped for lack of a volume, not as untested. `doctor` did find that volume and its
+monthly cost before the deletion, which is the behaviour F-6 was about.
 
 **W4 — the guard was not merely unproven; it was wrong.** A paid run stopped a pod that was **32
 seconds old**, reporting "idle for 30 min (limit 5 min)": the provider's per-GPU idle seconds were
