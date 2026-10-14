@@ -83,5 +83,27 @@ class LedgerExcludesStorage(StorageCase):
         self.assertIn("not included", lowered, f"the ledger does not say what is excluded:\n{out}")
 
 
+class RunPodVolumes(unittest.TestCase):
+    def test_runpod_volumes_are_canonicalised_with_their_monthly_cost(self):
+        """The transport seam, scripted: RunPod's field names in, the canonical shape out."""
+        from rentguard.runpod import RunPod
+
+        provider = RunPod("test-key-not-real")
+        provider._request = lambda method, path, body=None, params=None, retries=3: {
+            "volumes": [{"id": "v1", "name": "small-agents-vol", "size": 150,
+                         "dataCenterId": "US-IL-1"}]}
+
+        volumes = provider.volumes()
+
+        self.assertEqual(len(volumes), 1, volumes)
+        volume = volumes[0]
+        self.assertEqual(volume["id"], "v1")
+        self.assertEqual(volume["name"], "small-agents-vol")
+        self.assertEqual(volume["size_gb"], 150.0)
+        self.assertEqual(volume["region"], "US-IL-1")
+        self.assertEqual(volume["monthly_usd"], 10.5, "150 GB at $0.07/GB is $10.50 a month")
+        self.assertIsNone(volume["attached_to"], "RunPod does not say what uses a volume")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
