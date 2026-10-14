@@ -6,9 +6,10 @@ cost, and have the machine stop itself.
 Time: about ten minutes, most of it waiting for the pod to boot. Money: whatever your chosen GPU
 costs per hour, capped by the `cap_usd` you set.
 
-The free commands below were run for this page; their real output is in
-[VERIFICATION.md](VERIFICATION.md). The one step that spends money is marked, because it has to be
-done once with a real account and it has not been done yet.
+The free commands below were run for this page against commit `2ebe660`; their real output is in
+[VERIFICATION.md](VERIFICATION.md). The paid step was run separately as milestone M2 — see
+[M2 — the real rental](M2-REAL-RENTAL.md) — and this page marks which transcripts are free and which
+are M2's.
 
 ## 1. Install
 
@@ -118,16 +119,17 @@ rentguard up --purpose "baseline" --cap 5
 ```
 
 **Do not use `up --dry-run` on this revision.** It calls the provider's `create` before it checks the
-dry-run flag, so it can rent a machine and still print "nothing was rented". At commit `528d15b` the
-same code made three create attempts against RunPod (all refused) during a "dry" run. See
-[limitations](limitations.md).
+dry-run flag, so it can rent a machine and still print "nothing was rented". At commit `2ebe660` the
+same code made three create attempts against RunPod (all refused) during a "dry" run, and left
+`fake-1` behind against the fake. See [limitations](limitations.md).
 
 `--cap` sets the project ceiling for this and later runs; `--purpose` is what the ledger row will say.
 The output names the GPU it chose, the instance id and its hourly rate, the ledger row it opened, the
 `ssh` command to reach the machine, and the cap that now applies.
 
-**Not run for this page:** renting is the step that spends money, and it has not been done yet. The
-first paid rental, with its real output and ledger row, is the project's milestone M2.
+The paid path was run as milestone M2 on 2026-10-14: twice, $0.017 in total, the second pass green with
+the artefact pulled from the right machine and the ledger reconciled by hand. The transcripts on this
+page are still the free ones — see [M2 — the real rental](M2-REAL-RENTAL.md).
 
 `up` refuses when renting would add a bill nobody is tracking:
 
@@ -136,8 +138,7 @@ $ rentguard up --purpose "again"
 error: $5.24 already recorded (including the open run's accrued cost) against a $5.00 cap. Raise the cap deliberately (--cap N) or pass --force. This is a money decision.
 ```
 
-Exit code 2. `--force` (or a deliberately higher `--cap`) is the way past it; `--dry-run --force`
-checks the GPU choice without renting.
+Exit code 2. `--force` (or a deliberately higher `--cap`) is the way past it.
 
 ## 5. Start the guard
 

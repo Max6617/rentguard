@@ -71,15 +71,16 @@ What remains yours to do:
 
 ## Money
 
-**`up --dry-run` is currently unsafe.** At commit `528d15b`, `cmd_up` calls `provider.create` inside
-the GPU-preference loop (`cli.py:713`) before it checks the dry-run flag (`cli.py:727`). A dry run
-therefore makes real create calls: run against RunPod on 2026-10-14 it attempted three rentals (the
-RTX 4090, L40S and A6000 were each refused at create) and then printed `dry run: would request NVIDIA
-RTX A6000; nothing was rented and nothing was spent`. Had any attempt succeeded, the pod would have
-been billing with no state pointer and no ledger row, because the write of both happens after the
-dry-run return — the exact untracked-instance failure the tool exists to prevent. No test covers this.
-Do not use `--dry-run` until it is fixed; check the cap by reading `rentguard ledger` and
-`rentguard status` instead.
+**`up --dry-run` is currently unsafe.** At commit `2ebe660`, `cmd_up` calls `provider.create` inside
+the GPU-preference loop *before* it checks the dry-run flag. A dry run therefore makes real create
+calls: run against RunPod on 2026-10-14 it attempted three rentals (the RTX 4090, L40S and A6000 were
+each refused at create) and then printed `dry run: would request NVIDIA RTX A6000; nothing was rented
+and nothing was spent`. Run free against the fake, it leaves `fake-1` in `PROVISIONING` and no ledger
+row — [KNOWN-FAILURES](KNOWN-FAILURES.md), F-4. Had a RunPod attempt succeeded, the pod would have been
+billing with no state pointer and no ledger row, because both are written after the dry-run return —
+the exact untracked-instance failure the tool exists to prevent. No test covers this. Do not use
+`--dry-run` until it is fixed; check the cap by reading `rentguard ledger` and `rentguard status`
+instead.
 
 **It never knows your balance.** Nothing in this tool reads an account balance, because no supported
 provider exposes one reliably: RunPod's billing figures lag, and a null total there means
@@ -146,10 +147,10 @@ exits non-zero, and prints which patterns were lost. There is no flag yet to kee
 instead, so trading money for a retry is not available: the stop wins by default. Call `rentguard pull`
 yourself between runs if you want a copy at any other moment.
 
-**`--json` prints the human output first, then the JSON.** Each read command appends one JSON document
-after its text on stdout, so a machine consumer has to take the last JSON value rather than parsing
-stdout as a whole. The CLI's own docstring says "exactly one JSON document on stdout", which is not
-what the code does today.
+**`--json` splits the two streams, so merge them deliberately.** With `--json`, stdout carries exactly
+one JSON document and the human prose goes to stderr, so `json.loads(stdout)` works without hunting for
+the last JSON value. A caller that wants both reads two streams; one that already merges them with
+`2>&1` gets the prose in front of the document, which is not valid JSON.
 
 **The MCP server still returns text only.** [MCP server](mcp.md) hands a Bot the same text the CLI
 prints. Returning the structured form alongside it — which is what the tool descriptions imply and the

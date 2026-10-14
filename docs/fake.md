@@ -89,7 +89,7 @@ idle decision      : idle for 11 min (limit 10 min, gpu util 0.0)
 ```
 
 That is the per-run cap, the stop action, the closed ledger row with its cost, and the idle rule — all
-asserted without an account. The same trick is what lets `tests/test_money_paths.py` (23 tests) cover
+asserted without an account. The same trick is what lets `tests/test_money_paths.py` (28 tests) cover
 the cap, the drift and the artefact paths for free.
 
 ## What it cannot prove

@@ -31,6 +31,14 @@ The later commits fix it and carry the green claim. The page edits made after 15
 (`README.md`, `docs/cap.md`, `docs/limitations.md`, `docs/quickstart.md`) are uncommitted as of this
 writing.
 
+The hashes Forge pinned for `2ebe660` were checked against the commit's blobs, not the working files
+(the sandbox's `core.autocrlf` leaves CRLF on disk): `git rev-parse 2ebe660:cli.py` gives
+`3affb3eb5eb3…`, `provider.py` `882b36cd5585…`, `guard.py` `0596a7df9d37…`, which are the sha256
+`12831AA0A1DD6399`, `A8984861D2AC1730`, `CD19F45C57904F6F` in LF. Re-verified on that extracted tree:
+58 tests, 0 failures, twice; `status` after a clean `down` prints
+`machine : stopped (EXITED) — nothing is billing for it now` with no crash-loop or "NO ROW" line; and
+`ledger --json` splits stdout and stderr as shown below.
+
 **`up --dry-run` is a money-risk defect, present at all three revisions.** `cmd_up` calls
 `provider.create` inside the preference-retry loop (`cli.py:713`) *before* the dry-run check
 (`cli.py:727`), so a "dry" run makes real create calls. Against RunPod it printed:
@@ -101,15 +109,39 @@ guard heartbeat: (never)  <-- STALE, nothing is watching
 
 Exit code 1. `rentguard ledger` on the same empty project prints `no runs recorded` and exits 0.
 
-## `rentguard up --dry-run`, with a key (read-only)
+## `rentguard up --dry-run` — not a safe form
+
+Earlier in the day this ran against RunPod's catalog and printed:
 
 ```console
 $ rentguard up --purpose "baseline" --cap 5 --dry-run
 dry run: would request NVIDIA GeForce RTX 4090; nothing was rented and nothing was spent
 ```
 
-This calls the provider catalog and the cap check, and rents nothing. It is the only `up` form that
-was run; the paid path is milestone M2.
+That transcript is not evidence that `--dry-run` is safe. At `2ebe660` it is not: `cmd_up` calls
+`provider.create` before it checks the flag, so "nothing was rented" is printed *after* the machine was
+requested. Run free against the fake, it leaves an instance behind:
+
+```console
+$ RENTGUARD_PROVIDER=fake rentguard up --purpose "dry check" --dry-run
+requesting Fake GPU 24GB
+dry run: would request Fake GPU 24GB; nothing was rented and nothing was spent
+[exit 0]
+
+$ cat .rentguard/fake-state.json
+  "instances": [
+    {
+      "id": "fake-1",
+      "status": "PROVISIONING",
+      ...
+
+$ rentguard ledger
+no runs recorded
+```
+
+One `create`, no ledger row, and the line above it denying that anything happened. Against RunPod that
+is a rented, billing machine with nothing recording it. Do not use `--dry-run`; the reproduction is in
+[limitations](limitations.md).
 
 ## The in-memory rehearsal
 
@@ -227,9 +259,10 @@ with a total of `0.0000`.
 
 ## `--json`
 
+Two streams on purpose. At `2ebe660`, on an empty root:
+
 ```console
-$ rentguard ledger --json
-no runs recorded
+$ rentguard ledger --json          # stdout
 {
   "command": "ledger",
   "runs": [],
@@ -241,9 +274,13 @@ no runs recorded
   "open_run": null,
   "malformed_lines": []
 }
+
+$ rentguard ledger --json          # stderr
+no runs recorded
 ```
 
-The human text comes first and the JSON document after it, on stdout.
+stdout is exactly one JSON document and `json.loads(stdout)` succeeds; the human prose is on stderr.
+Merging the two (`2>&1`) puts the prose in front of the document, which then does not parse.
 
 ## The MCP server
 
@@ -291,10 +328,10 @@ the base `Provider` class. Both were fixed within minutes and are not in the tab
 
 ## Not verified
 
-- **A paid rental.** `up` against RunPod, `run` over ssh, a real `pull`, a real `down` and the
-  resulting ledger row are milestone M2 and were not run: they spend money. The `up --dry-run` call
-  above reached RunPod's create endpoint (see Revision); nothing was created because every attempt was
-  refused.
+- **The paid path by this pass.** `up` against RunPod, `run` over ssh, a real `pull` and a real `down`
+  were not run *for this log*: they spend money. They were run as milestone M2 — twice on 2026-10-14,
+  $0.017 in total, the second pass green with the artefact pulled from the right machine and the ledger
+  reconciled by hand: [M2 — the real rental](M2-REAL-RENTAL.md).
 - **`pip install .`.** The local sandbox refused `python -m venv` (`ensurepip` failed) and a
   `--target` install (temp-directory permissions), so the console script produced by `pyproject.toml`
   was not exercised here. The module is exercised as `python -m rentguard.cli`.

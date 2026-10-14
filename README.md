@@ -46,7 +46,8 @@ No account yet? Every command also runs against an in-memory provider — real b
 key, no money: [test the cap without spending](docs/fake.md).
 
 Step by step, with the output of every command: [quickstart](docs/quickstart.md). Every command also
-takes `--json`, which prints the human output and then one JSON document on stdout.
+takes `--json`: stdout then carries exactly one JSON document and the human text goes to stderr, so
+`json.loads(stdout)` works.
 
 ## The cap
 

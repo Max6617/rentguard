@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import threading
 import unittest
@@ -41,7 +42,7 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE))
 
 from rentguard import cli, guard  # noqa: E402
-from rentguard.cli import _remote_command  # noqa: E402
+from rentguard.cli import _instance_name, _remote_command, _temp_tar  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, iso, now_utc  # noqa: E402
@@ -740,6 +741,76 @@ class GpuFallback(MoneyCase):
         self.assertIn("GPU-B", out, f"the second refusal is not named:\n{out}")
         self.assertEqual(self.ledger.open_run(), None,
                          "a row was opened for a machine that was never created")
+
+
+# ====================================================================== a pull must not trap money
+# Found on the real account: `down` pulled before stopping, the pull crashed on an unwritable temp
+# dir, and the exception skipped the stop — leaving an instance billing because a tar stream failed.
+
+class DownSurvivesAPullFailure(MoneyCase):
+    def _live_down(self, provider):
+        self.cfg.artefacts.pull = ["results/*.json"]
+        self.cfg.artefacts.local_dir = str(self.state_dir / "artefacts")
+        self.write_state({"instance_id": "pod-A", "provider": "fake"})
+        self.open_run(hours_ago=0.1, instance_id="pod-A")
+        return self.invoke(cli.cmd_down, cli_args("down"), provider)
+
+    def test_down_stops_the_machine_when_the_pull_crashes(self):
+        """Sequence: a live instance, artefacts configured, and the pull raises instead of returning.
+
+        Effect: the machine is stopped and the row closed anyway (exit non-zero). A crash between
+        "pull" and "stop" is how a machine keeps billing with nobody watching it.
+        """
+        provider = self.machine("pod-A", uptime=600)
+        with mock.patch.object(cli, "cmd_pull", side_effect=RuntimeError("no temp dir")):
+            code, out = self._live_down(provider)
+
+        self.assertIn(("pod-A", "stop"), provider.actions,
+                      f"down skipped the stop after the pull raised.\noutput:\n{out}")
+        self.assertIsNone(self.ledger.open_run(),
+                          f"the row stayed open after a crashed pull.\noutput:\n{out}")
+        self.assertNotEqual(code, 0, f"a crashed pull was reported as a clean stop.\noutput:\n{out}")
+
+    def test_down_stops_the_machine_when_the_pull_returns_failure(self):
+        """Same, for a pull that returns non-zero rather than raising."""
+        provider = self.machine("pod-A", uptime=600)
+        with mock.patch.object(cli, "cmd_pull", return_value=1):
+            code, out = self._live_down(provider)
+
+        self.assertIn(("pod-A", "stop"), provider.actions, f"not stopped.\noutput:\n{out}")
+        self.assertIsNone(self.ledger.open_run(), f"row stayed open.\noutput:\n{out}")
+        self.assertNotEqual(code, 0)
+
+    def test_the_pull_archive_is_built_where_it_is_told_to(self):
+        """The system temp dir is not always writable; the archive must land in the given directory."""
+        target = self.state_dir / "pull-tmp"
+        with _temp_tar(target) as (handle, archive):
+            handle.write(b"data")
+            self.assertTrue(Path(archive).is_relative_to(target),
+                            f"archive {archive} was not built under {target}")
+            self.assertTrue(Path(archive).exists(), "the archive file was not created")
+
+
+# ====================================================================== one account, one ledger
+# Also found on the real account: a pod leased from a different state dir carried the fixed default
+# name, so nothing tied it to any ledger. The name now encodes the project root.
+
+class InstanceNaming(MoneyCase):
+    def test_the_name_is_derived_from_the_project_root(self):
+        with mock.patch.dict(os.environ, {"RENTGUARD_ROOT": r"C:\project-one"}):
+            first = _instance_name(self.cfg)
+        with mock.patch.dict(os.environ, {"RENTGUARD_ROOT": r"C:\project-two"}):
+            second = _instance_name(self.cfg)
+
+        self.assertTrue(first.startswith("rentguard-"), first)
+        self.assertNotEqual(first, second,
+                            "two different project roots produced the same instance name, so a "
+                            "rental from a second state dir is invisible to the first")
+        self.assertNotIn("workbench", first)
+
+    def test_an_explicit_name_in_the_config_wins(self):
+        self.cfg.runpod = {"name": "my-baseline-run"}
+        self.assertEqual(_instance_name(self.cfg), "my-baseline-run")
 
 
 if __name__ == "__main__":

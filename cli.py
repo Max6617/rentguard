@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import shlex
@@ -189,6 +190,23 @@ def _live(provider: Provider) -> list[dict]:
 def _rp(cfg: Config, key: str, default=None):
     value = cfg.runpod.get(key, DEFAULTS.get(key, default))
     return default if value is None else value
+
+
+def _instance_name(cfg: Config) -> str:
+    """The name the machine is rented under.
+
+    When the config names nothing, the name is derived from the project root, so **two state dirs
+    cannot share one account invisibly**: a pod rented from a different root carries a different
+    name, and it is visible in the provider's console even when the ledger that would have recorded
+    it is somewhere else. That is the whole reason this is not just ``"rentguard-workbench"`` —
+    a fixed default is exactly how a rental gets orphaned from its books.
+    """
+    explicit = cfg.runpod.get("name")
+    if explicit:
+        return str(explicit)
+    root = Path(os.environ.get("RENTGUARD_ROOT") or Path.cwd()).resolve()
+    tag = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:8]
+    return f"rentguard-{tag}"
 
 
 def _ssh(fmt: str) -> str:
@@ -683,7 +701,7 @@ def cmd_up(args) -> int:
                 container_disk_gb=int(_rp(cfg, "container_disk_gb")),
                 cloud=_rp(cfg, "cloud"),
                 ports=list(_rp(cfg, "ports")),
-                name=_rp(cfg, "name"),
+                name=_instance_name(cfg),
                 volume_id=(_rp(cfg, "volume_id") or None),
                 volume_mount=_rp(cfg, "volume_mount"),
             )
@@ -799,6 +817,20 @@ def _print_access(cfg: Config, provider: Provider, pod: dict) -> None:
     emit(ssh={"argv": argv, "target": target})
 
 
+def _try_pull(cfg: Config, args) -> int:
+    """Pull, and never raise.
+
+    A pull that crashes must not skip whatever the caller owed the operator — the commonest case is
+    `down`, where an exception between "pull" and "stop" leaves a machine billing because a tar
+    stream failed. The money rule outranks the data rule: stop the machine, then report the pull.
+    """
+    try:
+        return cmd_pull(argparse.Namespace(json=getattr(args, "json", False)))
+    except Exception as exc:  # noqa: BLE001 - surviving any of them is the entire point
+        note(f"pull failed before it could run: {type(exc).__name__}: {exc}")
+        return 1
+
+
 def cmd_down(args) -> int:
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
@@ -824,7 +856,7 @@ def cmd_down(args) -> int:
         # non-zero, so a script cannot read a lost pull as a clean stop.
         if cfg.artefacts.pull and live:
             note(f"pulling artefacts from {pod.get('id')} before stopping it")
-            pull_exit = cmd_pull(argparse.Namespace(json=getattr(args, "json", False)))
+            pull_exit = _try_pull(cfg, args)
             if pull_exit != 0:
                 note(f"pull failed (exit {pull_exit}); stopping anyway — the container holds files "
                       f"that will be lost: {', '.join(cfg.artefacts.pull)}")
@@ -1006,7 +1038,7 @@ def cmd_run(args) -> int:
                       f"the account, so {len(cfg.artefacts.pull)} configured pattern(s) went with "
                       f"it. The results for this run are lost.")
             else:
-                pull_exit = cmd_pull(argparse.Namespace(json=getattr(args, "json", False)))
+                pull_exit = _try_pull(cfg, args)
 
         # Whether the pull actually worked, not merely whether it was configured: claiming artefacts
         # were kept while the line above says "pull failed" is how a lost result reads as a kept one.
@@ -1043,16 +1075,34 @@ def _copy_matching(members: dict[str, bytes], dest: Path) -> list[str]:
 
 
 @contextlib.contextmanager
-def _temp_tar():
+def _temp_tar(directory: Path | None = None):
     """A file to hold the tar stream, instead of a pipe to the child.
 
     Piping a grandchild's stdout needs two processes alive at once and is refused in some sandboxes.
-    A temporary file is one syscall less clever and always works.
+    A temporary file is one syscall less clever and always works — but not necessarily in the system
+    temp dir, which is read-only under some confinements and ``mkdtemp``-owned (mode 0700) under
+    others. So the caller passes a directory it knows is writable (the project's state dir), and the
+    system temp is only the fallback.
     """
     import shutil
     import tempfile
+    import uuid
 
-    path = Path(tempfile.mkdtemp(prefix="rentguard-pull-"))
+    bases = [d for d in (directory, Path(tempfile.gettempdir())) if d is not None]
+    path: Path | None = None
+    last_error: OSError | None = None
+    for base in bases:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            candidate = base / f".rentguard-pull-{uuid.uuid4().hex}"
+            candidate.mkdir()
+            path = candidate
+            break
+        except OSError as exc:
+            last_error = exc
+    if path is None:
+        raise last_error or OSError("no writable directory for the pull archive")
+
     archive = path / "artefacts.tar.gz"
     try:
         with archive.open("wb") as handle:
@@ -1097,7 +1147,7 @@ def cmd_pull(args) -> int:
 
         argv, target = _ssh_argv(cfg, provider, pod)
         remote = f"cd {cfg.artefacts.remote_dir} && tar czf - {' '.join(patterns)}"
-        with _temp_tar() as (handle, archive):
+        with _temp_tar(cfg.state_dir) as (handle, archive):
             code = subprocess.call([*argv, target, remote], stdout=handle)
             handle.flush()
             if code != 0:

@@ -111,8 +111,10 @@ walked. RunPod and the fake are the only registered providers, `cli._rp` reads `
 no `[vast]` section, and nothing here has been done end to end. Treat it as the map for the next
 person, not as a feature.
 
-1. Create `rentguard/vast.py` with a `Provider` subclass. The module must expose a class named
-   `Provider` (the registry reads that name).
+1. Create `rentguard/vast.py` with a `Provider` subclass whose `name` attribute is the key you will
+   register (`name = "vast"`). The class may be called anything: `provider.resolve` finds it by `name`,
+   not by an attribute called `Provider` — that name is shadowed anyway by
+   `from .provider import Provider`.
 2. Implement `get`, `list_pods`, `create`, `action` and `wait_running` in the canonical shape. Today
    the payload is used exactly as returned — `normalise` exists in the interface but nothing calls it —
    so if the provider's field names differ, translate inside those methods and keep the names in one
