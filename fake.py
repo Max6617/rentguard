@@ -276,15 +276,19 @@ class FakeProvider(Provider):
         The fake owns exactly one GPU, so it is always on the list: the base implementation refuses
         a preference list that does not name it, which makes the documented offline flow —
         `RENTGUARD_PROVIDER=fake rentguard up`, from this module's own docstring — fail on a fresh
-        config. Preferences that are not refused come first, so a test can model the M2 finding (the
-        catalogue said available, create refused) by putting a GPU in ``unavailable_gpus``.
-        Set ``refuse_gpus`` for the no-stock path.
+        config.
+
+        ``unavailable_gpus`` entries **stay on the list**, because that is the M2 defect being
+        modelled: the catalogue says the GPU is there and ``create`` refuses it. If this method
+        filtered them out it would hide the very path `up` has to walk, and the fallback would look
+        tested when it had never run. Set ``refuse_gpus`` for the no-stock path where nothing is
+        offered at all.
         """
         self.requested_gpus.append(list(preference))
         if self.refuse_gpus:
             raise ProviderError(f"none of the preferred GPUs is available: {list(preference)}")
-        offered = [gpu for gpu in preference if gpu not in self.unavailable_gpus]
-        if self.gpu_id not in offered and self.gpu_id not in self.unavailable_gpus:
+        offered = list(preference)
+        if self.gpu_id not in offered:
             offered.append(self.gpu_id)
         if not offered:
             raise ProviderError(f"none of the preferred GPUs is available: {list(preference)}")

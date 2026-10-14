@@ -128,10 +128,13 @@ is mounted.)
 **Artefact patterns are expanded by the remote shell and joined without quoting.** A pattern
 containing a space breaks the pull; `**` behaves like `*` under a POSIX `sh`. Use plain globs.
 
-**`[artefacts].on_run` is accepted but not read.** `run` now pulls whenever `[artefacts].pull` is
-non-empty, whatever the command's exit code, and `down` never pulls. The key and the comment `init`
-writes about it no longer describe the code. Call `rentguard pull` yourself if you want artefacts at
-any other moment.
+**Artefacts are pulled at two moments, and nowhere else.** If `[artefacts].pull` is non-empty, `run`
+pulls when each run finishes and `down` pulls before stopping the machine. `[artefacts].on_run` was
+removed; a config that still contains it is accepted with the key dropped rather than rejected, so a
+stale file does not refuse to run. On `down`, a failed pull does not cancel the stop — it stops anyway,
+exits non-zero, and prints which patterns were lost. There is no flag yet to keep the machine running
+instead, so trading money for a retry is not available: the stop wins by default. Call `rentguard pull`
+yourself between runs if you want a copy at any other moment.
 
 **`--json` prints the human output first, then the JSON.** Each read command appends one JSON document
 after its text on stdout, so a machine consumer has to take the last JSON value rather than parsing

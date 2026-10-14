@@ -50,7 +50,6 @@ idle_minutes = 10         # stop after this long with the GPU idle; 0 disables
 pull = ["results/**/*.json", "logs/*.log"]
 local_dir = "./artefacts"
 remote_dir = "/workspace"
-on_run = false            # accepted but not read today: `run` pulls whenever `pull` is set
 
 [runpod]
 gpu_preference = ["NVIDIA GeForce RTX 4090", "NVIDIA L40S", "NVIDIA RTX A6000"]
@@ -59,10 +58,11 @@ volume_id = ""            # empty: no network volume, so the container disk dies
 state_dir = ".rentguard"
 ```
 
-Whenever `[artefacts].pull` is non-empty, `run` pulls those patterns after the command returns —
-whatever its exit code. `down` does not pull; `rentguard pull` does it on demand. Note that the
-generated file says `volume_name` where the code reads `volume_id` — edit it if you need a volume. See
-[limitations](limitations.md).
+If `[artefacts].pull` is non-empty, `run` pulls those patterns when each run finishes — whatever its
+exit code — and `down` pulls again before it stops the machine. A failed pull at `down` does not cancel
+the stop: it stops anyway, exits non-zero, and prints which patterns were lost, because a machine left
+running to retry a copy is money spent by default. Note that the generated file says `volume_name`
+where the code reads `volume_id` — edit it if you need a volume. See [limitations](limitations.md).
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.
@@ -205,9 +205,10 @@ pulled 12 file(s) into C:\work\artefacts
   ...
 ```
 
-Artefacts are pulled with `tar` over `ssh` into `local_dir`. **If there is no network volume, the
-container disk dies with the instance** — a stopped pod is a fresh container next time, with none of
-your files. Pull, or attach a volume.
+Artefacts are pulled with `tar` over `ssh` into `local_dir`. `down` pulls once more before it stops the
+machine, so the last run's results are taken even if you only call `down`. **If there is no network
+volume, the container disk dies with the instance** — a stopped pod is a fresh container next time,
+with none of your files. Pull, or attach a volume.
 
 ## 8. Stop and read the bill
 
@@ -215,14 +216,27 @@ your files. Pull, or attach a volume.
 rentguard down
 ```
 
-Stops the instance and closes the ledger row with its wall-clock cost. Then:
+Stops the instance and closes the ledger row with its wall-clock cost. If `[artefacts].pull` is set it
+pulls first; a failed pull still stops the machine, exits non-zero and prints which patterns were
+lost. Output from the free rehearsal in §9:
+
+```console
+$ rentguard down
+pulling artefacts from fake-1 before stopping it
+pulled 0 file(s) into C:\work\artefacts
+stopping fake-1
+run closed     : 20261014T131911Z-2ff393  0.001 h  $0.000144
+total spend    : $0.00 of $5.00
+```
+
+Then:
 
 ```console
 $ rentguard ledger
 
 run                    gpu                          hours      usd  closed by          purpose
 ----------------------------------------------------------------------------------------------------------------------
-20261014T131705Z-44d37 Fake GPU 24GB                 0.00   0.0001  down               doc rehearsal
+20261014T131911Z-2ff39 Fake GPU 24GB                 0.00   0.0001  down               doc rehearsal
 ----------------------------------------------------------------------------------------------------------------------
 total                                                0.00   0.0001
 cap: $5.00   remaining: $5.00
@@ -291,7 +305,7 @@ account pods   : 0 total, 0 live
 $ rentguard up --purpose "doc rehearsal"
 requesting Fake GPU 24GB
 instance       : fake-1  $0.13/h
-ledger row     : 20261014T131705Z-44d37b
+ledger row     : 20261014T131911Z-2ff393
 ssh            : ssh fake@127.0.0.1
 
 cap            : $5.00 total, $2.00 per run, 6.0 h max
@@ -306,12 +320,14 @@ instance       : fake-1  RUNNING
 gpu            : Fake GPU 24GB  $0.13/h
 uptime         : 0.00 h   gpu util 0.0%
 this run       : $0.000 of $2.00
-all runs       : $0.000 of $5.00  (~2307.7 min to the cap at this rate)
+all runs       : $0.000 of $5.00  (~2307.6 min to the cap at this rate)
 guard          : NO HEARTBEAT — nothing is watching this instance
 
 $ rentguard down
+pulling artefacts from fake-1 before stopping it
+pulled 0 file(s) into C:\work\artefacts
 stopping fake-1
-run closed     : 20261014T131705Z-44d37b  0.0008 h  $0.000108
+run closed     : 20261014T131911Z-2ff393  0.001 h  $0.000144
 total spend    : $0.00 of $5.00
 ```
 

@@ -172,14 +172,11 @@ def _pod(provider: Provider, cfg: Config) -> dict | None:
     run in progress becomes invisible — see F-1 in docs/KNOWN-FAILURES.md. Callers that mean to
     forget the instance do so explicitly.
     """
-    state = _read_state(cfg)
-    instance_id = state.get("instance_id")
+    instance_id = _read_state(cfg).get("instance_id")
     if not instance_id:
         return None
     pod = provider.get(instance_id)
     if pod is None or pod.get("status") == "TERMINATED":
-        state.pop("instance_id", None)
-        _write_state(cfg, state)
         return None
     return pod
 

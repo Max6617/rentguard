@@ -41,6 +41,7 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE))
 
 from rentguard import cli, guard  # noqa: E402
+from rentguard.cli import _remote_command  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, iso, now_utc  # noqa: E402
@@ -638,6 +639,104 @@ class ArtefactPull(MoneyCase):
 
         self.assertTrue(self.pulled_path().exists(), f"pull path itself is broken.\noutput:\n{out}")
         self.assertEqual(self.pulled_path().read_bytes(), b'{"ok": true}')
+
+
+# ====================================================================== the remote command
+# M2 paid $0.0091 to find this: `run` quoted a compound command the caller's own shell had already
+# quoted, so bash received one word and executed nothing. The single-argument form is the one the
+# README uses; both must reach the remote shell intact.
+
+class RemoteCommandForm(MoneyCase):
+    def _capture(self, argv: list[str]) -> tuple[int, str, str]:
+        provider = self.machine("pod-A", uptime=600)
+        self.write_state({"instance_id": "pod-A", "provider": "fake"})
+        self.open_run(hours_ago=0.1, instance_id="pod-A")
+        seen: dict[str, str] = {}
+        provider.command_runner = lambda av, remote: (seen.update(remote=remote), 0)[1]
+        code, out = self.invoke(cli.cmd_run, cli_args(*argv), provider)
+        return code, out, seen.get("remote", "")
+
+    def test_a_compound_command_reaches_the_remote_shell_unquoted(self):
+        """Sequence: `rentguard run -- 'mkdir -p results; hostname > results/m2.json'` — the caller's
+        shell has already made this one argument.
+
+        Effect: the remote command keeps the compound line as the shell wrote it, so the remote shell
+        parses the `;` and `>` itself. Quoting it again sends one word, and bash looks for a program
+        named `mkdir -p results; hostname ...` — which is exactly what M2 did.
+        """
+        compound = "mkdir -p results; hostname > results/m2.json"
+        code, out, remote = self._capture(["run", "--", compound])
+
+        self.assertEqual(code, 0, f"run failed.\noutput:\n{out}")
+        self.assertIn(compound, remote,
+                      f"the compound line was mangled before it reached the shell:\n{remote!r}")
+
+    def test_the_remote_command_helper_passes_one_argument_through(self):
+        """The rule, stated directly: one argument is the shell's own text, several are separate
+        words that must each be quoted."""
+        self.assertEqual(_remote_command(["python train.py"]), "python train.py")
+        self.assertEqual(_remote_command(["echo", "hello world"]), "echo 'hello world'")
+        self.assertEqual(_remote_command(["a;b", "c"]), "'a;b' c")
+
+    def test_separate_arguments_are_quoted_individually(self):
+        """Sequence: `run -- python train.py` (several arguments).
+
+        Effect: each argument stays one word on the remote side, so a quote in an argument is data
+        and the program name is not glued to the shell's punctuation.
+        """
+        code, out, remote = self._capture(["run", "--", "python", "train.py"])
+
+        self.assertEqual(code, 0, f"run failed.\noutput:\n{out}")
+        self.assertIn("python train.py", remote, f"arguments were mangled: {remote!r}")
+
+
+# ====================================================================== GPU fallback
+# M2 also found that a catalogue entry is not capacity: the RTX 3070 showed available and create
+# refused it. `up` must walk the preference list until the provider accepts one.
+
+class GpuFallback(MoneyCase):
+    def _prefer(self, *gpus: str, unavailable: set[str] | None = None) -> FakeProvider:
+        self.cfg.runpod = {"gpu_preference": list(gpus)}
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.unavailable_gpus = set(unavailable or ())
+        return provider
+
+    def test_up_falls_back_when_the_first_catalog_hit_is_refused(self):
+        """Sequence: preferences [A, B]; the catalogue offers both, but `create(A)` is refused the
+        way RunPod refuses stale stock, and `create(B)` is accepted.
+
+        Effect: a machine is rented, and it is B — the next preference — not a dead end. Without the
+        walk, the whole tool is unusable whenever the first catalogue hit is stale.
+        """
+        provider = self._prefer("GPU-A", "GPU-B", unavailable={"GPU-A"})
+
+        code, out = self.invoke(cli.cmd_up, cli_args("up", "--purpose", "fallback"), provider)
+
+        self.assertEqual(code, 0, f"up died instead of falling back.\noutput:\n{out}")
+        run = self.ledger.open_run()
+        self.assertIsNotNone(run, f"up rented nothing and opened no row.\noutput:\n{out}")
+        pod = provider.get(run["instance_id"]) or {}
+        self.assertEqual((pod.get("gpu") or {}).get("id"), "GPU-B",
+                         f"up did not fall back to the next preference; it rented "
+                         f"{(pod.get('gpu') or {}).get('id')!r}.\noutput:\n{out}")
+        self.assertIn("GPU-A was refused", out, f"the refusal was not reported:\n{out}")
+
+    def test_up_reports_every_refusal_when_none_is_available(self):
+        """Sequence: preferences [A, B], and the provider refuses both.
+
+        Effect: up exits non-zero and names both, so the operator sees which cards were tried rather
+        than one generic failure.
+        """
+        provider = self._prefer("GPU-A", "GPU-B",
+                                unavailable={"GPU-A", "GPU-B", "Fake GPU 24GB"})
+
+        code, out = self.invoke(cli.cmd_up, cli_args("up", "--purpose", "none"), provider)
+
+        self.assertNotEqual(code, 0, f"up reported success with nothing rentable.\noutput:\n{out}")
+        self.assertIn("GPU-A", out, f"the first refusal is not named:\n{out}")
+        self.assertIn("GPU-B", out, f"the second refusal is not named:\n{out}")
+        self.assertEqual(self.ledger.open_run(), None,
+                         "a row was opened for a machine that was never created")
 
 
 if __name__ == "__main__":
