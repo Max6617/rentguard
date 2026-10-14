@@ -8,21 +8,12 @@ something the provider enforces; it is a property of the guard. `watch` is a for
 nothing starts for you. If no guard is running, there is no cap: the instance bills until someone
 notices. That is the failure this tool was built for, and it is the honest limit of everything below.
 
-**The guard has a known defect.** It can stop a freshly started machine: `watch` compares the provider's
-per-GPU idle seconds against `idle_minutes` without clamping them to the machine's own uptime, so a pod
-can be stopped at its first sample. Reproduced on the pure decision path (no network, no spend) with the
-provider reporting 30 minutes of GPU idle on a machine 32 seconds old:
-
-```text
-pod uptime                     : 32 s
-provider-reported GPU idle     : 30.0 min
-effective idle used by decide  : 30.0 min
-idle_minutes from config       : 5.0 min
-decide() -> 'idle for 30 min (limit 5 min, gpu util 0.0)'
-```
-
-Until this is fixed, use `idle_minutes` with care or run `watch` with a large interval. It is filed in
-[KNOWN-FAILURES](KNOWN-FAILURES.md), and the wording here comes out when the fix lands with a test.
+**A defect here is fixed, and it is worth knowing it existed.** `watch` used to compare the provider's
+per-GPU idle seconds against `idle_minutes` without clamping them to the machine's own uptime, so it
+could stop a pod at its first sample: a real paid run stopped a machine that was 32 seconds old as
+"idle for 30 min (limit 5 min)". Fixed at `d5fdaea` — provider idle is now bounded by the pod's own
+uptime and ignored when uptime is unknown. The reproduction stays in
+[KNOWN-FAILURES](KNOWN-FAILURES.md) (F-5), because a line number says code ran, never that it was right.
 
 **The short version.** While `rentguard watch` is running, it stops the instance when the estimate for
 spend crosses the cap. Everything below is about what that does and does not cover.
@@ -34,7 +25,7 @@ spend crosses the cap. Everything below is about what that does and does not cov
 | Recorded spend against the cap | `rentguard up`, before anything is rented | closed rows **plus the accrued cost of the open row** | refuses, exit code 2, unless `--cap N` or `--force` |
 | A live instance with no ledger row | `rentguard up`, before renting | live instances on the account | refuses; `adopt` it or stop it |
 | An open row naming a missing instance | `rentguard up`, before renting | the ledger and the provider | refuses; `down` closes the row |
-| The choice, without renting | `rentguard up --dry-run` | **broken at `af1ba5a`** — `cmd_up` calls `create` before it checks the flag, so it can rent a machine and still print "nothing was rented" | see [limitations](limitations.md); do not use |
+| The choice, without renting | `rentguard up --dry-run` | the GPU choice and the cap check, with no `create` call | prints what it would request and rents nothing (fixed at `ce69cea`; it used to rent behind the flag) |
 | Total cap | every `watch` poll | closed rows plus the live estimate of the open row | stops the instance, closes the row |
 | Per-run cap | every `watch` poll | the live estimate of the open row | stops the instance, closes the row |
 | Maximum hours | every `watch` poll | the provider's uptime for the instance | stops the instance, closes the row |

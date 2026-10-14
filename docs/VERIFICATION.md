@@ -119,7 +119,7 @@ guard heartbeat: (never)  <-- STALE, nothing is watching
 
 Exit code 1. `rentguard ledger` on the same empty project prints `no runs recorded` and exits 0.
 
-## `rentguard up --dry-run` — not a safe form
+## `rentguard up --dry-run` — the form that used to rent
 
 Earlier in the day this ran against RunPod's catalog and printed:
 
@@ -149,8 +149,9 @@ $ rentguard ledger
 no runs recorded
 ```
 
-One `create`, no ledger row, and the line above it denying that anything happened. Against RunPod that
-is a rented, billing machine with nothing recording it. Do not use `--dry-run`; the reproduction is in
+One `create`, no ledger row, and the line above it denying that anything happened — against RunPod that
+was a rented, billing machine with nothing recording it. Fixed at `ce69cea`, with the test asserting on
+the provider call (`f7bf556`) instead of on the sentence. The reproduction is kept in
 [limitations](limitations.md).
 
 ## The in-memory rehearsal
@@ -448,20 +449,21 @@ For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 ## Later revisions
 
 After `af1ba5a` the tree grew fast. At **`74b9f7a`** a clean worktree ran 189 passed / 0 failed; at
-**`458e128`** — the publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs
-**266 passed, 0 failed, 50 subtests**, and coverage measures **97.5% (2,200 / 2,256)** with the floor at
-97.0%. Per module: `cli.py` 99.6, `fake.py` 99.6, `config.py` 99.0, `guard.py` 99.0, `provider.py` 96.6,
-`runpod.py` 93.5, `ledger.py` 93.3, `mcp_server.py` 90.3 (the weakest; its uncovered lines are the
-transport's error and notification branches). `fake.py` was 87.7% at `18b5fc0`; a measured module
-changed, so the figure was re-measured rather than carried forward.
+**`cdd7113`** — the publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs
+**295 passed, 0 failed, 50 subtests**, identical with and without `RENTGUARD_PROVIDER=fake`, and coverage
+measures **98.4% (2,219 / 2,256)** with the floor at 98.0% and the target met. Per module: `cli.py` 99.6,
+`fake.py` 99.6, `mcp_server.py` 99.1 (was 90.3 at `458e128`), `config.py` 99.0, `guard.py` 99.0,
+`provider.py` 96.6, `runpod.py` 93.5, `ledger.py` 93.3. The last two are individually below the 94%
+figure, so the 98.4% total is not a promise about every module. `fake.py` was 87.7% at `18b5fc0`; each
+figure was re-measured when a measured module changed, never carried forward.
 
 Three notes, all measured:
 
-- **CI is red as written.** `.github/workflows/ci.yml` sets `RENTGUARD_PROVIDER: fake` for its Test and
-  Coverage steps. That variable makes two `tests/test_cli_branches.py` tests fail: `248 passed / 2
-  failed` with it set, `250 passed / 0 failed` without it, measured at `6f31c27` and again at `458e128`.
-  Those tests build a `runpod` provider and expect a missing-key error, and the variable overrides their
-  provider choice.
+- **CI's `RENTGUARD_PROVIDER=fake` defect is closed at `cdd7113`.** The workflow sets that variable for
+  its Test and Coverage steps, and it used to fail two `tests/test_cli_branches.py` tests: `248 passed /
+  2 failed` with it set, `250 passed / 0 failed` without it, measured at `6f31c27` and again at
+  `458e128`. The fix pins the provider inside those two tests rather than changing the CI step, and the
+  suite is now 295 / 0 either way.
 - **A stale `.rentguard-tmp` makes `test_ledger_paths.py` fail** (`PermissionError` creating a
   `runs.jsonl.lock` inside it, 16 tests in the main checkout). Nothing is wrong with the ledger: a fresh
   worktree runs that file green. Delete `.rentguard-tmp` in the checkout if the suite goes red there.

@@ -119,10 +119,10 @@ Then rent:
 rentguard up --purpose "baseline" --cap 5
 ```
 
-**Do not use `up --dry-run` on this revision.** It calls the provider's `create` before it checks the
-dry-run flag, so it can rent a machine and still print "nothing was rented". At commit `2ebe660` the
-same code made three create attempts against RunPod (all refused) during a "dry" run, and left
-`fake-1` behind against the fake. See [limitations](limitations.md).
+`--dry-run` is safe again as of `ce69cea`: it decides before any `create` call, so it makes no rental at
+all. It once did — three real create attempts went out against RunPod, and the fake was left holding
+`fake-1` — and that record is in [limitations](limitations.md). The test now asserts on the provider
+call, not on the sentence.
 
 `--cap` sets the project ceiling for this and later runs; `--purpose` is what the ledger row will say.
 The output names the GPU it chose, the instance id and its hourly rate, the ledger row it opened, the

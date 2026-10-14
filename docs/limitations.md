@@ -71,16 +71,12 @@ What remains yours to do:
 
 ## Money
 
-**`up --dry-run` is currently unsafe.** At commit `2ebe660`, `cmd_up` calls `provider.create` inside
-the GPU-preference loop *before* it checks the dry-run flag. A dry run therefore makes real create
-calls: run against RunPod on 2026-10-14 it attempted three rentals (the RTX 4090, L40S and A6000 were
-each refused at create) and then printed `dry run: would request NVIDIA RTX A6000; nothing was rented
-and nothing was spent`. Run free against the fake, it leaves `fake-1` in `PROVISIONING` and no ledger
-row — [KNOWN-FAILURES](KNOWN-FAILURES.md), F-4. Had a RunPod attempt succeeded, the pod would have been
-billing with no state pointer and no ledger row, because both are written after the dry-run return —
-the exact untracked-instance failure the tool exists to prevent. No test covers this. Do not use
-`--dry-run` until it is fixed; check the cap by reading `rentguard ledger` and `rentguard status`
-instead.
+**`up --dry-run` used to spend money, and that is why it is tested.** `cmd_up` called
+`provider.create` inside the GPU-preference loop *before* it checked the dry-run flag, so a "dry" run
+could rent a machine and still print "nothing was rented and nothing was spent": against RunPod it made
+three real create attempts (each refused) and against the fake it left `fake-1` in `PROVISIONING` with no
+ledger row. Fixed at `ce69cea`, and the test asserts on the provider call (`f7bf556`) rather than on the
+sentence that lied. The record is [KNOWN-FAILURES](KNOWN-FAILURES.md), F-4.
 
 **It never knows your balance.** Nothing in this tool reads an account balance, because no supported
 provider exposes one reliably: RunPod's billing figures lag, and a null total there means
