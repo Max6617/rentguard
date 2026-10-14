@@ -573,10 +573,11 @@ def cmd_status(args) -> int:
             line += f"  (~{snap.minutes_to_cap} min to the cap at this rate)"
         note(line)
         if age is None:
-            note("guard          : NO HEARTBEAT — nothing is watching this instance")
+            note("guard          : NO GUARD — nothing is watching this instance, so it will bill "
+                 "until someone stops it")
         elif age > 5:
-            note(f"guard          : heartbeat {age:.1f} min old — the guard is probably dead; "
-                  f"nothing is watching this instance")
+            note(f"guard          : probably dead (heartbeat {age:.1f} min old) — nothing is "
+                 f"watching this instance, so it will bill until someone stops it")
         else:
             note(f"guard          : alive (heartbeat {age:.1f} min ago)")
         emit(instance={"id": pod.get("id"), "status": snap.status,

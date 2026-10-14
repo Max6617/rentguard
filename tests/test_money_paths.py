@@ -915,5 +915,24 @@ class UpNeedsTwoAliveSamples(MoneyCase):
                         f"up did not say the machine is unusable.\noutput:\n{out}")
 
 
+class NoGuardSaysSo(MoneyCase):
+    def test_status_says_a_machine_with_no_guard_will_bill(self):
+        """Sequence: a rented instance and no guard heartbeat; `status` runs.
+
+        Effect: the output says in plain words that nothing is watching and the machine will keep
+        billing — the same voice the crash-loop warning uses.
+        """
+        self.write_state({"instance_id": "pod-A", "provider": "fake"})
+        self.open_run(hours_ago=0.1, instance_id="pod-A")
+        provider = self.machine("pod-A", uptime=600)
+
+        code, out = self.invoke(cli.cmd_status, cli_args("status"), provider)
+
+        self.assertIn("bill until someone stops it", out,
+                      f"status did not say the machine will bill unguarded.\noutput:\n{out}")
+        self.assertIn("nothing is watching", out.lower(),
+                      f"status did not say nothing is watching.\noutput:\n{out}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
