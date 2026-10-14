@@ -52,7 +52,8 @@ Subclass `rentguard.provider.Provider`. Set `name`, and `needs_api_key` if no ke
 | `choose_gpu(preference, cloud, need_memory_gb)` | inherited | first preference that is available |
 | `price_of(gpu_id, cloud)` | inherited | from `catalog()` |
 | `ssh_argv(instance, key) -> (args, target)` | inherited raises | how a caller reaches the machine |
-| `pull_artifacts(instance, patterns) -> {path: bytes}` | inherited raises | falls back to ssh + `tar` |
+| `ssh_requires_pty(instance) -> bool` | inherited `False` | whether the route is a PTY, so bytes must travel as text; RunPod returns `True` for the `ssh.runpod.io` proxy and its `ssh_argv` then includes `-tt` |
+| `pull_artifacts(instance, patterns) -> {path: bytes}` | inherited raises | falls back to ssh + `tar` (base64-encoded when the route is a PTY) |
 | `normalise(instance) -> instance` | inherited identity | intended for field-name translation, but nothing calls it today: return canonical shapes from `get`/`list_pods` directly |
 
 The contract, from the module docstring:
@@ -64,6 +65,15 @@ The contract, from the module docstring:
   on purpose.
 
 Nothing about the cap, the ledger, the guard or artefacts belongs in a provider.
+
+**A route can change the transport, and it is the provider's fact to state.** A community pod on RunPod
+has no `ssh.direct`, so it is reached through the `ssh.runpod.io` proxy, which only allocates a PTY: an
+exec request without one is answered `Error: Your SSH client doesn't support PTY` and the command never
+runs. So `ssh_argv` passes `-tt` on that route, and because a PTY rewrites every LF as CRLF, a gzip
+archive cannot cross it — there the pull base64-encodes the archive on the machine and decodes it here.
+The direct route is a plain byte channel and is unchanged. `ssh_requires_pty` is the one boolean that
+tells the caller which case it holds, so the artefact logic never has to know which provider it is
+talking to.
 
 ## How a provider is selected
 
@@ -119,7 +129,8 @@ person, not as a feature.
    the payload is used exactly as returned — `normalise` exists in the interface but nothing calls it —
    so if the provider's field names differ, translate inside those methods and keep the names in one
    place.
-3. Implement `ssh_argv` — how a caller actually reaches the machine — and `pull_artifacts` if you can
+3. Implement `ssh_argv` — how a caller actually reaches the machine — plus `ssh_requires_pty` if that
+   route is a terminal (a proxy that allocates a PTY, as RunPod's does), and `pull_artifacts` if you can
    fetch files without ssh. If you cannot, leave `pull_artifacts` unimplemented and the CLI falls
    back to `ssh` + `tar`.
 4. Add `"vast": "rentguard.vast"` to `_MODULES`. That one line is the whole registration; the CLI

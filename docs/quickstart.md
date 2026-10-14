@@ -125,8 +125,11 @@ all. It once did — three real create attempts went out against RunPod, and the
 call, not on the sentence.
 
 `--cap` sets the project ceiling for this and later runs; `--purpose` is what the ledger row will say.
-The output names the GPU it chose, the instance id and its hourly rate, the ledger row it opened, the
-`ssh` command to reach the machine, and the cap that now applies.
+`up` writes the ledger row **before** it rents, marked provisional, so an interruption between the two
+cannot leave a machine billing with nothing recording it; the row is corrected with the instance id and
+the pod's real rate once the provider names the machine. If every candidate GPU is refused, the row is
+voided instead. The output names the GPU it chose, the row, the `ssh` command to reach the machine, and
+the cap that now applies.
 
 The paid path was run as milestone M2 on 2026-10-14: twice, $0.017 in total, the second pass green with
 the artefact pulled from the right machine and the ledger reconciled by hand. The transcripts on this
@@ -302,9 +305,9 @@ account pods   : 0 total, 0 live
 
 ```console
 $ rentguard up --purpose "doc rehearsal"
+ledger row     : 20261014T131911Z-2ff393  (provisional: opened before the machine exists)
 requesting Fake GPU 24GB
 instance       : fake-1  $0.13/h
-ledger row     : 20261014T131911Z-2ff393
 ssh            : ssh fake@127.0.0.1
 
 cap            : $5.00 total, $2.00 per run, 6.0 h max

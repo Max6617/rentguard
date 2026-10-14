@@ -41,8 +41,10 @@ cap, per-run cap, maximum hours, idle.
 cost_usd = rate_usd_per_hour * (now - started_at) / 3600
 ```
 
-- `rate_usd_per_hour` is taken from the provider's own `cost` field when the row is opened, or when
-  an existing instance is adopted, and is then stored on the row.
+- `rate_usd_per_hour` starts at the catalogue's price when `up` opens a **provisional** row — the row
+  comes *before* the machine, because `create` is the irreversible step — and is corrected from the
+  pod's own `cost` field once the provider names the instance (`Ledger.finalise`); `adopt` takes it
+  directly. What is stored on the row is what the arithmetic uses.
 - Closing a row writes `wall_clock_hours` and `estimated_usd` from that row's own start and stop
   timestamps. The arithmetic has one home, so the ledger does not depend on the provider's billing
   report.

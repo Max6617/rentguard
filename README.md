@@ -3,7 +3,7 @@
 Rent a GPU with a hard spend cap, a per-run cost ledger, and artefact pull.
 
 `rentguard` is a command-line tool for renting GPUs by the hour without watching the bill. It rents a
-machine on RunPod, opens a ledger row at the machine's own rate, runs commands over ssh, pulls the
+machine on RunPod, opens a ledger row before it rents, runs commands over ssh, pulls the
 results back, and stops the machine when the money or the idle time runs out.
 
 Version 0.1. RunPod only, Python 3.11+, standard library only. Not published yet — install from the

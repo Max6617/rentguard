@@ -6,46 +6,52 @@ is the only question that goes back to them.
 
 ## The revision this page describes
 
-Everything below was measured at **`cdd7113`** (`cdd7113a0bffffa9439ca105a1660e17d87bb457`) in a clean
+Everything below was measured at **`f158396`** (`f1583963fe03efac25207a6e80724664689b2bdd`) in a clean
 worktree, with the package path verified inside that worktree (`rentguard.mcp_server.__file__`).
 
 | Measurement | Value | How |
 | --- | --- | --- |
-| Suite | **295 passed, 0 failed, 50 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `cdd7113`, and identical with and without `RENTGUARD_PROVIDER=fake` |
-| Coverage | **98.4% (2,219 / 2,256)** | `python tools/coverage.py` at `cdd7113`; floor 98.0%, target 94.0% — target met |
+| Suite | **318 passed, 0 failed, 50 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `f158396`, and identical with and without `RENTGUARD_PROVIDER=fake` |
+| Coverage | **97.99% (2,336 / 2,384) — below the 98.0% floor** | `python tools/coverage.py` at `f158396` exits **1**; 2,337 lines (one more) clears it. The 94.0% target is met |
 | Features | **10 CLI commands, 11 MCP tools** | `tests/test_feature_matrix.py`, green here |
 
-The standard is **94% of the code and 100% of the features**. The total clears the code half; the feature
-matrix is the evidence for the other half, because a line number says code was *reached*, never that its
-behaviour was checked — the guard defect that stopped a 32-second-old pod lived in lines that all
-executed.
+The standard is **94% of the code and 100% of the features**. The feature matrix is the evidence for the
+features half, because a line number says code was *reached*, never that its behaviour was checked — the
+guard defect that stopped a 32-second-old pod lived in lines that all executed. The code half is
+**currently failing its own ratchet** at this pin: the floor is 0.98 (raised at `e3fb62a` when the
+measurement was 98.4%) and the two commits after it, `e19c521` and `f158396`, added lines faster than
+tests. One more covered line closes it.
 
 **Two modules are individually below the 94% figure**, so the total is not a promise about each of them:
-`ledger.py` at 93.3% and `runpod.py` at 93.5%. `mcp_server.py`, the weakest module at `458e128`
-(90.3%), is now 99.1%. The rest were measured at `458e128` and no measured module has changed since
-(tests only):
+`ledger.py` at 93.7% and `runpod.py` at 93.8%. `mcp_server.py`, the weakest at `458e128` (90.3%), is
+99.1%.
 
 | Module | Cover | Note |
 | --- | --- | --- |
-| `cli.py` | 99.6% | — |
 | `fake.py` | 99.6% | only the tracer's sentinel line unhit |
 | `mcp_server.py` | 99.1% | was 90.3% at `458e128` |
 | `config.py` | 99.0% | — |
 | `guard.py` | 99.0% | — |
+| `cli.py` | 98.6% | — |
 | `provider.py` | 96.6% | — |
-| `runpod.py` | 93.5% | below 94% on its own |
-| `ledger.py` | 93.3% | below 94% on its own |
+| `runpod.py` | 93.8% | below 94% on its own |
+| `ledger.py` | 93.7% | below 94% on its own |
 
 The figures move with the tree: `18b5fc0` measured 96.1% with `fake.py` at 87.7%; `458e128` measured
-97.5% with `mcp_server.py` at 90.3%; `cdd7113` is 98.4%. Each was re-measured when a measured module
-changed, never carried forward.
+97.5% with `mcp_server.py` at 90.3%; `cdd7113` measured 98.4% (295 tests); `f158396` measures 97.99%
+(318 tests). Each was re-measured when a measured module changed, never carried forward.
 
 ## 1. The tool is proven
 
-- [x] **M1 — the suite is green with no network and no spend.** 295 passed, 0 failed at `cdd7113`,
+- [x] **M1 — the suite is green with no network and no spend.** 318 passed, 0 failed at `f158396`,
       driving the real CLI through the in-memory fake provider, and identical with and without
       `RENTGUARD_PROVIDER=fake`. `tests/test_ledger_paths.py` covers the ledger's own file paths,
       including the lock and a truncated line.
+- [ ] **The coverage ratchet fails at this pin.** `tools/coverage.py` at `f158396` measures
+      **2,336 / 2,384 = 97.99%** against a floor of 98.0% and exits 1. The floor was raised at `e3fb62a`
+      when the measurement was 98.4%; `e19c521` and `f158396` added `cli.py` and `runpod.py` lines faster
+      than tests. One more covered line (2,337) clears it. Either close it or lower the ratchet
+      deliberately — the floor's own comment says it only moves upwards.
 - [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total
       ($0.0091 + $0.0079 + $0.0094), three ledger rows reconciled by hand from the rows' own fields, and
       one artefact pulled from the right machine. The record is [M2 — the real rental](M2-REAL-RENTAL.md).
@@ -82,7 +88,7 @@ changed, never carried forward.
       `tests/test_cli_branches.py` tests: **248 passed / 2 failed with the variable, 250 passed / 0 failed
       without it**, measured at `6f31c27` and again at `458e128`. Closed at `cdd7113`, which pins the
       provider *inside* those two tests rather than changing the CI step, and the suite is now
-      **295 passed / 0 failed both with the variable and without it**.
+      **318 passed / 0 failed both with the variable and without it**.
 
 ## 3. The docs are true
 
@@ -124,9 +130,10 @@ changed, never carried forward.
 - **The network-volume attach path is dropped for lack of a volume, not untested.** The account's only
   volume was deleted on the user's instruction; with nothing left to attach, `[runpod].volume_id`
   cannot be exercised here. The transport seam is unit-covered (`da51005`). See `CHARTER.md` W3.
-- **Two modules are individually below the 94% figure**: `ledger.py` at 93.3% and `runpod.py` at 93.5%.
-  The 98.4% total clears the standard; those two do not clear it on their own. `mcp_server.py`, the
-  weakest at the previous pin (90.3%), is now 99.1%.
+- **Two modules are individually below the 94% figure**: `ledger.py` at 93.7% and `runpod.py` at 93.8%.
+  The 97.99% total does not clear the line either — it is under the 98.0% ratchet at this pin — so read
+  the total as "below the floor by one line" rather than as the standard met. `mcp_server.py`, the
+  weakest at the earlier pin (90.3%), is now 99.1%.
 - **`fake.py` is no longer a limitation.** It is 99.6% with nothing real unhit; the only line the tracer
   reports is its sentinel. It is the module where a fixture can manufacture a world that is not real, so
   the standing rule is recorded in `tests/test_storage.py`: a provider-payload fixture comes from a live

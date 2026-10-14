@@ -171,9 +171,9 @@ account pods   : 0 total, 0 live
 [exit 0]
 
 $ rentguard up --purpose "doc rehearsal"            # process 1
+ledger row     : 20261014T131705Z-44d37b  (provisional: opened before the machine exists)
 requesting Fake GPU 24GB
 instance       : fake-1  $0.13/h
-ledger row     : 20261014T131705Z-44d37b
 ssh            : ssh fake@127.0.0.1
 
 cap            : $5.00 total, $2.00 per run, 6.0 h max
@@ -194,6 +194,12 @@ account pods   : 1 total, 0 live
 ```
 
 `.rentguard/fake-state.json` held one instance (`fake-1`, `RUNNING`) at the point of the second `up`.
+
+The row line is first and says `provisional` from `f158396`: `up` opens the row **before** it calls
+`create`, so an interruption between the two cannot leave a machine billing with nothing recording it.
+The invariant is that a `create` implies either a row or a stop, even on `SIGKILL`; the row is corrected
+with the instance id and the pod's own rate once the provider names the machine (`Ledger.finalise`), and
+voided if every candidate is refused.
 
 ## The cap fires, with nothing spent
 
@@ -449,21 +455,25 @@ For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 ## Later revisions
 
 After `af1ba5a` the tree grew fast. At **`74b9f7a`** a clean worktree ran 189 passed / 0 failed; at
-**`cdd7113`** — the publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs
-**295 passed, 0 failed, 50 subtests**, identical with and without `RENTGUARD_PROVIDER=fake`, and coverage
-measures **98.4% (2,219 / 2,256)** with the floor at 98.0% and the target met. Per module: `cli.py` 99.6,
-`fake.py` 99.6, `mcp_server.py` 99.1 (was 90.3 at `458e128`), `config.py` 99.0, `guard.py` 99.0,
-`provider.py` 96.6, `runpod.py` 93.5, `ledger.py` 93.3. The last two are individually below the 94%
-figure, so the 98.4% total is not a promise about every module. `fake.py` was 87.7% at `18b5fc0`; each
-figure was re-measured when a measured module changed, never carried forward.
+**`cdd7113`** it ran 295 passed / 0 failed with coverage 98.4%; at **`f158396`** — the publishing
+candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs **318 passed, 0 failed, 50 subtests**,
+identical with and without `RENTGUARD_PROVIDER=fake`, and coverage measures **2,336 / 2,384 = 97.99%**
+against a floor of 98.0%, so `tools/coverage.py` **exits 1**. Per module at `f158396`: `fake.py` 99.6,
+`mcp_server.py` 99.1, `config.py` 99.0, `guard.py` 99.0, `cli.py` 98.6, `provider.py` 96.6, `runpod.py`
+93.8, `ledger.py` 93.7 — the last two are individually below the 94% figure. `fake.py` was 87.7% at
+`18b5fc0`; each figure was re-measured when a measured module changed, never carried forward.
 
-Three notes, all measured:
+Notes, all measured:
 
+- **The coverage ratchet is red at `f158396`.** The floor is 0.98, raised at `e3fb62a` when the
+  measurement was 98.4%. `e19c521` and `f158396` added `cli.py` and `runpod.py` lines faster than tests,
+  and the total is **one line** short: 2,337 of 2,384 clears it. The floor's own comment says it only
+  moves upwards, so closing it means covering a line or lowering the ratchet deliberately.
 - **CI's `RENTGUARD_PROVIDER=fake` defect is closed at `cdd7113`.** The workflow sets that variable for
   its Test and Coverage steps, and it used to fail two `tests/test_cli_branches.py` tests: `248 passed /
   2 failed` with it set, `250 passed / 0 failed` without it, measured at `6f31c27` and again at
   `458e128`. The fix pins the provider inside those two tests rather than changing the CI step, and the
-  suite is now 295 / 0 either way.
+  suite is now 318 / 0 either way.
 - **A stale `.rentguard-tmp` makes `test_ledger_paths.py` fail** (`PermissionError` creating a
   `runs.jsonl.lock` inside it, 16 tests in the main checkout). Nothing is wrong with the ledger: a fresh
   worktree runs that file green. Delete `.rentguard-tmp` in the checkout if the suite goes red there.

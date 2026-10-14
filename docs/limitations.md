@@ -139,6 +139,10 @@ unit-covered, not exercised end to end — see [KNOWN-FAILURES](KNOWN-FAILURES.m
 
 **Everything remote goes over ssh.** `run` and `pull` use the `ssh` binary on your PATH, with
 `StrictHostKeyChecking=no` and `UserKnownHostsFile=NUL` on Windows. No ssh client, no remote work.
+Where the provider reaches the machine through the `ssh.runpod.io` proxy — a community pod, which has no
+direct endpoint — the session is a PTY: `-tt` is passed, because without it the proxy answers
+`Error: Your SSH client doesn't support PTY` and the command never runs, and the artefact archive then
+travels base64-encoded because a PTY rewrites LF as CRLF. The direct route is unchanged.
 
 **Artefact patterns are expanded by the remote shell and joined without quoting.** A pattern
 containing a space breaks the pull; `**` behaves like `*` under a POSIX `sh`. Use plain globs.
