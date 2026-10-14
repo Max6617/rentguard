@@ -111,19 +111,16 @@ already spent is recorded rather than hidden.
 
 ## 4. Rent a machine
 
-First check the choice without spending. `--dry-run` checks the cap and the GPU choice, then rents
-nothing:
-
-```console
-$ rentguard up --purpose "baseline" --cap 5 --dry-run
-dry run: would request NVIDIA GeForce RTX 4090; nothing was rented and nothing was spent
-```
-
 Then rent:
 
 ```bash
 rentguard up --purpose "baseline" --cap 5
 ```
+
+**Do not use `up --dry-run` on this revision.** It calls the provider's `create` before it checks the
+dry-run flag, so it can rent a machine and still print "nothing was rented". At commit `528d15b` the
+same code made three create attempts against RunPod (all refused) during a "dry" run. See
+[limitations](limitations.md).
 
 `--cap` sets the project ceiling for this and later runs; `--purpose` is what the ledger row will say.
 The output names the GPU it chose, the instance id and its hourly rate, the ledger row it opened, the

@@ -46,8 +46,7 @@ No account yet? Every command also runs against an in-memory provider — real b
 key, no money: [test the cap without spending](docs/fake.md).
 
 Step by step, with the output of every command: [quickstart](docs/quickstart.md). Every command also
-takes `--json`, which prints the human output and then one JSON document on stdout; `up` takes
-`--dry-run` to check the cap and the GPU choice without renting.
+takes `--json`, which prints the human output and then one JSON document on stdout.
 
 ## The cap
 

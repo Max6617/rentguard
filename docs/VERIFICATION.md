@@ -9,12 +9,17 @@ Date: 2026-10-14, between 14:47 and 15:25 local.
 
 ## Revision
 
-The pages were re-run against **commit `8a97a48`** ("rentguard: quiesced M1 tree (53 tests green)"),
-extracted with `git archive` so that a mid-edit working tree could not affect the run, and against the
-working tree of 2026-10-14 15:22 while Forge was still editing `cli.py`.
+The pages were re-run against three revisions, each extracted with `git archive` so that a mid-edit
+working tree could not affect the run:
 
-The commit is **not** green as extracted: **53 tests, 3 failures**, all the same defect — `status`
-erases the recorded instance id when the provider no longer shows it:
+| Revision | Message | Tests |
+| --- | --- | --- |
+| `8a97a48` | rentguard: quiesced M1 tree (53 tests green) | 53 tests, **3 failures** |
+| `528d15b` | run: pass a pre-quoted command through; up: walk the GPU preference list on refusal | 58 tests, 0 failures |
+| `2ebe660` | fake: offer_unavailable models catalogue-yes/create-no for the fallback path | 58 tests, 0 failures |
+
+The first commit is **not** green as extracted. Its three failures are all the same defect —
+`status` erases the recorded instance id when the provider no longer shows it:
 
 ```text
 FAIL test_status_json_carries_the_drift_for_a_machine_consumer   (recorded_instance_id is null)
@@ -22,14 +27,13 @@ FAIL test_the_instance_id_is_still_recoverable_afterwards
 FAIL test_status_does_not_erase_the_recorded_instance_id_on_a_404
 ```
 
-The working tree fixes it (53 tests, OK), but the fix is uncommitted (`git status`: `M cli.py`,
-`M tests/test_money_paths.py`, plus untracked `tests/_fix_pod.py`), so the hash does not carry the
-green claim yet.
+The later commits fix it and carry the green claim. The page edits made after 15:22
+(`README.md`, `docs/cap.md`, `docs/limitations.md`, `docs/quickstart.md`) are uncommitted as of this
+writing.
 
-**`up --dry-run` differs between the two, and it is a money-risk difference.** At `8a97a48` the
-command calls `provider.create` inside the preference-retry loop *before* the dry-run check
-(`cli.py:713` against the check at `:730`), so a "dry" run makes real create calls. Against RunPod it
-printed:
+**`up --dry-run` is a money-risk defect, present at all three revisions.** `cmd_up` calls
+`provider.create` inside the preference-retry loop (`cli.py:713`) *before* the dry-run check
+(`cli.py:727`), so a "dry" run makes real create calls. Against RunPod it printed:
 
 ```console
 $ rentguard up --purpose baseline --cap 5 --dry-run
@@ -42,14 +46,15 @@ dry run: would request NVIDIA RTX A6000; nothing was rented and nothing was spen
 ```
 
 Every attempt was refused, so nothing was created — but if stock had existed, `--dry-run` would have
-rented a machine and still printed "nothing was rented". The working tree checks `dry_run` before
-creating and prints one line. M2 must not use `--dry-run` on the hash until this is committed.
+rented a machine and still printed "nothing was rented", with no state pointer and no ledger row
+written. No tested revision checks `dry_run` before creating, and no test covers it. The command is
+therefore not documented as usable: [quickstart](quickstart.md) and [cap](cap.md) say so, and
+[limitations](limitations.md) carries the reproduction.
 
-Commands run against the extracted commit, all free, no network writes, $0: `init`; `doctor` keyless
-and with the fake; `ledger`; the fake span (`up` twice from separate processes, `status`, `down` with
-the new pre-stop pull, `ledger`); the nothing-rented paths for `status`, `watch`, `down`, `run`,
-`pull`, `adopt`; and an MCP `tools/call`. They matched the pages, except the `--dry-run` behaviour
-above.
+Commands run against the extracted `8a97a48` tree, all free, no network writes, $0: `init`; `doctor`
+keyless and with the fake; `ledger`; the fake span (`up` twice from separate processes, `status`,
+`down` with the pre-stop pull, `ledger`); the nothing-rented paths for `status`, `watch`, `down`,
+`run`, `pull`, `adopt`; and an MCP `tools/call`. They matched the pages, except `--dry-run`.
 
 **Not run: the artefact round trip through the CLI.** The fake has no ssh server, so `run` would
 shell out to `ssh fake@127.0.0.1`; the pull path with real files is exercised in-process by
@@ -268,18 +273,17 @@ is not JSON was sent and produced no reply, as designed.
 
 Run from the checkout, `python rentguard/tests/<file>`:
 
-| Suite | At commit `8a97a48` | Working tree, 15:22 |
+| Suite | At `8a97a48` | At `2ebe660` (HEAD, 15:3x) |
 | --- | --- | --- |
-| `test_money_paths.py` | 23 tests, 1 failure | 23 tests, OK |
+| `test_money_paths.py` | 23 tests, 1 failure | 28 tests, OK |
 | `test_artefacts_mcp_guards.py` | 5 tests, OK | 5 tests, OK |
 | `test_rentguard.py` | 16 tests, OK | 16 tests, OK |
 | `test_drift.py` | 3 tests, OK | 3 tests, OK |
 | `test_known_failures.py` | 4 tests, 2 failures | 4 tests, OK |
 | `test_fake_span.py` | 2 tests, OK | 2 tests, OK |
 
-53 tests: 3 failures at the commit (the erased instance id, above), 0 in the working tree. No network,
-no spend. The tree was not quiesced during the working-tree run (`cli.py` modified), so the 0 is a
-working-tree result and not attributable to a commit.
+53 tests at `8a97a48` with 3 failures (the erased instance id, above); 58 tests at `528d15b` and
+`2ebe660` with none. No network, no spend. `--dry-run` is not covered by any of them.
 
 The tree also moved earlier in the window: at 15:08 an intermediate edit made keyless `doctor` raise
 `TypeError: note() missing 1 required positional argument`, and `resolve("runpod")` briefly returned
@@ -289,8 +293,8 @@ the base `Provider` class. Both were fixed within minutes and are not in the tab
 
 - **A paid rental.** `up` against RunPod, `run` over ssh, a real `pull`, a real `down` and the
   resulting ledger row are milestone M2 and were not run: they spend money. The `up --dry-run` call
-  above reached RunPod's create endpoint at commit `8a97a48` (see Revision); nothing was created
-  because every attempt was refused.
+  above reached RunPod's create endpoint (see Revision); nothing was created because every attempt was
+  refused.
 - **`pip install .`.** The local sandbox refused `python -m venv` (`ensurepip` failed) and a
   `--target` install (temp-directory permissions), so the console script produced by `pyproject.toml`
   was not exercised here. The module is exercised as `python -m rentguard.cli`.

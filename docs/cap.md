@@ -13,7 +13,7 @@ spend crosses the cap. `watch` is a foreground process. If it is not running, th
 | Recorded spend against the cap | `rentguard up`, before anything is rented | closed rows **plus the accrued cost of the open row** | refuses, exit code 2, unless `--cap N` or `--force` |
 | A live instance with no ledger row | `rentguard up`, before renting | live instances on the account | refuses; `adopt` it or stop it |
 | An open row naming a missing instance | `rentguard up`, before renting | the ledger and the provider | refuses; `down` closes the row |
-| The choice, without renting | `rentguard up --dry-run` | cap and GPU availability | prints what it would request, rents nothing |
+| The choice, without renting | `rentguard up --dry-run` | **broken at commit `528d15b`** — it calls `create` before checking the flag, so it can rent and still report "nothing was rented" | see [limitations](limitations.md); do not use |
 | Total cap | every `watch` poll | closed rows plus the live estimate of the open row | stops the instance, closes the row |
 | Per-run cap | every `watch` poll | the live estimate of the open row | stops the instance, closes the row |
 | Maximum hours | every `watch` poll | the provider's uptime for the instance | stops the instance, closes the row |
