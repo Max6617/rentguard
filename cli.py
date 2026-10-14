@@ -40,6 +40,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -50,6 +51,9 @@ from pathlib import Path
 from . import __version__
 from .config import Config, ConfigError, api_key, load
 from .guard import (
+    CLAIM_ANOTHER_ROOT,
+    CLAIM_THIS_ROOT,
+    CLAIM_UNCLAIMED,
     Finding,
     heartbeat_age_minutes,
     snapshot,
@@ -213,6 +217,20 @@ def _rp(cfg: Config, key: str, default=None):
     return default if value is None else value
 
 
+def root_path() -> Path:
+    """The project root this process is working in: ``$RENTGUARD_ROOT``, or the working directory."""
+    return Path(os.environ.get("RENTGUARD_ROOT") or Path.cwd()).resolve()
+
+
+def _root_tag(root: Path | str) -> str:
+    """The eight hex characters that stand for one project root in an instance name.
+
+    The tag is the only cross-root signal on the account: the ledger is a local file, so another
+    root's rows are invisible here, and the pod list is not.
+    """
+    return hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:8]
+
+
 def _instance_name(cfg: Config) -> str:
     """The name the machine is rented under.
 
@@ -225,9 +243,41 @@ def _instance_name(cfg: Config) -> str:
     explicit = cfg.runpod.get("name")
     if explicit:
         return str(explicit)
-    root = Path(os.environ.get("RENTGUARD_ROOT") or Path.cwd()).resolve()
-    tag = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:8]
-    return f"rentguard-{tag}"
+    return f"rentguard-{_root_tag(root_path())}"
+
+
+#: The shape of a root-tagged name: ``rentguard-<8 hex>``. Anything else is not a claim by a root —
+#: which is why ``rentguard-workbench`` (an old fixed default, and the name of the stray A6000 that
+#: burned $2.14) stays unclaimed rather than passing as somebody's project.
+TAGGED_INSTANCE_NAME = re.compile(r"^rentguard-([0-9a-f]{8})$")
+
+
+def instance_claim(cfg: Config, instance: dict) -> str:
+    """Whose ledger an instance's **name** says it belongs to: one of the ``CLAIM_*`` values.
+
+    This exists because "no row in this ledger" and "nobody recorded it" are different facts. A
+    machine another root is paying for looks exactly like a stray from inside one root: the ledger is
+    local, and the fix for a stray is to stop it. On 2026-10-14 that difference cost a false
+    ``doctor`` error on a live pod whose row was open in another root's ledger — measured, pod
+    ``2abx0hz2boe6ow``, row ``20261014T162601Z-4573d1`` in ``grok/pod-timing``.
+
+    - a rentguard tag for a **different** root ⇒ another root rented it;
+    - this project's own name (configured, or the tag this root computes) ⇒ possibly ours, possibly a
+      sibling that copied the config — either way, absence of a row here proves nothing;
+    - anything else ⇒ unclaimed, and only that is a hard error.
+
+    The name is not proof, it is evidence. It is the strongest evidence available from one root, and
+    it is used in the direction that cannot destroy anything: doubt keeps hands off a machine.
+    """
+    name = str((instance or {}).get("name") or "")
+    if not name:
+        return CLAIM_UNCLAIMED
+    if name == _instance_name(cfg):
+        return CLAIM_THIS_ROOT
+    tagged = TAGGED_INSTANCE_NAME.match(name)
+    if tagged is None:
+        return CLAIM_UNCLAIMED
+    return CLAIM_THIS_ROOT if tagged.group(1) == _root_tag(root_path()) else CLAIM_ANOTHER_ROOT
 
 
 def _ssh(fmt: str) -> str:
@@ -500,7 +550,8 @@ def cmd_doctor(args) -> int:
             except ProviderError:
                 return None
 
-        findings.extend(state_findings(state, open_run, provider_gate=probe))
+        findings.extend(state_findings(state, open_run, provider_gate=probe,
+                                       claim=lambda pod: instance_claim(cfg, pod)))
         try:
             pods = provider.list_pods()
             pods_error = None
@@ -511,6 +562,7 @@ def cmd_doctor(args) -> int:
         live = [p for p in pods if p.get("status") in LIVE_STATUSES]
         note(f"account pods   : {len(pods)} total, {len(live)} live")
         emit(live_instances=[{"id": p.get("id"), "status": p.get("status"),
+                              "name": p.get("name"), "claim": instance_claim(cfg, p),
                               "cost_usd_per_hour": p.get("cost"),
                               "gpu": (p.get("gpu") or {}).get("id"),
                               "tracked": p.get("id") == tracked} for p in live])
@@ -518,7 +570,8 @@ def cmd_doctor(args) -> int:
             known = pod.get("id") == tracked
             note(f"  {pod.get('id')}  {str(pod.get('status')):<12} ${pod.get('cost')}/h  "
                   f"{str((pod.get('gpu') or {}).get('id')):<28} "
-                  f"{'tracked' if known else 'UNTRACKED'}")
+                  f"{'tracked' if known else 'UNTRACKED'}"
+                  + (f"  name={pod.get('name')!r}" if pod.get("name") else ""))
         if not live:
             note("  (nothing is billing)")
 
@@ -595,13 +648,34 @@ def cmd_doctor(args) -> int:
         emit(network_volumes=[{**v, "attached_to": attached_to(v)} for v in volumes],
              storage_monthly_usd=storage_monthly)
 
+        # A live instance with no row *here* is not automatically a stray: the ledger is a local file,
+        # so another root's row for this machine is invisible, and the fix for a stray is to stop it.
+        # The name decides what can be said out loud. Only an unclaimed name is a hard error.
         untracked = [p for p in live if p.get("id") != tracked]
-        if untracked:
+        unclaimed = [p for p in untracked if instance_claim(cfg, p) == CLAIM_UNCLAIMED]
+        foreign = [p for p in untracked if instance_claim(cfg, p) == CLAIM_ANOTHER_ROOT]
+        ours = [p for p in untracked if instance_claim(cfg, p) == CLAIM_THIS_ROOT]
+        if unclaimed:
             findings.append(Finding(
                 code="live-instance-no-ledger-row", severity="error",
-                message=f"{len(untracked)} live instance(s) with no ledger row: "
-                        f"{', '.join(str(p.get('id')) for p in untracked)}. Either `rentguard "
+                message=f"{len(unclaimed)} live instance(s) with no ledger row and no project's name: "
+                        f"{', '.join(str(p.get('id')) for p in unclaimed)}. Either `rentguard "
                         f"adopt <id> --purpose ...` or stop them."))
+        if foreign:
+            names = ", ".join(f"{p.get('id')} ({p.get('name')!r})" for p in foreign)
+            findings.append(Finding(
+                code="tracked-by-another-root", severity="warn",
+                message=f"{len(foreign)} live instance(s) belong to another rentguard root by name: "
+                        f"{names}. That root's ledger owns them; do not stop them from here, and do "
+                        f"not `adopt` them here — either would double-count a machine someone else "
+                        f"is paying for."))
+        if ours:
+            findings.append(Finding(
+                code="row-not-in-this-root", severity="warn",
+                message=f"{len(ours)} live instance(s) carry this project's name but have no row "
+                        f"here ({', '.join(str(p.get('id')) for p in ours)}): the row may be in "
+                        f"another root's ledger, or the state file that named them was lost. Check "
+                        f"before stopping them."))
         if pods_error:
             findings.append(Finding(code="provider-error", severity="warn",
                                     message=f"could not list account pods: {pods_error}"))
@@ -673,8 +747,16 @@ def cmd_status(args) -> int:
                   f"ports={'set' if runtime.get('ports') else 'NULL'}: a crash loop, not a "
                   f"machine to upload to")
         if not stopped and not snap.recorded:
-            note(f"ledger         : NO ROW for this instance — ${snap.run_usd:.3f} has been spent "
-                  f"with nothing recording it (`rentguard adopt {pod.get('id')}`)")
+            # "Nothing recording it" is a claim about the account, and a ledger is local: another
+            # root's row for this machine is invisible here. Say what is actually known.
+            if instance_claim(cfg, pod) == CLAIM_UNCLAIMED:
+                note(f"ledger         : NO ROW for this instance — ${snap.run_usd:.3f} has been spent "
+                     f"with nothing recording it (`rentguard adopt {pod.get('id')}`)")
+            else:
+                note(f"ledger         : no row in THIS root for this instance; its name "
+                     f"{pod.get('name')!r} is a rentguard project name, so the row may be in another "
+                     f"root's ledger — check there before adopting (adopting here would record the "
+                     f"same machine twice)")
         note(f"this run       : ${snap.run_usd:.3f} of ${snap.per_run_cap_usd:.2f}")
         line = f"all runs       : ${snap.spent_usd:.3f} of ${snap.cap_usd:.2f}"
         # Time-to-cap is only meaningful for a machine that is actually billing.
@@ -902,7 +984,7 @@ def cmd_up(args) -> int:
                 # is closed: an open row accrues against the cap until someone closes it.
                 note(f"error: the ledger row for {pod['id']} is gone; stopping the machine rather "
                      f"than leaving it billing with no record")
-                _abandon_created(provider, ledger, pod)
+                _abandon_created(cfg, provider, ledger, pod)
                 emit(action="unrecorded", instance={"id": pod.get("id"),
                                                     "status": pod.get("status")}, stopped=True)
                 return 1
@@ -944,7 +1026,7 @@ def cmd_up(args) -> int:
         except BaseException:
             # Interrupted, or the wait failed: the row is already open (that is the invariant), and
             # when the process is still alive the better outcome is a machine that stops too.
-            _abandon_created(provider, ledger, pod)
+            _abandon_created(cfg, provider, ledger, pod)
             raise
 
         _print_access(cfg, provider, pod)
@@ -1057,15 +1139,29 @@ def _open_provisional(cfg: Config, ledger: Ledger, provider: Provider, gpu_id: s
     return run
 
 
-def _abandon_created(provider: Provider, ledger: Ledger, pod: dict) -> None:
+def _abandon_created(cfg: Config, provider: Provider, ledger: Ledger, pod: dict) -> None:
     """The way out of a `create` whose rental will not be confirmed: stop it, and close the row.
 
     Every step is best-effort and says what it did. Raising here would replace the exception that
     brought us here, and — the rule the shutdown path learned — a refused stop must not skip the
     ledger close: the cost is recorded either way, and a machine that is somehow still billing is
     then visible to `doctor` as a live instance with no open row, which is an error.
+
+    **The machine must be this root's to stop.** A name that belongs to another root is that root's
+    machine, recorded in that root's ledger, which this one cannot see; stopping it because *this*
+    ledger has no row would kill their job on the strength of a missing local file. The row this
+    closes is by construction in this root's ledger (``Ledger`` is built from this root's config), so
+    the only thing left to check is the name.
     """
     instance_id = pod.get("id")
+    if instance_claim(cfg, pod) == CLAIM_ANOTHER_ROOT:
+        note(f"NOT stopping {instance_id}: its name {pod.get('name')!r} belongs to another rentguard "
+             f"root, so that root's ledger is the one recording it, and stopping it here would kill "
+             f"their job. The row opened here is voided below rather than left accruing.")
+        row = ledger.close(note="machine-named-for-another-root", void=True)
+        if row:
+            note(f"row voided     : {row['run_id']} (a machine another root owns)")
+        return
     try:
         provider.action(instance_id, "stop")
         note(f"stopping {instance_id}: the rental was not confirmed, and a machine that is not "

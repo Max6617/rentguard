@@ -32,6 +32,17 @@ from .provider import Instance, Provider, ProviderError
 #: set is finished business, not drift: a clean `down` leaves exactly that.
 LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
 
+#: What an instance's **name** says about whose ledger holds it. The ledger is a local file, so a
+#: machine rented by one project root is invisible in another's; the name is the only cross-root
+#: signal on the account, and it is what the default name's root tag encodes.
+#:
+#: ``CLAIM_THIS_ROOT`` is not proof that a row exists here — a sibling root can rent under the same
+#: configured name — and ``CLAIM_ANOTHER_ROOT`` is proof that this root should keep its hands off.
+#: Only ``CLAIM_UNCLAIMED`` means nobody anywhere owns it, and only that is a hard error.
+CLAIM_THIS_ROOT = "this-root"
+CLAIM_ANOTHER_ROOT = "another-root"
+CLAIM_UNCLAIMED = "unclaimed"
+
 
 @dataclass
 class Finding:
@@ -163,7 +174,8 @@ def decide(snap: Snapshot) -> str | None:
     return None
 
 
-def state_findings(state: dict, open_run: dict | None, *, provider_gate=None) -> list[Finding]:
+def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
+                   claim=None) -> list[Finding]:
     """Drift between the state file and the ledger, in both directions.
 
     ``state`` stays the source of truth for "which instance did I mean"; the ledger for "is that
@@ -186,6 +198,13 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None) ->
     - ``None`` when the provider could not be asked.
 
     It is how the doctor turns a suspicion into a finding without doing its own I/O.
+
+    ``claim`` is an optional callable taking the provider's payload for an instance and returning one
+    of the ``CLAIM_*`` constants: whose *name* the machine carries. It exists because "no row here"
+    and "nobody recorded it" are different facts, and only the second is a hard error — a live pod
+    another root's ledger is paying for must not be reported as a stray, because the fix for a stray
+    is to stop it. With no ``claim`` the check behaves as it always did: a live instance with no row
+    is an error.
     """
     findings: list[Finding] = []
     tracked = state.get("instance_id")
@@ -224,10 +243,30 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None) ->
         else:
             status = str(reported.get("status") or "").upper()
         if status in LIVE_STATUSES:
-            findings.append(Finding(
-                code="recorded-instance-no-open-run", severity="error",
-                message=f"instance {tracked} is live ({status}) but no ledger row is open; its "
-                        f"spend is not being recorded. `rentguard adopt {tracked} --purpose ...`"))
+            kind = claim(reported) if (claim is not None and reported) else None
+            if kind == CLAIM_ANOTHER_ROOT:
+                findings.append(Finding(
+                    code="tracked-by-another-root", severity="warn",
+                    message=f"instance {tracked} is live ({status}) and this ledger has no open row "
+                            f"for it, but its name {reported.get('name')!r} belongs to a different "
+                            f"rentguard root: that root's ledger is the one recording it. Do not "
+                            f"stop it from here and do not `adopt` it here — either would double-count "
+                            f"a machine someone else is paying for"))
+            elif kind == CLAIM_THIS_ROOT:
+                findings.append(Finding(
+                    code="row-not-in-this-root", severity="warn",
+                    message=f"instance {tracked} is live ({status}) and no row is open for it here, "
+                            f"but its name {reported.get('name')!r} is this project's: the row may be "
+                            f"in another root's ledger (two roots can rent under one name), or it was "
+                            f"lost. Check before stopping it; `adopt` here would double-record a "
+                            f"machine another root may be paying for"))
+            else:
+                findings.append(Finding(
+                    code="recorded-instance-no-open-run", severity="error",
+                    message=f"instance {tracked} is live ({status}) but no ledger row is open, and "
+                            f"its name {str(reported.get('name') or '')!r} claims no project — its "
+                            f"spend is not being recorded anywhere. `rentguard adopt {tracked} "
+                            f"--purpose ...`"))
         elif reported is None and provider_gate is None:
             # No provider gate at all: the caller has not told us whether it is live, so report the
             # weaker, non-committal form rather than staying silent about a possible bill.
