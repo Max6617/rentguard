@@ -18,6 +18,7 @@ working tree could not affect the run:
 | `528d15b` | run: pass a pre-quoted command through; up: walk the GPU preference list on refusal | 58 tests, 0 failures |
 | `2ebe660` | fake: offer_unavailable models catalogue-yes/create-no for the fallback path | 58 tests, 0 failures |
 | `af1ba5a` | licence and packaging: Max Reischl (Max6617) as the copyright holder and author | 74 tests, 0 failures |
+| `74b9f7a` | docs: the mcp page documents all eleven tools, and an armed guard is bounded | 189 tests, 0 failures |
 
 The first commit is **not** green as extracted. Its three failures are all the same defect —
 `status` erases the recorded instance id when the provider no longer shows it:
@@ -448,15 +449,17 @@ For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 
 After `af1ba5a` the tree grew fast: `d3b209a` adds the feature matrix and several suites
 (`test_watch_mcp`, `test_provider_contract`, `test_runpod_transport`, `test_ledger_paths`), taking the
-count well past 74. Two things matter for reading the pages:
+count well past 74. At **`74b9f7a`**, a clean worktree runs **189 passed, 45 subtests passed, 0 failed**
+(`python -m pytest -q --tb=no -p no:cacheprovider`), and the MCP surface matches the page: the feature
+matrix reads the tool names out of `docs/mcp.md` and compares them with `tools/list` — eleven each.
 
-- **`tests/test_feature_matrix.py` fails one assertion by design.** It compares `tools/list` against a
-  hardcoded list of eight names in the test file (`McpSurface.DOCUMENTED`). The server advertises
-  eleven; the page now documents all eleven, so the constant is the stale half. It goes green when that
-  list is updated to eleven, or when the test reads the page instead of mirroring it.
-- **`tests/test_ledger_paths.py` fails 16 tests in this sandbox**, all `PermissionError` creating a
-  `runs.jsonl.lock` under `.rentguard-tmp`: the same DSH temp-directory limit that `tests/conftest.py`
-  documents, not a product defect. It is worth knowing before anyone reads a red suite as a bug.
+Two notes from writing this, both about the environment rather than the product:
+
+- **A stale `.rentguard-tmp` makes `test_ledger_paths.py` fail** (`PermissionError` creating a
+  `runs.jsonl.lock` inside it, 16 tests in the main checkout). Nothing is wrong with the ledger: a fresh
+  worktree runs that file green. Delete `.rentguard-tmp` in the checkout if the suite goes red there.
+- **`pip install .` cannot be checked here** (see Not verified), but the packaging failure it used to
+  hide is fixed — `pyproject.toml` maps the package to the repo root.
 
 ## Not verified
 
