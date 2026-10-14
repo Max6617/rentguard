@@ -37,6 +37,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import io
 import json
 import os
 import shlex
@@ -82,6 +83,10 @@ LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
 #: The tag on a row that was opened before its machine existed and has not been corrected yet. It is
 #: what tells a row that merely *intended* a rental (void it) from one that recorded a real one.
 PROVISIONAL_TAG = "provisional"
+
+#: How much of a remote command's output a structured result carries, in characters. A training log
+#: is unbounded and the tool result is not; what arrives is the tail, with the size it was cut from.
+RUN_OUTPUT_LIMIT = 64 * 1024
 
 # The JSON document a command prints is accumulated here, so a command body reads as ordinary
 # printing code and the structured form is assembled in one place.
@@ -1303,6 +1308,49 @@ def _remote_command(command: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
 
 
+def _tail(text: str, limit: int = RUN_OUTPUT_LIMIT) -> tuple[str, bool]:
+    """The last ``limit`` characters of a command's output, and whether anything was dropped.
+
+    The tail and not the head: a training run's last lines are its result, and a failure's last lines
+    are its traceback. What was dropped is reported as a byte count, so a reader can tell a short log
+    from a truncated one instead of assuming the whole story arrived.
+    """
+    if len(text) <= limit:
+        return text, False
+    return text[-limit:], True
+
+
+def _run_remote(provider: Provider, argv: list[str], target: str, remote: str,
+                *, capture: bool) -> tuple[int, str, str]:
+    """Run the command on the machine: ``(exit code, stdout, stderr)``.
+
+    ``capture`` is set when a structured result is being collected, and it is the whole point: the
+    child must not inherit our stdout, because under ``--json`` that stdout is the document, and for
+    the MCP server it is the JSON-RPC protocol stream itself. A Python-level redirect cannot contain
+    a child, so the streams are piped and returned in the result — which is also what a Bot wants,
+    since previously the output was unreadable *and* in the way.
+
+    Without ``capture`` nothing changes: the child inherits the terminal, and a person watching a
+    training run sees it live. The provider's in-memory command seam is captured at the Python level,
+    because that runner runs in this process rather than in a child.
+    """
+    if provider.command_runner is not None:
+        if not capture:
+            return provider.command_runner(argv, remote), "", ""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = provider.command_runner(argv, remote)
+        return code, out.getvalue(), err.getvalue()
+
+    if not capture:
+        return subprocess.call([*argv, target, remote]), "", ""
+    completed = subprocess.run([*argv, target, remote], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+    return (completed.returncode,
+            completed.stdout.decode("utf-8", "replace"),
+            completed.stderr.decode("utf-8", "replace"))
+
+
 def cmd_run(args) -> int:
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
@@ -1331,11 +1379,24 @@ def cmd_run(args) -> int:
         started = now_utc()
         note(f"$ {remote}  (in {workdir} on {pod.get('id')})")
         remote_command = f"cd {workdir} && {remote}"
-        if provider.command_runner is not None:
-            # In-memory provider: the command is executed by whatever supplied the runner.
-            code = provider.command_runner(argv, remote_command)
-        else:
-            code = subprocess.call([*argv, target, remote_command])
+        # Under a structured result the command's output is captured and returned, never inherited:
+        # our stdout is the document, and for the MCP server it is the JSON-RPC stream. `note()` the
+        # tail so a person still sees it, and put both streams in the result for the machine.
+        capture = json_wanted(args)
+        code, run_out, run_err = _run_remote(provider, argv, target, remote_command,
+                                             capture=capture)
+        shown_out, out_dropped = _tail(run_out)
+        shown_err, err_dropped = _tail(run_err)
+        if capture and (shown_out or shown_err):
+            for name, text in (("stdout", shown_out), ("stderr", shown_err)):
+                if text:
+                    note(f"--- {name} ---")
+                    for line in text.rstrip("\n").splitlines():
+                        note(line)
+            if out_dropped or err_dropped:
+                note(f"output truncated: {len(run_out.encode())} bytes of stdout and "
+                     f"{len(run_err.encode())} bytes of stderr were produced; the last "
+                     f"{RUN_OUTPUT_LIMIT} characters of each are below")
         finished = now_utc()
         jobs.append({
             "run_id": (ledger.open_run() or {}).get("run_id"),
@@ -1374,7 +1435,10 @@ def cmd_run(args) -> int:
                  f"{'pulled' if pulled_ok else 'NOT pulled'}")
         emit(ran=True, command=remote, exit_code=code,
              seconds=round((finished - started).total_seconds(), 1), pulled=pulled,
-             artefacts_lost=artefacts_lost, pull_exit_code=pull_exit)
+             artefacts_lost=artefacts_lost, pull_exit_code=pull_exit,
+             stdout=shown_out, stderr=shown_err,
+             stdout_bytes=len(run_out.encode()), stderr_bytes=len(run_err.encode()),
+             truncated=bool(out_dropped or err_dropped))
     if artefacts_lost or (pull_exit not in (None, 0)):
         return 1
     return code

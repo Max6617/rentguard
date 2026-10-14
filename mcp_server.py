@@ -24,6 +24,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -77,9 +78,10 @@ TOOLS: list[dict[str, Any]] = [
         "name": "rentguard_run",
         "description": (
             "Run a shell command on the rented instance and pull the configured artefacts back when "
-            "it finishes. Returns the command's exit code. Requires an instance that is genuinely "
-            "usable: a machine reporting RUNNING with zero uptime and null ports is a crash loop "
-            "and is refused."),
+            "it finishes. Returns the command's exit code and, in the structured result, its stdout "
+            "and stderr (`stdout`, `stderr`, `stdout_bytes`, `stderr_bytes`, `truncated`). Requires "
+            "an instance that is genuinely usable: a machine reporting RUNNING with zero uptime and "
+            "null ports is a crash loop and is refused."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -174,6 +176,40 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+@contextlib.contextmanager
+def _protocol_stream_reserved():
+    """Make the process's real stdout unreachable while a tool call runs.
+
+    ``redirect_stdout`` moves Python's ``sys.stdout``; it does **not** move the file descriptor, and a
+    child process inherits the descriptor. ``run`` spawns one (over ssh), so its output went onto the
+    JSON-RPC stream — which is this server's stdout — and the client read garbage between messages.
+    This points fd 1 at fd 2 for the duration, so anything that bypasses the capture lands on the
+    server's log stream instead, and restores it in ``finally`` before the response is written.
+
+    Defence in depth, not the fix: the command's own streams are captured at the source (``cmd_run``
+    pipes them under ``--json``). This is what keeps the protocol clean for the next child nobody has
+    written yet — the rule is that the stream is reserved, not that one command was patched.
+    """
+    saved: int | None = None
+    try:
+        saved = os.dup(1)
+        os.dup2(2, 1)
+    except OSError:
+        # A platform that refuses the dup must not stop the server answering; the capture at the
+        # source is the guarantee, this is the belt.
+        if saved is not None:
+            os.close(saved)
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            os.dup2(saved, 1)
+        finally:
+            os.close(saved)
+
+
 def _call(func, *, json_mode: bool = True, **kwargs) -> tuple[str, dict | None, int | None]:
     """Run a CLI command and capture its output, so the JSON-RPC stream stays clean.
 
@@ -182,12 +218,15 @@ def _call(func, *, json_mode: bool = True, **kwargs) -> tuple[str, dict | None, 
     the caller gets the text a person would read *and* the object a Bot can act on. That is the
     "return the structured data alongside its text" rule, and it is why the two are captured rather
     than one being derived from the other.
+
+    The capture is Python-level, so the real stdout is also reserved at the descriptor level for the
+    duration: a command that spawns a child would otherwise write past the capture.
     """
     args = argparse.Namespace(json=json_mode, **kwargs)
     out, err = io.StringIO(), io.StringIO()
     err_sink = contextlib.redirect_stderr(err) if json_mode else contextlib.nullcontext()
     code: int | None = 0
-    with contextlib.redirect_stdout(out), err_sink:
+    with contextlib.redirect_stdout(out), err_sink, _protocol_stream_reserved():
         try:
             code = func(args)
         except SystemExit as exc:  # cli raises SystemExit for user errors
