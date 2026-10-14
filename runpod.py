@@ -37,6 +37,8 @@ class RunPod(Provider):
         super().__init__(api_key)
         self._key = api_key
         self.timeout = timeout
+        #: The socket timeout for the last-resort stop: one short chance, no retries.
+        self.force_stop_timeout = 15
         # GPU request floors; kept here because they are RunPod request fields, not rentguard ideas.
         self.min_ram_per_gpu = 32
         self.min_vcpu = 8
@@ -44,7 +46,8 @@ class RunPod(Provider):
     # ---------------------------------------------------------------- transport
 
     def _request(self, method: str, path: str, body: dict | None = None,
-                 params: dict | None = None, retries: int = 3) -> dict:
+                 params: dict | None = None, retries: int = 3,
+                 timeout: int | None = None) -> dict:
         url = f"{self.API}{path}"
         if params:
             from urllib.parse import urlencode
@@ -57,7 +60,7 @@ class RunPod(Provider):
         for attempt in range(retries):
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                     raw = resp.read().decode("utf-8", errors="replace")
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as exc:
@@ -128,6 +131,16 @@ class RunPod(Provider):
     def action(self, instance_id: str, action: str) -> None:
         assert action in ("start", "stop", "terminate")
         self._request("POST", f"/v2/pods/{instance_id}/action", body={"action": action})
+
+    def force_stop(self, instance_id: str) -> None:
+        """One POST, no retries, a short socket timeout: the call the operator made by hand.
+
+        The ordinary ``action`` retries a slow socket three times with backoff, which is up to
+        minutes of a machine billing. This one gives the request a single short chance, so the tool
+        can say it tried even when the network is the thing that failed.
+        """
+        self._request("POST", f"/v2/pods/{instance_id}/action", body={"action": "stop"},
+                      retries=1, timeout=self.force_stop_timeout)
 
     def list_pods(self) -> list[dict]:
         payload = self._request("GET", "/v2/pods")

@@ -151,22 +151,40 @@ class PullOverSsh(CliCase):
         self.provider = provider
 
     def _archive_writer(self, member: str, data: bytes, exit_code: int = 0):
-        def call(argv, stdout=None, **kwargs):
-            if exit_code == 0:
-                buffer = io.BytesIO()
-                with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-                    info = tarfile.TarInfo(member)
-                    info.size = len(data)
-                    tar.addfile(info, io.BytesIO(data))
-                if stdout is not None:
-                    stdout.write(buffer.getvalue())
-                    stdout.flush()
-            return exit_code
-        return call
+        """A stand-in for ``subprocess.Popen`` on the pull path: it writes, then it is waited on.
+
+        The pull starts ssh with ``Popen`` so that its wait can be bounded — see
+        ``tests/test_stop_cannot_hang.py`` — so this double has to be ``Popen``-shaped, not a
+        ``subprocess.call`` that returns an exit code.
+        """
+        case = self
+
+        class Proc:
+            def __init__(self, argv, stdout=None, **kwargs):
+                case.pull_argv = list(argv)
+                case.pull_stdin = kwargs.get("stdin")
+                if exit_code == 0:
+                    buffer = io.BytesIO()
+                    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+                        info = tarfile.TarInfo(member)
+                        info.size = len(data)
+                        tar.addfile(info, io.BytesIO(data))
+                    if stdout is not None:
+                        stdout.write(buffer.getvalue())
+                        stdout.flush()
+
+            def wait(self, timeout=None):
+                case.pull_timeout = timeout
+                return exit_code
+
+            def kill(self):  # pragma: no cover - the bounded path is tested elsewhere
+                pass
+
+        return Proc
 
     def test_a_pull_over_ssh_extracts_the_archive(self):
-        with mock.patch.object(cli.subprocess, "call",
-                               side_effect=self._archive_writer("results/out.json", b'{"ok":true}')):
+        with mock.patch.object(cli.subprocess, "Popen",
+                               self._archive_writer("results/out.json", b'{"ok":true}')):
             code, out = self.invoke(cli.cmd_pull, ["pull"], self.provider)
 
         self.assertEqual(code, 0, f"the pull failed.\noutput:\n{out}")
@@ -175,12 +193,23 @@ class PullOverSsh(CliCase):
         self.assertEqual(landed.read_bytes(), b'{"ok":true}')
 
     def test_a_pull_over_ssh_reports_a_failing_ssh(self):
-        with mock.patch.object(cli.subprocess, "call",
-                               side_effect=self._archive_writer("x", b"", exit_code=2)):
+        with mock.patch.object(cli.subprocess, "Popen",
+                               self._archive_writer("x", b"", exit_code=2)):
             code, out = self.invoke(cli.cmd_pull, ["pull"], self.provider)
 
         self.assertNotEqual(code, 0, f"a failed ssh pull was reported as success.\n{out}")
         self.assertIn("pull failed", out, out)
+
+    def test_a_pull_over_ssh_is_waited_on_with_a_bound(self):
+        """The pull cannot be allowed to hang: `down` pulls before it stops, so an unbounded pull is
+        an unbounded bill (measured on 2026-10-14)."""
+        with mock.patch.object(cli.subprocess, "Popen",
+                               self._archive_writer("results/out.json", b"{}")):
+            self.invoke(cli.cmd_pull, ["pull"], self.provider)
+
+        self.assertEqual(self.pull_timeout, self.cfg.artefacts.pull_timeout_s,
+                         f"the bound was not the configured one: {self.pull_timeout}")
+        self.assertIsNotNone(self.pull_stdin, "the child was given no stdin to reach EOF on")
 
 
 class MainEntry(CliCase):

@@ -45,6 +45,7 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -419,6 +420,9 @@ def _template(cfg: Config) -> str:
         f"per_run_cap_usd = {b.per_run_cap_usd}     # ceiling for a single open run",
         f"max_hours_per_run = {b.max_hours_per_run}   # wall-clock ceiling for one rental",
         f"idle_minutes = {b.idle_minutes:g}        # stop after this long with the GPU idle; 0 disables",
+        f"stop_timeout_s = {b.stop_timeout_s:g}       # a stop call slower than this escalates to the",
+        "#                                provider's own stop endpoint: a hung socket must never hold",
+        "#                                a billing machine open",
         "# balance_usd would be an OPTIONAL local assumption, never a reading. No provider exposes a",
         "# reliable balance, so rentguard never reports one: it reports spend against your cap.",
         "",
@@ -428,6 +432,8 @@ def _template(cfg: Config) -> str:
         'pull = ["results/**/*.json", "logs/*.log"]',
         f"local_dir = {_toml_str(a.local_dir)}",
         f"remote_dir = {_toml_str(a.remote_dir)}",
+        f"pull_timeout_s = {a.pull_timeout_s:g}    # one ssh pull may take this long, then it is killed",
+        "#                                and reported; the pull runs before a stop, so it is bounded",
         "",
         "[runpod]",
         f'cloud = {_toml_str(rp.get("cloud", DEFAULTS["cloud"]))}              # SECURE or COMMUNITY',
@@ -1009,10 +1015,9 @@ def cmd_up(args) -> int:
                      f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
                      f"{'set' if runtime.get('ports') else 'NULL'}); no rental was confirmed, and "
                      f"the machine is being stopped so it cannot bill unrecorded")
-                try:
-                    provider.action(pod["id"], "stop")
-                except ProviderError as exc:
-                    note(f"  could not stop it ({exc}); it may still be billing — check `rentguard "
+                stopped_ok, detail = _stop_machine(cfg, provider, pod)
+                if not stopped_ok:
+                    note(f"  could not stop it ({detail}); it may still be billing — check `rentguard "
                          f"doctor`")
                 closed = ledger.close(note="up-unusable", instance_status=confirmed.get("status"))
                 if closed is not None:
@@ -1162,12 +1167,11 @@ def _abandon_created(cfg: Config, provider: Provider, ledger: Ledger, pod: dict)
         if row:
             note(f"row voided     : {row['run_id']} (a machine another root owns)")
         return
-    try:
-        provider.action(instance_id, "stop")
-        note(f"stopping {instance_id}: the rental was not confirmed, and a machine that is not "
-             f"confirmed is not kept")
-    except ProviderError as exc:
-        note(f"could not stop {instance_id}: {exc}")
+    stopped_ok, detail = _stop_machine(cfg, provider, pod)
+    if stopped_ok:
+        note(f"stopping {instance_id}: {detail}")
+    else:
+        note(f"could not stop {instance_id}: {detail}")
         note("the cost is recorded below anyway; the machine may still be billing — check "
              "`rentguard doctor`")
     row = ledger.close(note="up-interrupted", instance_status=pod.get("status"))
@@ -1247,16 +1251,15 @@ def cmd_down(args) -> int:
 
         stop_failed = False
         if live:
-            try:
-                provider.action(pod["id"], "stop")
-                note(f"stopping {pod['id']}")
-            except ProviderError as exc:
+            stopped_ok, detail = _stop_machine(cfg, provider, pod)
+            if stopped_ok:
+                note(f"stopping {pod['id']}: {detail}")
+            else:
                 # The shutdown-path failure class, second instance: anything that raises between the
-                # decision and the ledger close must not skip the close. A refused stop used to
-                # escape here with the row still open — a machine probably billing with its cost
-                # never recorded. The row is closed anyway, and the exit code is non-zero.
+                # decision and the ledger close must not skip the close. The row is closed anyway,
+                # and the exit code is non-zero.
                 stop_failed = True
-                note(f"could not stop {pod['id']}: {exc}")
+                note(f"could not stop {pod['id']}: {detail}")
                 note("the row is still closed below, so the cost is recorded; the machine may still "
                      "be billing — check `rentguard doctor`")
         row = ledger.close(note="down", instance_status=status)
@@ -1402,6 +1405,65 @@ def _remote_command(command: list[str]) -> str:
     if len(command) == 1:
         return command[0]
     return " ".join(shlex.quote(part) for part in command)
+
+
+def _ssh_to_file(argv: list[str], target: str, remote: str, *, sink, timeout: float
+                 ) -> tuple[int, bool]:
+    """Run one ssh command with its stdout going to ``sink``: ``(exit code, did the bound expire)``.
+
+    ``stdin`` is the null device on purpose. A route that answers a session without ever reading the
+    command leaves the child waiting for input forever — measured 2026-10-14: `down`, which pulls
+    before it stops, sat for over ten minutes while the machine billed, because its ssh had no stdin
+    and no bound. With the null device the session sees EOF and returns.
+
+    The bounded wait is the same protection one degree out: a pull is never worth a billing machine.
+    When the bound expires the child is killed, and the caller is told so it can stop anyway.
+
+    ``Popen`` rather than ``call`` for that reason: ``call`` cannot be bounded.
+    """
+    proc = subprocess.Popen([*argv, target, remote], stdout=sink, stdin=subprocess.DEVNULL)
+    try:
+        return proc.wait(timeout=timeout), False
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return -1, True
+
+
+def _stop_machine(cfg: Config, provider: Provider, pod: dict) -> tuple[bool, str]:
+    """Stop a billing machine, bounded, with one escalation: ``(stopped, what happened)``.
+
+    A stop is the one call whose failure has no ceiling — the machine bills for as long as it takes
+    — so it runs on a worker thread that this function waits for with a bound. If the ordinary call
+    has not come back by then, one fresh hurried call goes to the provider's stop endpoint
+    (``force_stop``): that is what the operator did by hand on 2026-10-14 when a stuck route kept a
+    machine open, and a hung socket must never be able to hold one open again.
+
+    ``[budget] stop_timeout_s`` is the bound. The worker is a daemon, so a socket that never returns
+    cannot stop this process from finishing its report either.
+    """
+    instance_id = pod.get("id")
+    bound = float(getattr(cfg.budget, "stop_timeout_s", 45.0) or 45.0)
+    outcome: dict[str, str] = {}
+
+    def attempt() -> None:
+        try:
+            provider.action(instance_id, "stop")
+            outcome["result"] = "stopped"
+        except Exception as exc:  # noqa: BLE001 - the bound is the point, not the exception type
+            outcome["result"] = f"failed: {type(exc).__name__}: {exc}"
+
+    worker = threading.Thread(target=attempt, name=f"rentguard-stop-{instance_id}", daemon=True)
+    worker.start()
+    worker.join(bound)
+    if not worker.is_alive():
+        detail = outcome.get("result", "stopped")
+        return detail == "stopped", detail
+    try:
+        provider.force_stop(instance_id)
+        return True, f"escalated to the provider's stop endpoint after {bound:.0f}s"
+    except Exception as exc:  # noqa: BLE001 - report it, do not raise over a dying machine
+        return False, f"the stop call did not return in {bound:.0f}s and force_stop failed: {exc}"
 
 
 def _tail(text: str, limit: int = RUN_OUTPUT_LIMIT) -> tuple[str, bool]:
@@ -1687,10 +1749,20 @@ def cmd_pull(args) -> int:
 
         argv, target = _ssh_argv(cfg, provider, pod)
         pty = _ssh_pty(provider, pod)
+        # A pull is bounded: it runs before `down` stops a machine, so a pull that never returns is a
+        # bill that never stops. See `_ssh_to_file`.
+        timeout = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 120.0)
         with _temp_tar(cfg.state_dir) as (handle, archive):
             remote = _pull_remote_command(cfg.artefacts.remote_dir, patterns, pty=pty)
-            code = subprocess.call([*argv, target, remote], stdout=handle)
+            code, timed_out = _ssh_to_file(argv, target, remote, sink=handle, timeout=timeout)
             handle.flush()
+            if timed_out:
+                note(f"pull failed: ssh did not return within {timeout:.0f}s "
+                     f"([artefacts] pull_timeout_s), so the pull was killed — a pull must never be "
+                     f"able to hold a billing machine open")
+                emit(pulled=False, reason="ssh-timeout", exit_code=None, files=[],
+                     timeout_s=timeout)
+                return 1
             if code != 0:
                 note(f"pull failed (ssh exited {code})")
                 emit(pulled=False, reason="ssh-failed", exit_code=code, files=[])

@@ -28,6 +28,10 @@ class Budget:
     max_hours_per_run: float = 6.0
     idle_minutes: float = 10.0
     balance_usd: float = 0.0  # OPTIONAL local assumption; never presented as a reading
+    #: How long a stop call may take before one fresh call is made to the provider's stop endpoint
+    #: instead. A socket that hangs must not be able to hold a machine open: measured 2026-10-14,
+    #: a stuck route kept a machine billing while the operator stopped it by hand.
+    stop_timeout_s: float = 45.0
 
     def __post_init__(self) -> None:
         if self.cap_usd <= 0:
@@ -47,6 +51,9 @@ class Artefacts:
     pull: list[str] = field(default_factory=list)
     local_dir: str = "./artefacts"
     remote_dir: str = "/workspace"
+    #: How long one ssh pull may take before its child is killed and the failure reported. The pull
+    #: runs before `down` stops a machine, so an unbounded pull is an unbounded bill.
+    pull_timeout_s: float = 120.0
     #: There is deliberately no switch here. If ``pull`` is non-empty, `run` pulls when each run
     #: finishes and `down` pulls before it stops. The old ``on_run`` setting selected between those
     #: and doing nothing; it is deleted rather than defaulted, because a tool whose promise is "no

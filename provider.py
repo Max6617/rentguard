@@ -130,6 +130,17 @@ class Provider:
     def action(self, instance_id: str, action: str) -> None:
         raise NotImplementedError
 
+    def force_stop(self, instance_id: str) -> None:
+        """Stop with no retries and a short socket timeout: the last call that must not hang.
+
+        The default is the ordinary stop, so a provider that does not override it still works. It
+        exists as its own entry point because an ordinary stop may retry a slow socket for minutes,
+        and a machine that is billing must not be held open behind one. Measured 2026-10-14: a stuck
+        route left `down` waiting while the machine billed, and the operator stopped the pod by hand
+        through the provider's own API — which is exactly what this call is.
+        """
+        self.action(instance_id, "stop")
+
     # ------------------------------------------------------------------ catalog
 
     def catalog(self) -> list[Gpu]:
