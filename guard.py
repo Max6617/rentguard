@@ -89,8 +89,21 @@ class Snapshot:
 
     @property
     def effective_idle_minutes(self) -> float:
-        """Idle time, from whichever source has seen more of it."""
-        candidates = [self.idle_for_minutes, self.idle_since_start_minutes]
+        """Idle time, from whichever **idle** source has seen more of it.
+
+        ``idle_since_start_minutes`` is deliberately not a candidate: it is elapsed watch time, and it
+        grows while the GPU is busy. Treating elapsed time as idle time stops a healthy pod for being
+        watched — measured 2026-10-14 in `grok/pod-timing/guard-watch.log`, a pod at ``up 0.00h``
+        with ``gpu None%`` stopped as "idle 30m (limit 5 min)". The field stays on the snapshot as
+        what it actually is: how long this guard has been watching, which is worth reading and is not
+        a reason to stop anything.
+        """
+        if self.gpu_util is not None and self.gpu_util > 0:
+            # The GPU is demonstrably busy. The provider's per-GPU idle is measured against the
+            # **host**, so it can read half an hour on a pod whose card we can see working at 87%.
+            # A sampled utilisation beats a number that is not about this pod.
+            return 0.0
+        candidates = [self.idle_for_minutes]
         if self.max_idle_minutes is not None:
             candidates.append(self.max_idle_minutes)
         return round(max(candidates), 1)
@@ -120,6 +133,17 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     spent = round(ledger.total_usd() + run_usd, 6)
 
     provider_idle = _idle_minutes_since_boot(runtime.get("gpus"), uptime_seconds)
+    if uptime_seconds is None:
+        # Nothing read here can be attributed to this pod, so nothing here can be a reason to stop
+        # it: the provider's per-GPU idle is measured against the host, and a caller's own count can
+        # outlive the pod that a restart reset to zero uptime.
+        provider_idle = None
+        idle_for_minutes = 0.0
+    else:
+        provider_idle = _idle_minutes_since_boot(runtime.get("gpus"), uptime_seconds)
+        # A pod that has existed for three minutes cannot have been idle for thirty. The caller's
+        # count is about *this* pod, and a restart makes it stale.
+        idle_for_minutes = min(idle_for_minutes, uptime_seconds / 60.0)
     return Snapshot(
         at=iso(at),
         status=str(pod.get("status") or "UNKNOWN"),
@@ -329,8 +353,16 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
 
         runtime = pod.get("runtime") or {}
         gpus = runtime.get("gpus") or []
+        raw_util = gpus[0].get("util") if gpus else None
         util = float(gpus[0].get("util") or 0.0) if gpus else 0.0
-        idle_from_events = idle_from_events + interval if util == 0.0 else 0.0
+        # Idle accumulates in **minutes** and only when the GPU is *known* to be doing nothing:
+        # ``interval`` is seconds (adding it raw made five minutes of watching look like five hours),
+        # and an absent utilisation reading is not evidence of idleness — the log line that reported
+        # this defect said ``gpu None%``.
+        if raw_util is not None and float(raw_util) == 0.0:
+            idle_from_events = idle_from_events + interval / 60.0
+        else:
+            idle_from_events = 0.0
 
         snap = snapshot(pod, cfg, ledger, idle_for_minutes=idle_from_events,
                         idle_since_start_minutes=(now_utc() - started).total_seconds() / 60.0)
