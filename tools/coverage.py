@@ -27,7 +27,7 @@ from trace import _find_executable_linenos
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FLOOR = 0.75  # measured 75.5% on 2026-10-14 after the provider tests; ratchet only upwards
+DEFAULT_FLOOR = 0.83  # measured 83.4% on 2026-10-14 after the defect and MCP tests; ratchet only upwards
 TARGET = 0.94
 
 
