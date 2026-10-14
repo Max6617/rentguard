@@ -503,29 +503,56 @@ def cmd_doctor(args) -> int:
         except ProviderError as exc:
             volumes = []
             volumes_error = str(exc)
-        used_volume_ids = {p.get("volumeId") for p in pods if p.get("volumeId")}
+        def references(pod: dict, volume_id: str | None) -> bool:
+            """A pod uses a volume if it names it at the top level or in a network mount."""
+            if volume_id is None:
+                return False
+            if pod.get("volumeId") == volume_id:
+                return True
+            for mount in ((pod.get("mounts") or {}).get("network") or []):
+                if mount.get("volumeId") == volume_id:
+                    return True
+            return False
+
+        live_pods = [p for p in pods if p.get("status") in LIVE_STATUSES]
+
+        def holders(volume: dict) -> tuple[str | None, str | None]:
+            """(the live pod using it, a stopped pod still configured with it)."""
+            volume_id = volume.get("id")
+            if volume.get("attached_to"):
+                return str(volume["attached_to"]), None
+            live = next((p.get("id") for p in live_pods if references(p, volume_id)), None)
+            stopped = next((p.get("id") for p in pods
+                            if p.get("status") not in LIVE_STATUSES and references(p, volume_id)),
+                           None)
+            return live, stopped
 
         def attached_to(volume: dict) -> str | None:
-            return volume.get("attached_to") or (
-                volume.get("id") if volume.get("id") in used_volume_ids else None)
+            return holders(volume)[0]
 
         storage_monthly = round(sum(float(v.get("monthly_usd") or 0.0) for v in volumes), 2)
         note(f"network volumes: {len(volumes)}  (${storage_monthly:.2f}/month, billed while nothing "
              f"runs)")
         for volume in volumes:
-            holder = attached_to(volume)
+            live_holder, stopped_holder = holders(volume)
+            if live_holder:
+                state_text = f"attached to {live_holder}"
+            elif stopped_holder:
+                state_text = (f"in the config of STOPPED pod {stopped_holder} — nothing is using it "
+                              f"and it bills anyway")
+            else:
+                state_text = "attached to NOTHING — it bills with nothing using it"
             note(f"  {volume.get('name')}  {float(volume.get('size_gb') or 0):.0f} GB  "
                  f"{volume.get('region') or '?'}  ${float(volume.get('monthly_usd') or 0):.2f}/month"
-                 f"  " + (f"attached to {holder}" if holder
-                          else "attached to NOTHING — it bills with nothing using it"))
-            if holder is None:
+                 f"  {state_text}")
+            if live_holder is None:
                 findings.append(Finding(
                     code="storage-unattached", severity="warn",
                     message=f"volume {volume.get('name')!r} "
                             f"({float(volume.get('size_gb') or 0):.0f} GB, "
                             f"{volume.get('region')}) costs "
-                            f"${float(volume.get('monthly_usd') or 0):.2f}/month and is attached to "
-                            f"no instance; delete it if it is not wanted"))
+                            f"${float(volume.get('monthly_usd') or 0):.2f}/month and no running "
+                            f"instance uses it; delete it if it is not wanted"))
         if volumes:
             findings.append(Finding(
                 code="storage-not-in-ledger", severity="warn",

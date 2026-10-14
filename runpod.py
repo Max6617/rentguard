@@ -153,7 +153,8 @@ class RunPod(Provider):
         which pods exist: a volume is attached when a pod names it.
         """
         payload = self._request("GET", "/v2/network-volumes")
-        rows = payload if isinstance(payload, list) else payload.get("volumes", [])
+        rows = payload if isinstance(payload, list) else (
+            payload.get("networkVolumes") or payload.get("volumes") or [])
         volumes: list[dict] = []
         for row in rows:
             size = float(row.get("size") or 0.0)
@@ -161,7 +162,8 @@ class RunPod(Provider):
                 "id": row.get("id"),
                 "name": row.get("name") or "(unnamed)",
                 "size_gb": size,
-                "region": row.get("dataCenterId") or row.get("dataCenterIds") or "",
+                # The live payload calls this ``dataCenter``; older shapes used ``dataCenterId``.
+                "region": row.get("dataCenter") or row.get("dataCenterId") or "",
                 "attached_to": None,
                 "monthly_usd": self.volume_monthly_usd(size),
             })

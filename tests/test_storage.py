@@ -69,6 +69,25 @@ class DoctorNamesStorage(StorageCase):
         self.assertIn("attached to pod-A", out, f"an attached volume was called unattached:\n{out}")
 
 
+    def test_a_volume_in_a_stopped_pods_config_is_not_in_use(self):
+        """Sequence: an EXITED pod still names the volume in its network mount.
+
+        Effect: `doctor` says nothing is using it, names the stopped pod, and still flags the cost —
+        a stopped container is not storage in use, and the volume bills either way.
+        """
+        self.fake.add("pod-old", status="EXITED", uptime_seconds=600)
+        self.fake.instances["pod-old"].payload = lambda now=None: {  # mount carries the volume id
+            "id": "pod-old", "status": "EXITED", "cost": 0.89, "volumeId": None,
+            "mounts": {"network": [{"path": "/workspace", "volumeId": "vol-1"}]},
+            "runtime": {"uptime": 600, "ports": None, "gpus": []}}
+        self.fake.add_volume("small-agents-vol", size_gb=150.0, region="US-IL-1")
+
+        out = self.run_cli(cli.cmd_doctor, "doctor")
+
+        self.assertIn("small-agents-vol", out)
+        self.assertIn("STOPPED pod pod-old", out, f"the stopped pod is not named:\n{out}")
+
+
 class LedgerExcludesStorage(StorageCase):
     def test_the_ledger_says_storage_is_not_in_the_total(self):
         """Sequence: `rentguard ledger` before any rental has ever been recorded.
@@ -84,20 +103,26 @@ class LedgerExcludesStorage(StorageCase):
 
 
 class RunPodVolumes(unittest.TestCase):
-    def test_runpod_volumes_are_canonicalised_with_their_monthly_cost(self):
-        """The transport seam, scripted: RunPod's field names in, the canonical shape out."""
+    def test_runpod_volumes_use_the_real_payload_shape(self):
+        """The transport seam, scripted with the live shape — verified against the account.
+
+        The response key is ``networkVolumes`` and the region field is ``dataCenter``. A test that
+        invents its own field names passes while the real call returns nothing, which is exactly the
+        mistake this one used to make.
+        """
         from rentguard.runpod import RunPod
 
         provider = RunPod("test-key-not-real")
         provider._request = lambda method, path, body=None, params=None, retries=3: {
-            "volumes": [{"id": "v1", "name": "small-agents-vol", "size": 150,
-                         "dataCenterId": "US-IL-1"}]}
+            "networkVolumes": [{"id": "ii4wouejo8", "name": "small-agents-vol", "size": 150,
+                                "dataCenter": "US-IL-1", "type": "STANDARD"}],
+            "pagination": {"hasNextPage": False, "nextCursor": None}}
 
         volumes = provider.volumes()
 
         self.assertEqual(len(volumes), 1, volumes)
         volume = volumes[0]
-        self.assertEqual(volume["id"], "v1")
+        self.assertEqual(volume["id"], "ii4wouejo8")
         self.assertEqual(volume["name"], "small-agents-vol")
         self.assertEqual(volume["size_gb"], 150.0)
         self.assertEqual(volume["region"], "US-IL-1")
