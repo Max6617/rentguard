@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import tarfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -214,7 +215,12 @@ class ArgvTest(unittest.TestCase):
         here = "UserKnownHostsFile=" + ("NUL" if os.name == "nt" else "/dev/null")
         self.assertIn(here, argv, f"the CLI did not substitute this platform's device: {argv}")
 
-        with mock.patch.object(cli.os, "name", "posix"):
+        # The other platform, on this host: `cli.os` is patched, never the real `os` module. Setting
+        # `os.name` globally makes `pathlib` try to instantiate `PosixPath` on Windows, and the line
+        # that does it may be anywhere — under `tools/coverage.py` it is the tracer's own `Path()` on
+        # every line, and a trace function that raises is switched off for the rest of the session, so
+        # the gate would measure a fraction of the suite while every test still passed.
+        with mock.patch.object(cli, "os", types.SimpleNamespace(name="posix")):
             self.assertEqual(cli._ssh("UserKnownHostsFile={null}"),
                              "UserKnownHostsFile=/dev/null")
 
