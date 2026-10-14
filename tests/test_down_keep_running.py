@@ -76,6 +76,31 @@ class DownWithFailedPull(unittest.TestCase):
         self.assertNotEqual(code, 0, f"a failed pull exited 0:\n{out}")
         self.assertIn(PATTERN, out, f"the lost path was not named:\n{out}")
 
+    def test_a_pull_that_raises_still_stops_the_machine(self) -> None:
+        """Sequence: `down` with artefacts configured, and the pull *raises* instead of returning
+        an exit code — the real shape when the tar stream cannot be written (an unwritable temp
+        dir, a full disk, a broken pipe).
+
+        Effect required: the machine is stopped anyway, and the exit is non-zero. This is the case
+        a test that stubs `_try_pull` to return 1 cannot see: an exception escaping between the
+        pull and the stop leaves the machine billing because a tar stream failed.
+        """
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
+                mock.patch.object(cli, "cmd_pull",
+                                  side_effect=OSError("cannot write the tar stream")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = cli.cmd_down(Namespace(keep_running=False, json=False))
+
+        self.assertIn(("pod-A", "stop"), self.provider.actions,
+                      "the pull raised and the machine was left billing")
+        self.assertNotEqual(code, 0,
+                            f"a pull that crashed exited 0, so a script reads it as a clean "
+                            f"stop:\n{out.getvalue()}")
+        self.assertIn("pull failed", out.getvalue(),
+                      f"the crashed pull was not reported:\n{out.getvalue()}")
+
     def test_a_successful_pull_stops_the_machine_and_exits_zero(self) -> None:
         code, out, stopped = self._down(keep_running=False, pull_exit=0)
 
