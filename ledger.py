@@ -207,14 +207,48 @@ class Ledger:
         rate = float(row.get("rate_usd_per_hour") or 0.0)
         return round(rate * seconds / 3600.0, 6)
 
-    def live_usd(self, at: datetime | None = None) -> float:
-        """What the open run has cost so far, from its own start time."""
+    def unreadable_open_rows(self) -> list[dict]:
+        """Open rows whose bookkeeping cannot be read, named rather than raised.
+
+        Quarantine: the fact is computed and carried here, once per read, instead of being silently
+        skipped on every read, so a corrupt ledger is visible rather than merely survived. A row whose
+        ``started_at`` will not parse has an accrual nobody can compute — and unknown is never zero.
+        """
+        out: list[dict] = []
+        for row in self.entries():
+            if row.get("stopped_at"):
+                continue
+            try:
+                datetime.fromisoformat(str(row["started_at"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                out.append({"run_id": row.get("run_id"), "field": "started_at",
+                            "reason": f"{type(exc).__name__}: {exc}"})
+        return out
+
+    def accrual(self, at: datetime | None = None) -> tuple[float, list[dict]]:
+        """``(accrued USD from the open run, the rows whose accrual is unknown)``.
+
+        The second list is empty when the number is whole. When it is not, the first value covers the
+        readable rows only and the caller must treat the total as unknown rather than complete — the
+        guard keeps watching, `up` refuses to rent, and `doctor` prints the closed total beside the
+        finding. Returning zero for an unreadable row would be the laundering direction.
+        """
+        unknown = self.unreadable_open_rows()
         row = self.open_run()
-        if not row:
-            return 0.0
-        start = datetime.fromisoformat(row["started_at"])
+        if not row or unknown:
+            return 0.0, unknown
+        start = datetime.fromisoformat(str(row["started_at"]))
         seconds = max(0.0, ((at or now_utc()) - start).total_seconds())
-        return round(float(row.get("rate_usd_per_hour") or 0.0) * seconds / 3600.0, 6)
+        return round(float(row.get("rate_usd_per_hour") or 0.0) * seconds / 3600.0, 6), []
+
+    def live_usd(self, at: datetime | None = None) -> float:
+        """What the open run has cost so far, from its own start time.
+
+        Never raises: a row whose accrual cannot be computed contributes nothing *to this number*,
+        and ``accrual()`` is how a caller learns that the real total is unknown rather than zero. A
+        traceback here took out the guard, the cap check and `doctor` at once (2026-10-14).
+        """
+        return self.accrual(at)[0]
 
     def _rewrite(self, rows: list[dict]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

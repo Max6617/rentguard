@@ -367,7 +367,17 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
         snap = snapshot(pod, cfg, ledger, idle_for_minutes=idle_from_events,
                         idle_since_start_minutes=(now_utc() - started).total_seconds() / 60.0)
         write_heartbeat(cfg.heartbeat_path, snap)
-        reason = decide(snap)
+        # An unreadable ledger row is a reason to keep watching, not to stop: the accrual is unknown,
+        # which is never a reason to kill a machine that is billing — a dead guard is worse than a
+        # wrong number, and this is the failure the tool exists to prevent (2026-10-14).
+        unreadable = ledger.unreadable_open_rows()
+        if unreadable:
+            for row in unreadable:
+                log(f"ledger row {row['run_id']} has an unreadable {row['field']} "
+                    f"({row['reason']}): its accrual is UNKNOWN and the guard keeps watching")
+            reason = None
+        else:
+            reason = decide(snap)
         log(f"  {snap.at}  {snap.status:<10} up {snap.uptime_hours:5.2f}h  "
             f"run ${snap.run_usd:.3f}{'' if snap.recorded else ' (unrecorded)'}  "
             f"total ${snap.spent_usd:.3f}/${snap.cap_usd:.2f}  "

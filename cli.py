@@ -512,12 +512,30 @@ def cmd_doctor(args) -> int:
         # the closed total alone showed a human $0.61 while the tool enforced $1.42: the reading and
         # the enforcement have to be the same number (2026-10-14, a live $0.89/h window).
         closed_usd = ledger.total_usd()
-        accruing_usd = ledger.live_usd()
-        note(f"spend recorded : ${closed_usd:.2f} closed + ${accruing_usd:.2f} accruing = "
-             f"${closed_usd + accruing_usd:.2f} of a ${cfg.budget.cap_usd:.2f} cap "
-             f"({len(ledger.entries())} run(s), the open one included as an estimate from its start)")
+        accruing_usd, unknown_rows = ledger.accrual()
+        # The closed total is printed whatever happens: the number a human reads must not disappear
+        # because one row is broken. What cannot be computed is named, beside it, as a finding.
+        if unknown_rows:
+            for row in unknown_rows:
+                findings.append(Finding(
+                    code="ledger-row-unreadable-start", severity="error",
+                    message=f"ledger row {row['run_id']} has an unreadable {row['field']} "
+                            f"({row['reason']}): its accrual is UNKNOWN, so the spend below is "
+                            f"closed runs only and the cap cannot be computed from the ledger"))
+            note(f"spend accrual : UNKNOWN — {len(unknown_rows)} open row(s) cannot be priced:")
+            for row in unknown_rows:
+                note(f"  {row['run_id']}  {row['field']}: {row['reason']}")
+            note(f"spend recorded : ${closed_usd:.2f} closed (the open run's accrual is UNKNOWN) of a "
+                 f"${cfg.budget.cap_usd:.2f} cap ({len(ledger.entries())} run(s))")
+        else:
+            note(f"spend recorded : ${closed_usd:.2f} closed + ${accruing_usd:.2f} accruing = "
+                 f"${closed_usd + accruing_usd:.2f} of a ${cfg.budget.cap_usd:.2f} cap "
+                 f"({len(ledger.entries())} run(s), the open one included as an estimate from its "
+                 f"start)")
         emit(spend={"recorded_usd": closed_usd, "accruing_usd": accruing_usd,
-                    "total_usd": round(closed_usd + accruing_usd, 6),
+                    "total_usd": None if unknown_rows else round(closed_usd + accruing_usd, 6),
+                    "accrual_unknown": bool(unknown_rows),
+                    "unreadable_rows": unknown_rows,
                     "cap_usd": cfg.budget.cap_usd,
                     "runs": len(ledger.entries()),
                     "open_run_accrued_usd": accruing_usd})
@@ -873,7 +891,20 @@ def cmd_up(args) -> int:
         cfg.budget.per_run_cap_usd = args.per_run_cap
 
     with json_report(args):
-        already = round(ledger.total_usd() + ledger.live_usd(), 6)
+        # An unreadable open row means the project's spend cannot be computed. Renting against an
+        # unknown cap is the laundering direction — as good as treating the unknown accrual as
+        # spent-nothing — so `up` refuses and names the row instead of guessing (2026-10-14).
+        accruing_usd, unknown_rows = ledger.accrual()
+        if unknown_rows:
+            row = unknown_rows[0]
+            note(f"error: the open ledger row {row['run_id']} has an unreadable {row['field']} "
+                 f"({row['reason']}), so what this project has spent cannot be computed. Renting "
+                 f"against an unknown cap is refused; repair the ledger row first "
+                 f"(`rentguard ledger` shows the file).")
+            emit(action="refused", reason="open-run-accrual-unknown", run_id=row.get("run_id"),
+                 field=row.get("field"), detail=row.get("reason"))
+            return 2
+        already = round(ledger.total_usd() + accruing_usd, 6)
         if already >= cfg.budget.cap_usd and not args.force:
             note(f"error: ${already:.2f} already recorded (including the open run's accrued cost) "
                   f"against a ${cfg.budget.cap_usd:.2f} cap. "
