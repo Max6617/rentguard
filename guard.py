@@ -72,6 +72,11 @@ class Snapshot:
     idle_since_start_minutes: float = 0.0   # idle observed by the caller since it started
     idle_for_minutes: float = 0.0
     max_idle_minutes: float | None = None   # from the provider's own reading, when reported
+    #: The open row's ``started_at`` is unreadable: the accrual below is a witness, not a reading.
+    accrual_unknown: bool = False
+    #: Where that witness came from — ``"uptime"`` when the pod's own clock priced it. The finding
+    #: is named beside this number, never instead of it.
+    priced_from: str | None = None
 
     @property
     def remaining_usd(self) -> float:
@@ -122,9 +127,19 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     uptime_seconds = float(raw_uptime) if raw_uptime is not None else None
     uptime_hours = round((uptime_seconds or 0.0) / 3600.0, 4)
 
+    unreadable = ledger.unreadable_open_rows() if open_run is not None else []
+    priced_from: str | None = None
     if open_run is not None:
-        run_usd = ledger.live_usd(at)
         rate = float(open_run.get("rate_usd_per_hour") or 0.0)
+        if unreadable and uptime_seconds is not None:
+            # The row's own start cannot be read, so price it from the pod's clock: uptime is an
+            # independent witness, bounded by the machine's own end by construction, so the cap can
+            # still fire on the one run whose accrual is unknown. Unknown must never read as zero —
+            # and the row stays quarantined and named beside this number, not instead of it.
+            run_usd = round(rate * uptime_hours, 6)
+            priced_from = "uptime"
+        else:
+            run_usd = ledger.live_usd(at)
     else:
         # No row: the money is still being spent. Price it from the provider's uptime — the row
         # that would have costed this run never existed, so uptime is the only witness.
