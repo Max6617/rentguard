@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -97,11 +98,18 @@ class BranchCase(unittest.TestCase):
 # ============================================================== provider construction
 
 class ProviderConstruction(unittest.TestCase):
+    """`_provider` turns the config and the environment into a provider, so these two tests pin the
+    environment. CI sets `RENTGUARD_PROVIDER=fake` for both its steps, and that variable outranks the
+    config: without pinning it, these tests measure the runner instead of the code."""
+
+    PINNED_ENV = {"RENTGUARD_PROVIDER": ""}   # empty falls through to cfg.provider
+
     def test_an_unknown_provider_name_is_a_clean_error_not_a_traceback(self):
         """Effect: the operator is told the name is wrong, in one line, and nothing is rented."""
         cfg = Config()
         cfg.provider = "vast-not-installed"
-        with mock.patch.object(cli, "api_key", lambda *a, **k: "k"):
+        with mock.patch.dict(os.environ, self.PINNED_ENV), \
+                mock.patch.object(cli, "api_key", lambda *a, **k: "k"):
             with self.assertRaises(SystemExit) as caught:
                 cli._provider(cfg)
 
@@ -110,7 +118,8 @@ class ProviderConstruction(unittest.TestCase):
     def test_runpod_without_a_key_is_refused_before_any_request(self):
         cfg = Config()
         cfg.provider = "runpod"
-        with mock.patch.object(cli, "api_key", lambda *a, **k: None):
+        with mock.patch.dict(os.environ, self.PINNED_ENV), \
+                mock.patch.object(cli, "api_key", lambda *a, **k: None):
             with self.assertRaises(SystemExit) as caught:
                 cli._provider(cfg)
 
