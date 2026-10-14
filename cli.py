@@ -858,8 +858,23 @@ def cmd_down(args) -> int:
             note(f"pulling artefacts from {pod.get('id')} before stopping it")
             pull_exit = _try_pull(cfg, args)
             if pull_exit != 0:
-                note(f"pull failed (exit {pull_exit}); stopping anyway — the container holds files "
-                      f"that will be lost: {', '.join(cfg.artefacts.pull)}")
+                lost = ", ".join(cfg.artefacts.pull)
+                if getattr(args, "keep_running", False):
+                    note(f"pull failed (exit {pull_exit}); --keep-running was given, so "
+                          f"the machine stays up to retry. It is BILLING until you run "
+                          f"`rentguard down` without --keep-running.")
+                    note(f"paths not pulled: {lost}")
+                    emit(action="kept-running", stopped=False, kept_running=True,
+                         instance={"id": pod.get("id"), "status": status},
+                         pull_exit_code=pull_exit,
+                         paths_not_pulled=list(cfg.artefacts.pull),
+                         total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
+                    return 1
+                note(f"pull failed (exit {pull_exit}); stopping anyway — the container "
+                      f"holds files that will be lost: {lost}")
+                note("--keep-running would leave the machine up to retry; stopping is "
+                     "the default because a machine that keeps billing is the worse loss.")
+
         if live:
             provider.action(pod["id"], "stop")
             note(f"stopping {pod['id']}")
@@ -1211,8 +1226,13 @@ def build_parser() -> argparse.ArgumentParser:
     structured(sp)
     sp.set_defaults(func=cmd_watch)
 
-    structured(sub.add_parser("down", help="stop the instance and close the ledger row")
-               ).set_defaults(func=cmd_down)
+    sp = sub.add_parser("down", help="stop the instance and close the ledger row")
+    sp.add_argument("--keep-running", action="store_true",
+                    help="if the artefact pull fails, leave the machine running so the copy "
+                         "can be retried (it keeps billing). The default is to stop and "
+                         "report which paths were lost, because a machine that keeps "
+                         "billing is the worse loss")
+    structured(sp).set_defaults(func=cmd_down)
     structured(sub.add_parser("ledger", help="every rental with its cost")).set_defaults(
         func=cmd_ledger)
     structured(sub.add_parser("pull", help="pull the configured artefacts now")).set_defaults(

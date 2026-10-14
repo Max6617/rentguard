@@ -11,7 +11,7 @@ question that goes to them is the last section.
 | 2. repo | `.gitignore` thorough; no secrets in the working tree or in history (env-var *names* only); `LICENSE` (MIT) added; `CHANGELOG.md` added; CI workflow added; `pyproject.toml` has authors, keywords, classifiers; `rentguard.egg-info` and `cli.py.bak` removed. |
 | 3. docs | quickstart, cap semantics, provider guide, MCP page, limitations, M2 record, verification notes — all written and run against real output. |
 | 4. name | **`rentguard` is free on PyPI** — the JSON API returns 404. |
-| open | the ordering-dependent test (`ArtefactLostMidRun`); `pip install -e .` not verified locally (my venv attempt hung without network, so CI is the only evidence); the frozen revision has not yet had its own real rental. |
+| open | **the package cannot be installed** — `pip install -e .` fails with `error: package directory 'rentguard' does not exist`, because the repo root is the package and `pyproject.toml` asks for a `rentguard/` subdirectory. Needs the package moved into its own directory (and the tests' `sys.path` depth adjusted). Assigned to Forge. Also open: the ordering-dependent test, the frozen revision's own real rental, and the full sha. |
 
 ## 1. The tool is proven
 

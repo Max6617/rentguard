@@ -33,7 +33,14 @@ classifiers = [
 rentguard = "rentguard.cli:main"
 
 [tool.setuptools]
+# Flat layout: the repository root *is* the package. Setuptools would otherwise look for a
+# `rentguard/` directory inside the project and fail with "package directory 'rentguard' does not
+# exist", which is what stopped `pip install -e .` from working at all. Mapping the package name to
+# "." says where it really lives, and keeps the import path `rentguard.cli` without moving a file.
 packages = ["rentguard"]
+
+[tool.setuptools.package-dir]
+rentguard = "."
 
 [tool.pytest.ini_options]
 # Keep the tree clean: with the cache provider off, pytest writes neither `.pytest_cache/` nor the
