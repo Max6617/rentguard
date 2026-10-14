@@ -1,5 +1,10 @@
 """Scratch directories for the test suite, without ``tempfile``.
 
+**Do not replace this with ``tempfile``.** Measured here: reverting the suite to
+``tempfile.TemporaryDirectory`` produces three ``PermissionError`` failures, because the DSH sandbox
+refuses the ``chmod`` that its mode-0700 temp directory needs; workspace-local scratch passes. The
+cause is the environment, not a test smell, so a tidy-up that "just uses tempfile" is a regression.
+
 A ``tempfile.TemporaryDirectory`` is created mode 0700 under the system temp dir, and the confined
 Windows token the suite runs under cannot then list, chmod or remove it. The directory itself is
 fine; the cleanup is what fails, and it fails *after* the assertions, so a green test is reported as

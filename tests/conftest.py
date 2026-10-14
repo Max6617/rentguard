@@ -1,5 +1,10 @@
 """Test-run setup for the rentguard suite.
 
+**Measured caveat, do not tidy this away.** This file alone does not make ``tempfile`` usable here:
+its ``os.chmod(path, 0o777)`` is refused by the DSH sandbox, so a test reverted to
+``tempfile.TemporaryDirectory`` still fails with ``PermissionError`` (three of them, measured). The
+suite therefore relies on the workspace-local scratch helper in ``tests/_scratch.py``.
+
 Two jobs, both of them environment jobs rather than product ones.
 
 **1. Put temporary files somewhere writable.** On this machine the DSH confinement makes the
@@ -15,6 +20,12 @@ live under ``<repo>/.rentguard-tmp/`` instead. Nothing in the product reads this
 file was removed; these tests do not care, and they must not report a passing assertion as a
 failure because of it.
 
+**3. Take the provider key away.** A real RunPod key lives in this environment, so a test that
+forgets to select the fake provider silently queries the live account. That happened once: a
+documentation pass meant to prove the "no key" path listed the real account instead (read-only, no
+spend). No test needs a key — the fake provider is the point — so none is given one unless it asks:
+``RENTGUARD_ALLOW_REAL_KEY=1``.
+
 Product behaviour is asserted in the test modules. This file must not change any of it.
 """
 
@@ -24,6 +35,11 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+
+import pytest
+
+#: Environment variables that carry a provider credential.
+KEY_VARS = ("DSH_SECRET_RUNPOD_API_KEY", "RUNPOD_API_KEY")
 
 #: The repository root: tests/ -> rentguard/ -> workspace/
 REPO = Path(__file__).resolve().parents[2]
@@ -67,3 +83,16 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
 def pytest_unconfigure(config):  # noqa: ARG001 - pytest hook signature
     shutil.rmtree = _real_rmtree
     tempfile.mkdtemp = _real_mkdtemp
+
+
+@pytest.fixture(autouse=True)
+def _no_live_provider_key(monkeypatch):
+    """No test may reach the live account by accident.
+
+    Run with ``RENTGUARD_ALLOW_REAL_KEY=1`` to opt out — for a deliberate live check, not for the
+    suite. Every test that needs a provider builds the fake one.
+    """
+    if os.environ.get("RENTGUARD_ALLOW_REAL_KEY") == "1":
+        return
+    for var in KEY_VARS:
+        monkeypatch.delenv(var, raising=False)
