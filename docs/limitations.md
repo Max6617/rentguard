@@ -133,6 +133,14 @@ make sure `pull` has run before the machine stops. (`down` prints a "volume surv
 the provider payload carries a `volume` key; that message is not a reliable check of whether a volume
 is mounted.)
 
+**A network volume bills monthly, and it cannot be deleted while any pod still points at it.** It costs
+its $/GB every month whether or not a pod exists, so a forgotten one is a permanent small bill. RunPod
+refuses the delete while *any* pod references the volume — including one that is only `EXITED`: the
+request returns `400 You must remove this network volume from all pods before deleting it`, so that pod
+has to be **terminated** first, not merely stopped. `doctor` reports volumes, their monthly cost, and
+which are attached to nothing; `ledger` states that its total covers rentals only. The volume path is
+unit-covered, not exercised end to end — see [KNOWN-FAILURES](KNOWN-FAILURES.md), F-6.
+
 **Everything remote goes over ssh.** `run` and `pull` use the `ssh` binary on your PATH, with
 `StrictHostKeyChecking=no` and `UserKnownHostsFile=NUL` on Windows. No ssh client, no remote work.
 

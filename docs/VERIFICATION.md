@@ -461,6 +461,44 @@ Two notes from writing this, both about the environment rather than the product:
 - **`pip install .` cannot be checked here** (see Not verified), but the packaging failure it used to
   hide is fixed — `pyproject.toml` maps the package to the repo root.
 
+## Storage
+
+Live and read-only, 2026-10-14. The account's only network volume, `small-agents-vol` (150 GB, US-IL-1,
+$10.50/month), was deleted on the user's instruction and executed by Forge. The sequence is recorded
+from that work and matched by a read-only `GET /v2/network-volumes` at 16:54 (an empty list):
+
+```text
+BEFORE: [{"dataCenter":"US-IL-1","id":"ii4wouejo8","name":"small-agents-vol","size":150,"type":"STANDARD"}]
+pods referencing it: 52n9hq6atcwa18 (small-agents-workbench, EXITED)
+DELETE /v2/network-volumes/ii4wouejo8 -> 400 "You must remove this network volume from all pods before deleting it."
+terminate 52n9hq6atcwa18 (EXITED, not billing)
+DELETE /v2/network-volumes/ii4wouejo8 -> 204 No Content
+AFTER: []
+```
+
+`doctor` against the account afterwards, run for this log:
+
+```console
+account pods   : 9 total, 0 live
+  (nothing is billing)
+network volumes: 0  ($0.00/month, billed while nothing runs)
+[exit 0]
+```
+
+The report the fix produces, against the live payload's numbers. The volume is gone, so this is a
+reproduction of the current code rather than the 16:47 transcript — same text:
+
+```console
+network volumes: 1  ($10.50/month, billed while nothing runs)
+  small-agents-vol  150 GB  US-IL-1  $10.50/month  in the config of STOPPED pod pod-old — nothing is using it and it bills anyway
+
+  WARN  storage-unattached: volume 'small-agents-vol' (150 GB, US-IL-1) costs $10.50/month and no running instance uses it; delete it if it is not wanted
+  WARN  storage-not-in-ledger: $10.50/month of network storage is NOT in the ledger total, which covers rentals only
+```
+
+Endpoint: `GET /v2/network-volumes` on `api.runpod.io`, response key `networkVolumes`, region field
+`dataCenter`; `rest.runpod.io/v1/networkvolumes` is 404.
+
 ## Not verified
 
 - **The paid path by this pass.** `up` against RunPod, `run` over ssh, a real `pull` and a real `down`

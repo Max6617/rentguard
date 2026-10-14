@@ -160,26 +160,60 @@ warns about, and it happened to the people who wrote it.
 created through the first, then assert that the second reports the instance as tracked-but-foreign
 rather than simply absent.
 
-## F-6 — network volumes are invisible, and they bill while nothing runs
+## F-6 — network volumes are invisible and bill while nothing runs (fixed)
 
-**Found** 2026-10-14 on the live account.
+**Fixed** at `fb867b6`, with the payload-parsing correction at `f4225ff`. Covered by
+`tests/test_storage.py` (5 tests). Verified live against the real account at 16:47 on 2026-10-14.
 
-`doctor` lists pods and nothing else, so an ongoing **storage** cost has no ledger row and no warning.
-The account carries `small-agents-vol`: 150 GB in US-IL-1, created by a finished project, **$10.50 a
-month, billed whether or not a pod exists**. It ran for three days without appearing in any report,
-and costs more than every rental in this project's ledger combined.
+`doctor` used to list pods and nothing else, so an ongoing **storage** cost had no ledger row and no
+warning. The account carried `small-agents-vol`: 150 GB in US-IL-1, **$10.50/month, billed whether or
+not a pod exists**. It ran for three days without appearing in any report, and cost more than every
+rental in this project's ledger combined. Instance drift had a detector; storage drift had none.
 
-Instance drift has a detector; storage drift has none. The shape is F-3's — a cost no record accounts
-for — and it is worse, because a pod is caught by `doctor` and a volume is not.
+The report now names the volume, its size, its region, its monthly cost, and what is (not) using it.
+This is the current code against the live payload's numbers — the account no longer lists the volume, so
+it is a reproduction rather than the 16:47 transcript:
 
-**Required behaviour.** (1) `doctor` lists network volumes with size, region and monthly cost, and
-says when one is attached to nothing. (2) The ledger records storage separately, or the report states
-plainly that the total covers rentals only. (3) Anything a user pays for continuously belongs in the
-same report as the cap, or the cap is a fraction of the truth.
+```console
+network volumes: 1  ($10.50/month, billed while nothing runs)
+  small-agents-vol  150 GB  US-IL-1  $10.50/month  in the config of STOPPED pod pod-old — nothing is using it and it bills anyway
 
-**The test that closes this.** With a fake provider reporting one volume: `doctor` names it, its
-monthly cost, and that it is unattached; and the ledger summary says storage is excluded.
+  WARN  storage-unattached: volume 'small-agents-vol' (150 GB, US-IL-1) costs $10.50/month and no running instance uses it; delete it if it is not wanted
+  WARN  storage-not-in-ledger: $10.50/month of network storage is NOT in the ledger total, which covers rentals only
+```
 
-**Related:** the network-volume *path* (`[runpod].volume_id` attached at `up`) has still never been
-exercised. The first attempt was refused for capacity on every candidate GPU — including with the
-volume removed, which ruled out the volume as the cause — so the attempt did not test the feature.
+`ledger` states the same exclusion itself: `storage: NOT included above — network volumes bill monthly
+while nothing runs`.
+
+**The volume is deleted.** Deleted on the user's instruction, executed by Forge, and confirmed by a
+direct, read-only `GET /v2/network-volumes` at 16:54 on 2026-10-14 (an empty list) and by `doctor`
+reading `network volumes: 0  ($0.00/month, billed while nothing runs)`. The pod that referenced it,
+`52n9hq6atcwa18` (`small-agents-workbench`), was `EXITED` and **not billing**; it was terminated only
+because the provider refuses the delete while any pod still points at the volume. The sequence:
+
+```text
+BEFORE: [{"dataCenter":"US-IL-1","id":"ii4wouejo8","name":"small-agents-vol","size":150,"type":"STANDARD"}]
+pods referencing it: 52n9hq6atcwa18 (small-agents-workbench, EXITED)
+DELETE /v2/network-volumes/ii4wouejo8 -> 400 "You must remove this network volume from all pods before deleting it."
+terminate 52n9hq6atcwa18 (EXITED, not billing)
+DELETE /v2/network-volumes/ii4wouejo8 -> 204 No Content
+AFTER: []
+```
+
+**Two provider facts learned doing it, both measured:**
+
+- **RunPod refuses to delete a volume while any pod references it, including an `EXITED` one.**
+  `DELETE /v2/network-volumes/ii4wouejo8` returned
+  `400 {"detail":"You must remove this network volume from all pods before deleting it."}`, so the
+  referencing pod has to be **terminated** first, not merely stopped. A stopped pod's stale mount blocks
+  it.
+- **The endpoint is `GET /v2/network-volumes` on `api.runpod.io`**, with response key `networkVolumes`
+  and region field `dataCenter`. `rest.runpod.io/v1/networkvolumes` is 404. The schema matters: the
+  first `volumes()` read `volumes`/`dataCenterId`, returned nothing against the live API, and its
+  invented fixture passed anyway — which is why the fixture in `tests/test_storage.py` is quoted from a
+  live response.
+
+**Related:** the network-volume *path* (`[runpod].volume_id` attached at `up`) has never been exercised
+and now cannot be on this account — with the only volume deleted there is nothing left to attach.
+Recorded as **dropped for lack of a volume, not untested**: the transport seam is unit-covered
+(`da51005`), and `CHARTER.md` W3 says the same.
