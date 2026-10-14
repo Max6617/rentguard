@@ -16,6 +16,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -112,6 +113,62 @@ class ScratchRootOrder(unittest.TestCase):
         self.assertIn(stale.name, removed, f"the stale directory was not swept: {removed}")
         self.assertFalse(stale.exists(), "a stale run directory survived the sweep")
         self.assertTrue(fresh.exists(), "a directory that may belong to a live run was removed")
+
+    def test_a_root_that_exists_but_cannot_be_written_into_is_refused_with_its_path(self):
+        """Sequence: the chosen root already exists and refuses writes — the shape of the old
+        `<workspace>\\.rentguard-tmp`, whose hundreds of directories cannot be written into or
+        removed. Effect: the run stops before any test starts, naming the path, instead of failing
+        later inside whichever test happened to write first.
+
+        The probe has to happen *before* the root is used, which is why it is asserted through
+        `scratch_root()` and not only through the chooser.
+        """
+        existing = scratch_dir(self) / "exists-but-unwritable"
+        existing.mkdir()
+
+        with mock.patch.object(_scratch, "choose_root", lambda **kwargs: existing), \
+                mock.patch.object(_scratch, "is_writable", lambda path: False), \
+                mock.patch.object(_scratch, "_base_cache", None):
+            with self.assertRaises(_scratch.ScratchUnavailable) as caught:
+                _scratch.scratch_root()
+
+        self.assertIn(str(existing), str(caught.exception),
+                      f"the refusal does not name the path: {caught.exception}")
+
+    def test_the_sweep_tolerates_entries_it_cannot_use(self):
+        """Sequence: the scratch root holds a stale run directory, a *file* whose name matches the
+        run prefix, and a directory that cannot be stat-ed. Effect: the sweep removes what it can,
+        reports only what it actually removed, and raises nothing — a cleanup that dies on an
+        unwritable neighbour is a new failure mode, not a cleanup.
+        """
+        base = scratch_dir(self)
+        old = time.time() - 7200
+        stranger_file = base / f"{_scratch.RUN_PREFIX}997-not-a-directory"
+        stranger_file.write_text("x", encoding="utf-8")
+        os.utime(stranger_file, (old, old))
+        unreadable = base / f"{_scratch.RUN_PREFIX}996-stat-raises"
+        unreadable.mkdir()
+        os.utime(unreadable, (old, old))
+        sweepable = base / f"{_scratch.RUN_PREFIX}995-old"
+        sweepable.mkdir()
+        os.utime(sweepable, (old, old))
+
+        real_stat = Path.stat
+
+        def fake_stat(self, *args, **kwargs):
+            if self.name == unreadable.name:
+                raise OSError("cannot stat this one")
+            return real_stat(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "stat", fake_stat):
+            removed = _scratch.sweep_stale(base, keep=None)
+
+        self.assertEqual(removed, [sweepable.name],
+                         f"the sweep reported {removed} instead of {[sweepable.name]}")
+        self.assertFalse(sweepable.exists(), "a sweepable stale directory survived")
+        self.assertTrue(stranger_file.exists(),
+                        "the sweep removed a file that is not a run directory")
+        self.assertTrue(unreadable.exists(), "the sweep removed something it could not read")
 
     def test_a_runs_directory_is_removed_by_cleanup(self):
         """Effect: the run cleans up after itself, so a stranger's checkout does not accumulate

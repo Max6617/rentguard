@@ -86,11 +86,13 @@ def choose_root(*, env: Mapping[str, str] | None = None, temp_dir: Path | None =
 
 
 def sweep_stale(base: Path, *, keep: Path | None = None) -> list[str]:
-    """Remove run directories left by earlier runs. Returns the names removed.
+    """Remove run directories left by earlier runs. Returns the names actually removed.
 
-    Best-effort by design: a directory that cannot be removed must not fail the run that is starting,
-    and the next run will try again. Anything created in the last hour that is not ours is left
-    alone, on the chance that a second run is in progress in the same checkout.
+    Best-effort by design: a directory that cannot be read, entered or removed must not fail the run
+    that is starting, and must not be reported as removed when it is still there. Only directories
+    whose names look like a run's are considered — a file that happens to match the prefix is not
+    ours to delete — and anything younger than an hour is left alone, in case a second run is in
+    progress in the same checkout.
     """
     removed: list[str] = []
     cutoff = time.time() - 3600
@@ -102,13 +104,20 @@ def sweep_stale(base: Path, *, keep: Path | None = None) -> list[str]:
         if keep is not None and entry == keep:
             continue
         try:
+            if not entry.is_dir():
+                continue
             if entry.stat().st_mtime > cutoff:
                 continue
-            shutil.rmtree(entry, ignore_errors=True)
-            removed.append(entry.name)
         except OSError:
-            continue
+            continue   # cannot read it: leave it for a run that can, rather than raise here
+        shutil.rmtree(entry, ignore_errors=True)
+        if not entry.exists():
+            removed.append(entry.name)
     return removed
+
+
+class ScratchUnavailable(RuntimeError):
+    """No candidate scratch directory is writable, so the suite cannot start honestly."""
 
 
 _base_cache: Path | None = None
@@ -116,11 +125,18 @@ _run_dir: Path | None = None
 
 
 def scratch_root() -> Path:
-    """The chosen base directory, resolved once and created."""
+    """The chosen base directory, resolved once, created, and **probed again**.
+
+    The extra probe matters for the fallback: a directory that exists but cannot be written into is a
+    trap, and the failure would otherwise surface inside whichever test tried to write first, as a
+    confusing `PermissionError` far from its cause. Failing here names the path instead.
+    """
     global _base_cache
     if _base_cache is None:
-        _base_cache = choose_root()
-        _base_cache.mkdir(parents=True, exist_ok=True)
+        chosen = choose_root()
+        if not is_writable(chosen):
+            raise ScratchUnavailable(f"the chosen scratch root is not writable: {chosen}")
+        _base_cache = chosen
     return _base_cache
 
 
