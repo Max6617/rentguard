@@ -171,6 +171,11 @@ class TheStoppedMachineStopsAccruing(DoctorCase):
         Effect required: the accrual may not exceed what the provider supports — $4.00 — so the
         printed total stops growing when the machine did. Otherwise the reading reports a spend it
         did not read, and it grows forever on a machine that is not billing.
+
+        Severity, and why this queues rather than blocking (Gilbert's ruling): the error is in the
+        *conservative* direction — the cap reads as more spent than it is, so `up` refuses earlier
+        rather than later. That is exactly why a later fix must not make the accrual optimistic:
+        stopping the growth is the requirement; shrinking a real spend is not.
         """
         self.open_run(hours_ago=3.0)
         self.fake.add("pod-A", status="EXITED", uptime_seconds=7200, rate_usd_per_hour=2.0)
