@@ -159,3 +159,27 @@ warns about, and it happened to the people who wrote it.
 **The test that closes this.** Two `Config` objects with different `state_dir` values, one instance
 created through the first, then assert that the second reports the instance as tracked-but-foreign
 rather than simply absent.
+
+## F-6 — network volumes are invisible, and they bill while nothing runs
+
+**Found** 2026-10-14 on the live account.
+
+`doctor` lists pods and nothing else, so an ongoing **storage** cost has no ledger row and no warning.
+The account carries `small-agents-vol`: 150 GB in US-IL-1, created by a finished project, **$10.50 a
+month, billed whether or not a pod exists**. It ran for three days without appearing in any report,
+and costs more than every rental in this project's ledger combined.
+
+Instance drift has a detector; storage drift has none. The shape is F-3's — a cost no record accounts
+for — and it is worse, because a pod is caught by `doctor` and a volume is not.
+
+**Required behaviour.** (1) `doctor` lists network volumes with size, region and monthly cost, and
+says when one is attached to nothing. (2) The ledger records storage separately, or the report states
+plainly that the total covers rentals only. (3) Anything a user pays for continuously belongs in the
+same report as the cap, or the cap is a fraction of the truth.
+
+**The test that closes this.** With a fake provider reporting one volume: `doctor` names it, its
+monthly cost, and that it is unattached; and the ledger summary says storage is excluded.
+
+**Related:** the network-volume *path* (`[runpod].volume_id` attached at `up`) has still never been
+exercised. The first attempt was refused for capacity on every candidate GPU — including with the
+volume removed, which ruled out the volume as the cause — so the attempt did not test the feature.
