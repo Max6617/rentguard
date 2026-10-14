@@ -104,10 +104,10 @@ class Case(unittest.TestCase):
                                 gpu_id="Fake GPU 24GB", rate_usd_per_hour=rate,
                                 started_at=now_utc() - timedelta(hours=hours_ago))
 
-    def artefacts_cfg(self, *, on_run: bool) -> Path:
+    def artefacts_cfg(self) -> Path:
         dest = self.root / "artefacts"
         self.cfg.artefacts = Artefacts(pull=["results/**/*.json"], local_dir=str(dest),
-                                       remote_dir="/workspace", on_run=on_run)
+                                       remote_dir="/workspace")
         return dest
 
     @staticmethod
@@ -130,7 +130,7 @@ class ArtefactLostMidRun(Case):
         command's exit code as success while the results are gone is how a week of experiments is
         discovered to be missing at the end.
         """
-        self.artefacts_cfg(on_run=True)
+        self.artefacts_cfg()
         self.write_state({"instance_id": "pod-A"})
         self.open_run(hours_ago=0.5)
         fake = FakeProvider()

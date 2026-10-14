@@ -47,10 +47,11 @@ class Artefacts:
     pull: list[str] = field(default_factory=list)
     local_dir: str = "./artefacts"
     remote_dir: str = "/workspace"
-    #: Accepted and **ignored**. Pulling happens when each run finishes and again on `down`, so the
-    #: old switch no longer selects anything; the field stays so a config or a caller that still
-    #: passes it keeps working instead of failing at startup over a setting that means nothing.
-    on_run: bool = False
+    #: There is deliberately no switch here. If ``pull`` is non-empty, `run` pulls when each run
+    #: finishes and `down` pulls before it stops. The old ``on_run`` setting selected between those
+    #: and doing nothing; it is deleted rather than defaulted, because a tool whose promise is "no
+    #: surprises" cannot carry a setting that turns the promise off. A config that still has the key
+    #: is accepted and the key ignored — see ``_only``.
 
 
 @dataclass
