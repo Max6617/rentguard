@@ -10,9 +10,10 @@ Two jobs, both of them environment jobs rather than product ones.
 **1. Put temporary files somewhere writable.** On this machine the DSH confinement makes the
 system temp directory unwritable for a child process: ``tempfile.TemporaryDirectory()`` succeeds,
 then every write inside it raises ``PermissionError``. That turns correct tests into failures and
-hides the real result. A directory inside the project is writable, so every test's temporary files
-live under ``<repo>/.rentguard-tmp/`` instead. Nothing in the product reads this directory, and
-``.gitignore`` excludes it.
+hides the real result. ``tests/_scratch.py`` owns the policy — ``RENTGUARD_SCRATCH``, else the
+platform temp dir when it is genuinely writable, else a sibling of the checkout — and this hook
+points ``tempfile`` at the same root so the two cannot disagree. Nothing in the product reads that
+directory, and ``.gitignore`` excludes the sibling.
 
 **2. Make temp cleanup tolerant.** Confined directories cannot be ``chmod``-ed, so
 ``shutil.rmtree`` fails while restoring permissions *after* the test body has already passed.
@@ -33,17 +34,20 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _scratch import cleanup_run, run_root  # noqa: E402  (scratch policy lives in one file)
 
 #: Environment variables that carry a provider credential.
 KEY_VARS = ("DSH_SECRET_RUNPOD_API_KEY", "RUNPOD_API_KEY")
 
 #: The repository root: tests/ -> rentguard/ -> workspace/
 REPO = Path(__file__).resolve().parents[2]
-TMP_ROOT = REPO / ".rentguard-tmp"
 
 _real_rmtree = shutil.rmtree
 _real_mkdtemp = tempfile.mkdtemp
@@ -72,8 +76,11 @@ def _writable_mkdtemp(suffix=None, prefix=None, dir=None):
 
 def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     try:
-        TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        tempfile.tempdir = str(TMP_ROOT)
+        # The same policy the suite's own scratch helper uses: RENTGUARD_SCRATCH, else the platform
+        # temp dir when it is writable, else the workspace sibling this sandbox needs. Pointing
+        # `tempfile` at *this run's* directory means a test that still uses tempfile lands inside the
+        # per-run scratch instead of somewhere a previous run can interfere with.
+        tempfile.tempdir = str(run_root())
     except OSError:
         pass  # fall back to the system temp dir and let the failure be visible
     shutil.rmtree = _tolerant_rmtree
@@ -83,6 +90,7 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
 def pytest_unconfigure(config):  # noqa: ARG001 - pytest hook signature
     shutil.rmtree = _real_rmtree
     tempfile.mkdtemp = _real_mkdtemp
+    cleanup_run()   # a run leaves no directory behind for the next one to trip over
 
 
 @pytest.fixture(autouse=True)
