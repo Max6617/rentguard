@@ -70,8 +70,7 @@ def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
         # Every module present, nothing hit: that is never a legitimate result of running the
         # suite, it is a checkout whose package resolved somewhere the tracer was not watching.
         # Reporting it as 0.0% would let a hand-set floor turn a broken measurement into a pass.
-        _diagnose_unmeasured(seen)
-        return 2
+        return {}, seen
     return result, seen
 
 
