@@ -153,10 +153,12 @@ one JSON document and the human prose goes to stderr, so `json.loads(stdout)` wo
 the last JSON value. A caller that wants both reads two streams; one that already merges them with
 `2>&1` gets the prose in front of the document, which is not valid JSON.
 
-**The MCP server covers eight of the ten commands.** [MCP server](mcp.md) returns both forms now —
-`content` is the text, `structuredContent` is the same answer as an object. What it does not expose is
-`watch` (so a Bot can rent through MCP but cannot arm the guard that enforces the cap) or `init`. Those
-two are CLI-only.
+**The MCP server exposes all ten commands as eleven tools, and an armed guard is bounded.** [MCP
+server](mcp.md) returns both forms — `content` is the text, `structuredContent` is the same answer as an
+object. Protection is not a daemon, though: `rentguard_watch` runs for a bounded number of polls and
+`rentguard_watch_once` takes a single reading, and both report `armed: false` because the call has
+returned. A Bot that wants the cap enforced for longer must call them again. A detached guard was
+deliberately not built — a supervisor you believe in and that is not running is worse than none.
 
 ## Data on your side
 

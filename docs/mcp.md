@@ -1,13 +1,18 @@
 # MCP server
 
-`rentguard` runs as an MCP server over stdio, so a Bot team can rent and stop machines through tool
-calls instead of a shell. It is the same code as the CLI: each tool is one CLI command, and each reply
-carries both the text and the structured document.
+`rentguard` runs as an MCP server over stdio, so a Bot team can rent, watch and stop machines through
+tool calls instead of a shell. It is the same code as the CLI: each tool is one CLI command, and each
+reply carries both the text and the structured document.
 
-Eight of the ten commands are exposed. The two that are not are `watch` and `init`: a Bot can rent
-through this server but cannot arm the guard that enforces the cap, and per [the cap page](cap.md) the
-cap only exists while a guard runs. That is a gap, not a design choice — a caller that rents here must
-start `rentguard watch` in a shell itself, or the machine bills until someone notices.
+The server advertises eleven tools, and all eleven are documented below — including the three that arm
+the guard: `rentguard_watch_once`, `rentguard_watch` and `rentguard_init`.
+
+**Protecting a machine from a Bot is bounded, not a daemon.** A tool call cannot be a foreground loop,
+so an MCP-armed guard protects while the call runs and no longer. The alternative would be a detached
+daemon, and that is deliberately not built: a supervisor you believe in and that is not running is worse
+than no supervisor. Every watch return says whether protection is still armed, so a caller can never
+believe a guard is running when it is not. And the cap itself still only exists while a watch runs — see
+[the cap page](cap.md).
 
 ```bash
 python -m rentguard.mcp_server
@@ -55,10 +60,37 @@ A client entry looks like this:
 | `rentguard_pull` | reads from the machine | pull the configured artefact patterns now |
 | `rentguard_stop` | stops spend | stop the instance and close the ledger row with its cost |
 | `rentguard_adopt` | records spend | give an already-running instance a ledger row, backdated from its uptime |
+| `rentguard_watch_once` | stops spend if the decision says so | one poll: the guard's decision, and whether a guard was already armed |
+| `rentguard_watch` | stops spend if the decision says so | a bounded guard: poll up to `max_iterations` times, then return |
+| `rentguard_init` | writes a file, or prints | write or print the commented config template |
 
-`rentguard_start` requires a `purpose`; everything else takes no arguments except `rentguard_run`
-(`command`, optional `workdir`) and `rentguard_adopt` (`instance_id`, optional `purpose` and
-`uptime_hours`).
+Arguments: `rentguard_start` needs `purpose` (optional `gpu`); `rentguard_run` needs `command`
+(optional `workdir`); `rentguard_adopt` needs `instance_id` (optional `purpose`, `uptime_hours`);
+`rentguard_watch_once` takes `interval`; `rentguard_watch` takes `max_iterations` (default 1) and
+`interval`; `rentguard_init` takes `path`, `force` and `print`. Everything else takes no arguments.
+
+## Arming the guard from a Bot
+
+`rentguard_watch_once` takes a single reading and returns the decision plus `armed_before`. The armed
+state is read **before** the poll on purpose: a poll writes a heartbeat of its own, so asking afterwards
+would always answer "armed" about a guard that has already returned. A one-shot poll does not keep a
+guard alive, and the result says so with `armed: false`.
+
+`rentguard_watch` is the same loop under a bound: it polls up to `max_iterations` times, then returns
+the reason, whether it stopped anything, and `armed: false`. Use it when a Bot must hold protection for
+a while; use `watch_once` when the Bot is driving the machine itself and only wants a reading.
+
+Real replies, on a machine whose per-run cap was already crossed, with no guard running beforehand:
+
+```json
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "watching fake-1 ...\nguard stopped the instance: per-run cap reached ($0.00 of $0.00)\nguard finished: per-run cap reached ..."}], "isError": false, "structuredContent": {"command": "watch", "once": true, "max_iterations": 1, "armed_before": false, "heartbeat_age_minutes": null, "reason": "per-run cap reached ($0.00 of $0.00)", "instance_id": "fake-1", "stopped": true, "armed": false}}}
+{"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "watching fake-1 ...\nguard finished: already stopped"}], "isError": false, "structuredContent": {"command": "watch", "once": false, "max_iterations": 1, "armed_before": true, "heartbeat_age_minutes": 0.0, "reason": "already stopped", "instance_id": "fake-1", "stopped": true, "armed": false}}}
+```
+
+The second call reports `armed_before: true` because the first had just written a heartbeat, and
+`armed: false` because it returned. That pair is the whole point: the caller can tell the difference
+between "a guard was running when I asked" and "a guard is running now", and the answer to the second is
+always no.
 
 ## The approval rule
 
@@ -92,12 +124,12 @@ it, one per line, against an empty project:
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rentguard_status","arguments":{}}}
 ```
 
-The replies, one line each (the `tools/list` result is elided; it is the eight tools in the table
+The replies, one line each (the `tools/list` result is elided; it is the eleven tools in the table
 above):
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "rentguard", "version": "0.1.0"}}}
-{"jsonrpc": "2.0", "id": 2, "result": {"tools": [ ... 8 tools ... ]}}
+{"jsonrpc": "2.0", "id": 2, "result": {"tools": [ ... 11 tools ... ]}}
 {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "no runs recorded"}], "isError": false, "structuredContent": {"command": "ledger", "runs": [], "total_usd": 0.0, ...}}}
 {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "no instance recorded\nspend so far   : $0.00 of $25.00"}], "isError": false, "structuredContent": {"command": "status", "instance": null, ...}}}
 ```
@@ -105,10 +137,10 @@ above):
 **Both forms, one call.** `content` gives the text a person would read and `structuredContent` gives the
 same answer as an object, so a Bot does not have to parse prose. The server asks the command for
 `--json`: stdout is the structured document, stderr is the text, and the tool result is
-`isError: true` when the command exits non-zero. All eight tools were exercised through a real session
-at commit `af1ba5a` — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt` — see
-[VERIFICATION](VERIFICATION.md). `run` was exercised on its "nothing is rented" path; the remote
-execution path needs ssh to a real machine and is M2's, not this page's.
+`isError: true` when the command exits non-zero. All eleven tools were exercised through real sessions
+on the fake provider — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt`,
+`watch_once`, `watch`, `init` — see [VERIFICATION](VERIFICATION.md). `run` was exercised on its
+"nothing is rented" path; remote execution needs ssh to a real machine and is M2's, not this page's.
 
 ## Errors
 

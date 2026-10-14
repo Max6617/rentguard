@@ -311,10 +311,11 @@ Replies:
 {"jsonrpc": "2.0", "id": 6, "error": {"code": -32601, "message": "method not found: no/such/method"}}
 ```
 
-`tools/list` returned eight tools: `rentguard_status`, `rentguard_ledger`, `rentguard_doctor`,
-`rentguard_start`, `rentguard_run`, `rentguard_pull`, `rentguard_stop`, `rentguard_adopt`. A line that
-is not JSON was sent and produced no reply, as designed. That transcript is from `2ebe660`, when a
-reply carried `content` only; from `af1ba5a` each result also carries `structuredContent` (see
+`tools/list` returns eleven tools: `rentguard_status`, `rentguard_ledger`, `rentguard_doctor`,
+`rentguard_start`, `rentguard_run`, `rentguard_pull`, `rentguard_stop`, `rentguard_adopt`,
+`rentguard_watch_once`, `rentguard_watch`, `rentguard_init`. The transcript below is from `2ebe660`,
+when the list was eight and a reply carried `content` only; from `af1ba5a` each result also carries
+`structuredContent`, and from `d3b209a` the guard tools are in the list (see
 [Exercised at af1ba5a](#exercised-at-af1ba5a)).
 
 ## Exercised at `af1ba5a`
@@ -381,13 +382,23 @@ no runs recorded
 # and .rentguard/fake-state.json holds fake-1 in PROVISIONING
 ```
 
-**The MCP server** at this revision returns `structuredContent` next to `content`. One real session
-exercised all eight tools — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt` —
-against the fake. `rentguard_adopt` returned, in part:
+**The MCP server** at this revision returns `structuredContent` next to `content`. Two real sessions
+exercised all eleven tools against the fake — `status`, `ledger`, `doctor`, `start`, `run`, `pull`,
+`stop`, `adopt`, and then `watch_once`, `watch`, `init`. `rentguard_adopt` returned, in part:
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "adopted        : orphan-2  RUNNING  $1.0/h\n..."}], "isError": false, "structuredContent": {"command": "adopt", "adopted": true, "uptime_hours": 0.5, "accrued_usd": 0.500176, ...}}}
 ```
+
+The arming tools, on a machine whose per-run cap was already crossed, with no guard running beforehand:
+
+```json
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "watching fake-1 ...\nguard stopped the instance: per-run cap reached ($0.00 of $0.00)\n..."}], "isError": false, "structuredContent": {"command": "watch", "once": true, "max_iterations": 1, "armed_before": false, "heartbeat_age_minutes": null, "reason": "per-run cap reached ($0.00 of $0.00)", "instance_id": "fake-1", "stopped": true, "armed": false, "total_usd": 7.2e-05, "cap_usd": 1.0}}}
+{"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "watching fake-1 ...\nguard finished: already stopped"}], "isError": false, "structuredContent": {"command": "watch", "once": false, "max_iterations": 1, "armed_before": true, "heartbeat_age_minutes": 0.0, "reason": "already stopped", "instance_id": "fake-1", "stopped": true, "armed": false, "total_usd": 7.2e-05, "cap_usd": 1.0}}}
+```
+
+`rentguard_init` with `print: true` returned the 2327-character commented template as its text, with
+`isError: false`, and wrote nothing.
 
 ## Tests
 
@@ -415,9 +426,9 @@ the base `Provider` class. Both were fixed within minutes and are not in the tab
 
 ## Exercised or only described
 
-For the ten CLI commands and the eight MCP tools at `af1ba5a`:
+For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 
-| Surface | Exercised at `af1ba5a` | Only described |
+| Surface | Exercised | Only described |
 | --- | --- | --- |
 | `init` | `init --print`, plus a written file | — |
 | `doctor` | keyless (exit 1), with the fake, and with an untracked live instance (exit 1) | against RunPod: the key was stripped from the shell for this pass |
@@ -429,8 +440,23 @@ For the ten CLI commands and the eight MCP tools at `af1ba5a`:
 | `pull` | fake (0 files, exit 0) | over ssh against a real machine (M2 ran it) |
 | `adopt` | fake orphan, 1.5 h uptime, backdated to $3.00 | — |
 | `run` | — | through the CLI: the fake has no ssh server. Covered in-process by the suite, and run for real once in M2 |
-| MCP `status`, `ledger`, `doctor`, `start`, `pull`, `stop`, `adopt` | one real session, `content` + `structuredContent` | — |
-| MCP `run` | its "nothing is rented" error path | remote execution (needs a real machine) |
+| MCP `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt` | real sessions on the fake, `content` + `structuredContent` | MCP `run` only on its "nothing is rented" path |
+| MCP `watch_once`, `watch` | both, on a machine over its per-run cap: the decision, the stop, and `armed_before` / `armed` | a guard left running for a long time: it is bounded by `max_iterations` by design |
+| MCP `init` | `print: true` returned the template and wrote nothing | writing a file through the tool |
+
+## Later revisions
+
+After `af1ba5a` the tree grew fast: `d3b209a` adds the feature matrix and several suites
+(`test_watch_mcp`, `test_provider_contract`, `test_runpod_transport`, `test_ledger_paths`), taking the
+count well past 74. Two things matter for reading the pages:
+
+- **`tests/test_feature_matrix.py` fails one assertion by design.** It compares `tools/list` against a
+  hardcoded list of eight names in the test file (`McpSurface.DOCUMENTED`). The server advertises
+  eleven; the page now documents all eleven, so the constant is the stale half. It goes green when that
+  list is updated to eleven, or when the test reads the page instead of mirroring it.
+- **`tests/test_ledger_paths.py` fails 16 tests in this sandbox**, all `PermissionError` creating a
+  `runs.jsonl.lock` under `.rentguard-tmp`: the same DSH temp-directory limit that `tests/conftest.py`
+  documents, not a product defect. It is worth knowing before anyone reads a red suite as a bug.
 
 ## Not verified
 
