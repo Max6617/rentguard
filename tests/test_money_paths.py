@@ -939,5 +939,32 @@ class NoGuardSaysSo(MoneyCase):
                       f"status did not say nothing is watching.\noutput:\n{out}")
 
 
+class NestedReportsAreOneDocument(MoneyCase):
+    def test_a_pull_inside_down_leaves_one_json_document(self):
+        """Sequence: `down --json` on a live machine with artefacts configured, so `down` calls the
+        pull before it stops.
+
+        Effect: stdout is exactly one JSON document. A nested command that printed its own document
+        left two, `json.loads` refused the whole of stdout, and every consumer of the structured
+        form — the MCP server included — silently got nothing.
+        """
+        self.cfg.artefacts.pull = ["results/*.json"]
+        self.cfg.artefacts.local_dir = str(self.state_dir / "artefacts")
+        self.write_state({"instance_id": "pod-A", "provider": "fake"})
+        self.open_run(hours_ago=0.1, instance_id="pod-A")
+        provider = self.machine("pod-A", uptime=600)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cli.cmd_down(cli_args("down", "--json"))
+
+        document = json.loads(out.getvalue())   # raises on a second document, which is the point
+        self.assertIn("total_usd", document, f"the down report is incomplete: {document}")
+        self.assertIn("command", document, f"the down report is incomplete: {document}")
+        self.assertIn("pulling artefacts", err.getvalue(), "the pull prose should be on stderr")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

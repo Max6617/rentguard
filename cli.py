@@ -90,6 +90,12 @@ def json_report(args=None):
     if not json_wanted(args):
         yield
         return
+    if _REPORT is not None:
+        # Nested: a command called from inside another (the pull inside `down` or `run`) must add
+        # to the caller's document, not print one of its own. Two documents on stdout is not JSON,
+        # and the failure is silent — `json.loads` raises and the caller reports no structure at all.
+        yield
+        return
     previous = _REPORT
     _REPORT = {}
     try:
@@ -438,7 +444,7 @@ def cmd_doctor(args) -> int:
         if name != "fake" and not api_key():
             findings.append(Finding(code="no-api-key", severity="error",
                                     message="no API key: the account cannot be inspected"))
-            print()
+            note("")
             for finding in findings:
                 note(f"  {finding.severity.upper():<5} {finding.code}: {finding.message}")
             emit(findings=_findings_dicts(findings), live_instances=[])
@@ -499,7 +505,7 @@ def cmd_doctor(args) -> int:
 
         emit(findings=_findings_dicts(findings))
         if findings:
-            print()
+            note("")
             for finding in findings:
                 note(f"  {finding.severity.upper():<5} {finding.code}: {finding.message}")
     return 1 if any(f.severity == "error" for f in findings) else 0
@@ -776,7 +782,7 @@ def cmd_up(args) -> int:
                       "gpu_id": chosen})
         _write_state(cfg, state)
         note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
-        pod = provider.wait_running(pod["id"], log=lambda m: print(m, flush=True))
+        pod = provider.wait_running(pod["id"], log=note)
 
         # Two consecutive alive readings, not one. `wait_running` returns the first payload that
         # merely looks alive; on the real account `up` reported RUNNING with uptime=None and
@@ -836,8 +842,8 @@ def _open_if_needed(cfg: Config, ledger: Ledger, pod: dict, purpose: str | None,
             return open_run
         closed = ledger.close(note="superseded-open-run")
         if closed is not None:
-            print(f"closed stale row: {closed['run_id']} (${closed['estimated_usd']}) was open "
-                  f"against {closed.get('instance_id')!r}; this instance is {pod_id!r}")
+            note(f"closed stale row: {closed['run_id']} (${closed['estimated_usd']}) was open "
+                 f"against {closed.get('instance_id')!r}; this instance is {pod_id!r}")
     uptime_seconds = float((pod.get("runtime") or {}).get("uptime") or 0.0)
     started = now_utc() - timedelta(seconds=uptime_seconds)
     run = ledger.open(
@@ -848,10 +854,10 @@ def _open_if_needed(cfg: Config, ledger: Ledger, pod: dict, purpose: str | None,
         rate_usd_per_hour=float(pod.get("cost") or 0.0),
         started_at=started,
     )
-    print(f"ledger row     : {run['run_id']}")
+    note(f"ledger row     : {run['run_id']}")
     if uptime_seconds > 60:
-        print(f"backdated start: {run['started_at']}  (uptime {uptime_seconds / 3600:.2f} h from "
-              f"the provider; ${ledger.live_usd():.2f} was already on the clock)")
+        note(f"backdated start: {run['started_at']}  (uptime {uptime_seconds / 3600:.2f} h from "
+             f"the provider; ${ledger.live_usd():.2f} was already on the clock)")
     return run
 
 
@@ -859,9 +865,9 @@ def _print_access(cfg: Config, provider: Provider, pod: dict) -> None:
     try:
         argv, target = _ssh_argv(cfg, provider, pod)
     except ProviderError as exc:
-        print(f"ssh            : (not available: {exc})")
+        note(f"ssh            : (not available: {exc})")
         return
-    print(f"ssh            : {' '.join(shlex.quote(a) for a in argv)} {target}")
+    note(f"ssh            : {' '.join(shlex.quote(a) for a in argv)} {target}")
     emit(ssh={"argv": argv, "target": target})
 
 
