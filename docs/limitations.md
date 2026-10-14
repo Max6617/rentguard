@@ -99,6 +99,14 @@ you. Treat "is the heartbeat fresh" as a check you own.
 crosses the cap just after a check pays for up to one more interval before the stop is sent, and the
 provider's own stop latency is not modelled.
 
+**Idle means idle, and the guard's arithmetic for it is narrow on purpose.** Three rules keep the idle
+stop from firing on a working pod: time spent *watching* is not time *idle* (the guard's own elapsed
+counter grows while the GPU is busy and is no longer a reason to stop anything); a sampled GPU
+utilisation above zero forces idle to zero, because the provider's per-GPU idle figure is measured against
+the host and can read half an hour on a card visibly at work; and a pod cannot have been idle longer than
+it has existed, so the idle figure is bounded by the pod's age. When the provider reports no uptime at
+all, nothing read from it is attributable to this pod, so it is not a reason to stop it either.
+
 **Spend that rentguard never recorded is invisible to the cap.** An instance billing on the account with
 no ledger row sits outside every check. `doctor` separates two cases by the machine's **name**: one
 carrying a `rentguard-<tag>` that is not this root's is another root's machine — that root's ledger owns
@@ -149,8 +157,10 @@ remote work.
 direct endpoint, so it is reached through the `ssh.runpod.io` proxy, which only allocates a PTY: without
 `-tt` the proxy answers `Error: Your SSH client doesn't support PTY`, so `-tt` is passed and the archive
 travels base64-encoded (a PTY rewrites LF as CRLF). Even so, defect 9 is open: the PTY opens but the
-command still does not execute, and the pull reads prompt text back. Rent a secure pod, or expect `run`
-not to work. The direct route is unchanged and is what the real rentals in this project used.
+command still does not execute, and the pull reads prompt text back. The session transport is being built
+from **scripted transcripts**, not from a real community pod, which is why its tests pass and the route is
+still not usable. Rent a secure pod, or expect `run` not to work. The direct route is unchanged and is
+what the real rentals in this project used.
 
 **Artefact patterns are expanded by the remote shell and joined without quoting.** A pattern
 containing a space breaks the pull; `**` behaves like `*` under a POSIX `sh`. Use plain globs.
@@ -169,6 +179,15 @@ keeps billing. The stop is the default because a machine that keeps billing is t
 is reported as `ssh-timeout`, and `down` stops anyway. A stop is bounded by `[budget].stop_timeout_s`
 (45 s by default): if the ordinary call does not return within that, it escalates to the provider's own
 stop endpoint. Both bounds exist for the same reason — no socket is worth a machine that keeps billing.
+
+**A pull says what it did not get.** Three cases are reported rather than passed off as a clean copy: a
+configured pattern that no archived member matches is a finding (`matched nothing`), with the match tested
+by `fnmatch` against the member path — `results/**/*.json` is answered by `results/out.json`, but
+`results/notes.txt` does not answer `results/*.json` the way a plain prefix test would; an archive with no
+members at all is a failure (`patterns-matched-nothing`), not a delivery of zero files, because the
+artefacts may still be on the machine; and a partial pull keeps the members it did get while naming the
+ones it did not. When a machine cannot be pulled at all, `down`'s sentence names the configured patterns
+that are about to be lost rather than saying "artefacts" in general.
 
 **`--json` splits the two streams, so merge them deliberately.** With `--json`, stdout carries exactly
 one JSON document and the human prose goes to stderr, so `json.loads(stdout)` works without hunting for

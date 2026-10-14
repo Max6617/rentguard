@@ -457,21 +457,34 @@ For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 After `af1ba5a` the tree grew fast. At **`74b9f7a`** a clean worktree ran 189 passed / 0 failed; at
 **`cdd7113`** 295 passed / 0 failed with coverage 98.4%; at **`f158396`** 318 passed / 0 failed with
 coverage 2,336 / 2,384 = 97.99%, below the floor and exit 1; at **`7febd07`** 322 passed / 0 failed with
-coverage 2,347 / 2,384 = 98.4%; at **`310f449`** it ran 350 passed / 0 failed with coverage 2,494 / 2,542
-= 98.1%; at **`721436a`** — the publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it
-runs **355 passed, 0 failed, 54 subtests**, identical with and without `RENTGUARD_PROVIDER=fake`, and
-coverage still measures **2,494 / 2,542 = 98.1%** against the 98.0% floor, **exit 0** (the extra tests
-covered lines already hit). Per module at `721436a`: `fake.py` 99.6, `cli.py` 99.1, `guard.py` 99.1,
-`config.py` 99.0, `mcp_server.py` 98.7, `provider.py` 95.9, `ledger.py` 93.7, `runpod.py` 92.7 — the last
-two are individually below the 94% figure, and `runpod.py` is the lowest. Each figure was re-measured when
-a measured module changed, never carried forward.
+coverage 2,347 / 2,384 = 98.4%; at **`310f449`** 350 passed / 0 failed with coverage 2,494 / 2,542 =
+98.1%; at **`721436a`** 355 passed / 0 failed with coverage 2,494 / 2,542 = 98.1%; at **`eef6bdb`** — the
+publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs **398 passed, 0 failed, 54
+subtests**, identical with and without `RENTGUARD_PROVIDER=fake`, and coverage measures
+**2,589 / 2,625 = 98.6%** against the 98.0% floor, **exit 0**. Per module at `eef6bdb`: `fake.py` 99.6,
+`runpod.py` 99.3, `provider.py` 99.2, `guard.py` 99.1, `cli.py` 99.0, `config.py` 99.0, `mcp_server.py`
+98.7, `ledger.py` 93.7 — only `ledger.py` is below the 94% figure now, and `runpod.py` has come up from
+92.7% at `721436a`. Each figure was re-measured when a measured module changed, never carried forward.
+
+A note on the figures: the same revision measured elsewhere can differ in the denominator (a different
+tracer pass over the same files). This log records the run made in a clean worktree at the named sha, with
+`rentguard.mcp_server.__file__` verified inside that worktree.
 
 Notes, all measured:
 
 - **The coverage ratchet caught a regression and then closed it.** At `f158396`, with the floor at 0.98
   (raised at `e3fb62a` when the measurement was 98.4%), the total was 2,336 / 2,384 = 97.99% — one line
   short, so `tools/coverage.py` exited 1. The floor was **not** lowered: it was flagged as the open gate,
-  `7febd07` covered the new pull and rate branches (98.4%, exit 0), and `310f449` holds 98.1% with exit 0.
+  `7febd07` covered the new pull and rate branches (98.4%, exit 0), and `310f449`, `721436a` and `eef6bdb`
+  all hold or improve on it.
+- **The night's five fixes, each red-first with its test and an independent attack.** The guard's idle
+  arithmetic (`f28b2dd`, attacked by `c59d6a8`): elapsed watch time is not idle time, a sampled busy GPU
+  forces idle to zero, the caller's counter is bounded by the pod's age, and unknown uptime is not a
+  reason to stop. An unmatched pull pattern is a finding (`a1848ef`), with the match tested by `fnmatch`
+  rather than a prefix (`5072b0e`). `up` may not let a recorded instance outvote the config's cloud and
+  card (`c1135e1`) — it refuses with exit 2 and records a `--force` override. An empty archive is a
+  failure, not zero files (`5072b0e`), and a partial pull keeps what it got while naming the gap, with the
+  lost-artefact sentence naming patterns (`eef6bdb`, attacked by `fec0305`).
 - **The 310f449/03dd52d work, all with tests in the tree.** `mcp_server` returns a `run`'s stdout/stderr
   in its result and reserves the real fd 1 for the duration of every tool call; the known-hosts null
   device is the local platform's, substituted by the CLI; `doctor` and the stop path read the machine's
@@ -483,7 +496,7 @@ Notes, all measured:
   its Test and Coverage steps, and it used to fail two `tests/test_cli_branches.py` tests: `248 passed /
   2 failed` with it set, `250 passed / 0 failed` without it, measured at `6f31c27` and again at
   `458e128`. The fix pins the provider inside those two tests rather than changing the CI step, and the
-  suite is now 355 / 0 either way.
+  suite is now 398 / 0 either way.
 - **A stale `.rentguard-tmp` makes `test_ledger_paths.py` fail** (`PermissionError` creating a
   `runs.jsonl.lock` inside it, 16 tests in the main checkout). Nothing is wrong with the ledger: a fresh
   worktree runs that file green. Delete `.rentguard-tmp` in the checkout if the suite goes red there.

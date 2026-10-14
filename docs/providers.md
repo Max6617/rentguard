@@ -76,9 +76,10 @@ tells the caller which case it holds, so the artefact logic never has to know wh
 talking to.
 
 **The proxy route is implemented but unproven on hardware, and it currently fails.** Defect 9 is open:
-the PTY opens, and the command still does not execute and the pull reads prompt text back. The code and
-its tests are in place; the behaviour on a real community pod is not. Treat `ssh_requires_pty` as the
-contract it is, not as a working route.
+the PTY opens, and the command still does not execute and the pull reads prompt text back. The session
+transport is being built from **scripted transcripts** rather than a real community pod, which is exactly
+why its tests pass while the route is not usable. Treat `ssh_requires_pty` as the contract it is, not as
+a working route.
 
 ## How a provider is selected
 

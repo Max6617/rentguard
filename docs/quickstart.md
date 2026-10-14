@@ -146,6 +146,20 @@ error: $5.24 already recorded (including the open run's accrued cost) against a 
 
 Exit code 2. `--force` (or a deliberately higher `--cap`) is the way past it.
 
+`up` also refuses to reuse or resume a recorded instance that contradicts the config — a different cloud
+tier, or a card that is not in `gpu_preference`:
+
+```console
+$ rentguard up --purpose "baseline"
+error: the recorded instance is not what this config asks for, so it will not be started:
+  gpu: the config asks NVIDIA GeForce RTX 4090, this instance is 'NVIDIA GeForce RTX 3080 Ti'
+  terminate it (`rentguard down`) and rent the config's card, or pass --force to start it anyway — the override is recorded
+```
+
+Exit code 2. The config is the promise, and a substitution that nobody chose is how a window gets spent on
+a card you did not ask for. `--force` overrides it, and the override is written into the state file as
+well as printed, so it is visible after the fact.
+
 ## 5. Start the guard
 
 In a second terminal:
