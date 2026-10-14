@@ -224,16 +224,16 @@ def _ssh_argv(cfg: Config, provider: Provider, pod: dict) -> tuple[list[str], st
     """The ssh command line for this instance.
 
     Access is a provider method, not a RunPod static: a second provider may reach its machines by a
-    different route entirely, and the caller must not have to know which one it is holding. A
-    provider that does not implement the interface falls back to the RunPod shape, which is the
-    payload every provider is required to return anyway.
+    different route entirely, and the caller must not have to know which one it is holding.
+    ``ssh_argv`` is part of the interface every provider implements, so it is called directly.
+
+    There used to be a fallback here for "a provider that does not implement the interface", and it
+    called ``RunPod.ssh_args`` — a method that no longer exists. It would have raised AttributeError
+    on the one path it was written to protect, and it was unreachable in practice because the base
+    class defines ``ssh_argv``. Dead and broken: deleted rather than covered.
     """
     key = Path(cfg.ssh_key) if cfg.ssh_key else None
-    access = getattr(provider, "ssh_argv", None)
-    if access is None:
-        args, target = RunPod.ssh_args(pod, key)
-    else:
-        args, target = access(pod, key)
+    args, target = provider.ssh_argv(pod, key)
     args = [_ssh(a) for a in args]
     args = [cfg.ssh_binary, *args]
     # ssh wants the port before the target, which the provider has already arranged.
@@ -747,19 +747,12 @@ def cmd_up(args) -> int:
                  cap_usd=cfg.budget.cap_usd)
             return 2
 
+        # An open row whose instance has vanished is still money, and it is already counted: the
+        # check above adds `ledger.live_usd()` to the total, so `cap-reached` fires for a vanished
+        # instance exactly as it does for a visible one. There used to be a second check here for
+        # the vanished case; it could never be reached, because `already >= cap` implies it. Dead
+        # code, deleted rather than covered.
         open_run = ledger.open_run()
-        # An open row whose instance has vanished still represents money. Renting on top of it is
-        # how a second bill appears, so the spend on that row is priced from its start time and
-        # checked against the cap before anything is created.
-        if open_run is not None and open_run.get("instance_id"):
-            hidden = ledger.live_usd()
-            if hidden >= cfg.budget.cap_usd and not args.force:
-                note(f"error: run {open_run.get('run_id')} has already accrued ${hidden:.2f} "
-                      f"against a ${cfg.budget.cap_usd:.2f} cap, and its instance is not visible. "
-                      f"Close it with `rentguard down` first.")
-                emit(action="refused", reason="cap-reached-open-run",
-                     open_run=_open_run_dict(ledger))
-                return 2
 
         pod = _pod(provider, cfg)
 

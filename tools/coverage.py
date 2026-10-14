@@ -27,7 +27,7 @@ from trace import _find_executable_linenos
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FLOOR = 0.90  # measured 90.9% on 2026-10-14 after the config-path tests; ratchet only upwards
+DEFAULT_FLOOR = 0.96  # measured 96.1% on 2026-10-14 after the cli-path tests (target 94% met); ratchet only upwards
 TARGET = 0.94
 
 
