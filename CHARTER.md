@@ -27,41 +27,55 @@ runner; it starts machines and keeps the receipts.
 
 ## Requirements
 
+Re-measured at `74b9f7a` (clean worktree, 189 passed / 0 failed, 45 subtests; coverage by
+`tools/coverage.py`).
+
 | # | requirement | enforced-by | checked-by | state |
 |---|---|---|---|---|
 | R1 | CLI surface complete — ten commands | code: the parser | — | **met** |
-| R2 | MCP surface complete | — | — | **NOT MET** — no `watch`, no `init` |
-| R3 | Money-critical paths hardened with tests | 74 tests, fake provider | suite run | **met** (logic only) |
-| R4 | The guard proven end to end on a real machine | — | — | **NOT MET** — `watch` has never run against a rented pod |
-| R5 | End-to-end proof on a real rented GPU | 3 rentals, $0.0264 | ledger reconciled by hand | **met** |
-| R6 | Documentation | — | read through | **partial** — README omits `adopt` |
+| R2 | MCP surface complete | — | — | **met** — eleven tools, incl. `watch`, `watch_once`, `init` (`590c58e`) |
+| R3 | Money-critical paths hardened with tests | 189 tests at `74b9f7a`, fake provider | the clean-worktree suite run | **met** (logic only) |
+| R4 | The guard proven end to end on a real machine | — | — | **NOT MET** — `watch` has never run against a rented pod; the three M2 rentals never armed it |
+| R5 | End-to-end proof on a real rented GPU | 3 rentals, $0.0264 | ledger reconciled by hand | **met** — incl. the real A4000→4090 fallback |
+| R6 | Documentation | — | read through | **met** — README covers `adopt`; the MCP page documents all eleven tools |
 | R7 | Never reports an account balance | code: the provider interface has no such method | — | **met** |
 | R8 | Never publishes anything | — | — | **wish** — discipline, not a control |
 | R9 | The cap protects the user | only while `watch` runs | — | **wish** — see below |
-| R10 | 94% of the code and 100% of the features exercised | `tools/coverage.py`, ratchet floor in CI | the CI run | **NOT MET** — 74.8% measured 2026-10-14, `runpod.py` at 21.0% |
+| R10 | 94% of the code and 100% of the features exercised | `tools/coverage.py`, ratchet floor 89% | the clean-worktree run | **half met** — 100% of the features green (feature matrix: 10 commands, 11 MCP tools); 90.2% of the code, 94% still to come |
 
 ## The wishes
 
 **W1 — the cap only exists while the guard is running.** `watch` is a foreground process that nothing
 starts. If it is not running, there is no cap: the instance bills until someone notices. This is
-precisely the failure the tool was built for, and the 16.4-hour pod it caught was exactly that. In the
-MCP workflow it is worse — a bot can rent with no way to arm the guard at all (R2).
+precisely the failure the tool was built for, and the 16.4-hour pod it caught was exactly that. R2 is
+now closed — a Bot can arm a bounded guard over MCP (`watch_once`, `watch`), and every return states
+whether protection is still armed — but a persistent guard would need a detached daemon, which was
+deliberately not built. A bounded, honest guard over a supervisor nobody watches.
 
 **W2 — "do not publish" is a promise, not a lock.** Nothing in the repository prevents a push to a
 public remote. Given R8 matters to the user, "no remote configured" is a fact today and could stop
 being one silently.
 
-**W3 — network volumes are entirely unexercised.** A user who sets one is running untested code.
+**W3 — the network-volume path is unexercised, and about to become unexercisable.** The account's
+only volume (`small-agents-vol`, 150 GB, US-IL-1, $10.50/month) was found unattached and billing
+while no pod ran, and the user has instructed its deletion. With nothing left to attach, the
+`[runpod].volume_id` path cannot be exercised on this account; the transport seam is unit-covered
+(`da51005`). Recorded as dropped for lack of a volume, not as untested.
 
-**W4 — the guard is not merely unproven; it is wrong.** A paid run stopped a pod that was **32 seconds
-old**, reporting "idle for 30 min (limit 5 min)": the provider's per-GPU idle seconds are compared
-against the idle window without clamping to the machine's own uptime. So the requirement the tool
-exists for — a forgotten machine stops itself — can currently destroy a working one. This is what
-R4's wish looked like once it was tested, and it is why R4 is a defect rather than a gap.
+**W4 — the guard was not merely unproven; it was wrong.** A paid run stopped a pod that was **32
+seconds old**, reporting "idle for 30 min (limit 5 min)": the provider's per-GPU idle seconds were
+compared against the idle window without clamping to the machine's own uptime, so the requirement
+the tool exists for — a forgotten machine stops itself — could destroy a working one. This is what
+R4's wish looked like once it was tested, and it is why R4 is a defect rather than a gap. **Fixed** at
+`d5fdaea`: provider idle is clamped to the pod's own uptime and ignored when uptime is unknown, with
+a control test that a genuinely idle old pod is still stopped. R4 stays open for a different reason —
+the guard has still never run against a rented pod.
 
-**The coverage number is a floor, and the guard defect proves it.** Those lines all executed. 74.8%
-of the code can be reached while the behaviour is wrong, so R10's first half is the cheap half; the
-feature matrix — command × provider × platform — is where the value is.
+**The coverage number is a floor, and the guard defect proves it.** Every line of the guard defect
+executed. 74.8% of the code could be reached while the behaviour was wrong, so R10's first half is
+the cheap half; the feature matrix — command × provider × platform — is where the value is. At
+`74b9f7a` the floor stands at 90.2%, and all four fixed money defects sit in lines that were already
+covered.
 
 ## Permissions
 
