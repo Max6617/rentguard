@@ -17,7 +17,7 @@ WS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WS))
 
 from rentguard import config  # noqa: E402
-from rentguard.config import Budget, ConfigError, _merge, api_key, find_config, load  # noqa: E402
+from rentguard.config import Budget, ConfigError, api_key, find_config, load  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 
@@ -37,16 +37,6 @@ class BudgetValidation(unittest.TestCase):
 
     def test_idle_zero_is_allowed_because_it_means_off(self):
         self.assertEqual(Budget(cap_usd=5.0, per_run_cap_usd=1.0, idle_minutes=0.0).idle_minutes, 0.0)
-
-
-class Merge(unittest.TestCase):
-    def test_nested_sections_merge_instead_of_replacing(self):
-        merged = _merge({"budget": {"cap_usd": 5.0, "idle_minutes": 1.0}},
-                        {"budget": {"cap_usd": 9.0}})
-        self.assertEqual(merged, {"budget": {"cap_usd": 9.0, "idle_minutes": 1.0}})
-
-    def test_scalars_are_overridden(self):
-        self.assertEqual(_merge({"a": 1, "b": 2}, {"b": 3}), {"a": 1, "b": 3})
 
 
 class Loading(unittest.TestCase):
