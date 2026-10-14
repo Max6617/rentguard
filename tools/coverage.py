@@ -27,17 +27,24 @@ from trace import _find_executable_linenos
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FLOOR = 0.96  # measured 96.1% on 2026-10-14 after the cli-path tests (target 94% met); ratchet only upwards
+DEFAULT_FLOOR = 0.97  # measured 97.5% on 2026-10-14 after the fake-fidelity tests; ratchet only upwards
 TARGET = 0.94
 
 
-def measure(argv: list[str]) -> dict[str, tuple[int, int]]:
+def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
     executed: dict[str, set[int]] = {}
+    seen: set[str] = set()
 
     def tracer(frame, event, arg):
         if event == "line":
             filename = frame.f_code.co_filename
             path = Path(filename)
+            if (path.suffix == ".py" and path.parent.name == REPO.name
+                    and not path.name.startswith("__init__")):
+                # a module body of ours, wherever it resolved from: this is what the empty-rows
+                # diagnosis reports, because a checkout whose package resolved elsewhere
+                # measures nothing rather than failing.
+                seen.add(str(path.parent))
             if (path.suffix == ".py" and path.parent == REPO
                     and not path.name.startswith("__init__")):
                 executed.setdefault(str(path), set()).add(frame.f_lineno)
@@ -57,7 +64,29 @@ def measure(argv: list[str]) -> dict[str, tuple[int, int]]:
             continue
         hit = len(executable & executed.get(str(path), set()))
         result[path.name] = (hit, len(executable))
-    return result
+
+    total_hit = sum(hit for hit, _ in result.values())
+    if result and total_hit == 0:
+        # Every module present, nothing hit: that is never a legitimate result of running the
+        # suite, it is a checkout whose package resolved somewhere the tracer was not watching.
+        # Reporting it as 0.0% would let a hand-set floor turn a broken measurement into a pass.
+        _diagnose_unmeasured(seen)
+        return 2
+    return result, seen
+
+
+def _diagnose_unmeasured(seen: set[str]) -> None:
+    print("no coverage measured — the tracer reached no module body of ours in this checkout.")
+    print(f"  expected the package here: {REPO}")
+    if seen:
+        print("  the tracer did reach a package of this name, but elsewhere:")
+        for where in sorted(seen):
+            print(f"    {where}")
+        print("  that is the checkout-placement trap: the tests resolve `rentguard` through the")
+        print("  *parent* directory, so a worktree must be created as `<scratch>/rentguard`.")
+    else:
+        print("  the tracer reached no package of this name at all — did the suite import it?")
+    print("  this is a measurement failure, not a coverage result.")
 
 
 def main() -> int:
@@ -69,9 +98,9 @@ def main() -> int:
     parser.add_argument("pytest_args", nargs="*", default=["tests", "-q", "-p", "no:cacheprovider"])
     args = parser.parse_args()
 
-    rows = measure(args.pytest_args or ["tests", "-q", "-p", "no:cacheprovider"])
+    rows, seen = measure(args.pytest_args or ["tests", "-q", "-p", "no:cacheprovider"])
     if not rows:
-        print("no modules measured — is the working directory the repository root?")
+        _diagnose_unmeasured(seen)
         return 2
 
     print(f"\n{'module':<22}{'lines':>7}{'hit':>7}{'cover':>9}")

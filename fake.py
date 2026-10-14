@@ -31,7 +31,6 @@ and from a test:
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import itertools
 import json
 import threading
@@ -49,14 +48,6 @@ class Artifact:
 
     path: str
     data: bytes
-
-    @property
-    def size(self) -> int:
-        return len(self.data)
-
-    @property
-    def sha256(self) -> str:
-        return hashlib.sha256(self.data).hexdigest()
 
 
 class ArtifactStore(dict):
@@ -226,6 +217,10 @@ class FakeProvider(Provider):
         )
         instance.clock_offset = instance.uptime_seconds
         self.instances[instance_id] = instance
+        # A machine that appears on the account is a mutation like any other, so it persists. Without
+        # this, `add` on a state-backed fake vanished at the next construction — the one helper that
+        # did not honour the fake's own "written on every mutation" contract.
+        self.save()
         return instance
 
     def advance(self, seconds: float, instance_id: str | None = None) -> None:
@@ -352,10 +347,9 @@ class FakeProvider(Provider):
                     instance.ports = {"22": "tcp", "8888": "http"}
             self.save()
             pod = instance.payload(now)
-        if not self.is_alive(pod):
-            raise ProviderError(
-                f"instance {instance_id} not usable (uptime={pod['runtime'].get('uptime')}, "
-                f"ports={'set' if pod['runtime'].get('ports') else 'NULL'})")
+        # The fix-up above leaves the machine RUNNING with a positive uptime and a published port,
+        # so it is usable by construction. A second `is_alive` re-check used to sit here; it could
+        # never fire within this class, which is why it was uncovered — deleted rather than covered.
         return pod
 
     def create(self, *, gpu_id: str, image: str, container_disk_gb: int, cloud: str,
