@@ -121,6 +121,56 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "rentguard_watch_once",
+        "description": (
+            "Arm protection for one poll: take a single reading and return the guard's decision "
+            "(whether the machine should stop, and why) plus whether a guard was ALREADY armed "
+            "before this call. A one-shot poll does not keep a guard alive — protection is armed "
+            "only while a watch is running — so this is how an agent samples a machine it is "
+            "driving itself. Read-only unless the single reading says to stop."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "interval": {"type": "number",
+                             "description": "seconds between polls, used to judge whether a "
+                                            "heartbeat is fresh; default 60"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "rentguard_watch",
+        "description": (
+            "Run the guard for a BOUNDED time and return the snapshot and any stop it performed. "
+            "This is how a Bot arms the cap without a human terminal. It ends when its budget is "
+            "spent, and protection is then no longer armed — the result says so, so a caller never "
+            "believes a guard is still running."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_iterations": {"type": "integer",
+                                   "description": "poll at most this many times; omit for one poll"},
+                "interval": {"type": "number", "description": "seconds between polls; default 60"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "rentguard_init",
+        "description": (
+            "Write a commented rentguard.toml from the real defaults, so a new project does not "
+            "start from an empty file. Use `print` to preview it without writing."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "where to write; default ./rentguard.toml"},
+                "force": {"type": "boolean", "description": "overwrite an existing file"},
+                "print": {"type": "boolean", "description": "print the template instead of writing"},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -181,6 +231,18 @@ def dispatch(name: str, arguments: dict) -> tuple[str, dict | None, bool]:
         text, structured, code = _call(cli.cmd_adopt, instance_id=arguments.get("instance_id"),
                                        purpose=arguments.get("purpose"),
                                        uptime_hours=arguments.get("uptime_hours"))
+    elif name == "rentguard_watch_once":
+        text, structured, code = _call(cli.cmd_watch, once=True,
+                                       interval=arguments.get("interval") or 60.0,
+                                       max_iterations=None)
+    elif name == "rentguard_watch":
+        text, structured, code = _call(cli.cmd_watch, once=False,
+                                       interval=arguments.get("interval") or 60.0,
+                                       max_iterations=arguments.get("max_iterations") or 1)
+    elif name == "rentguard_init":
+        text, structured, code = _call(cli.cmd_init, path=arguments.get("path"),
+                                       force=bool(arguments.get("force")),
+                                       **{"print": bool(arguments.get("print"))})
     else:
         return f"error: unknown tool {name}", None, True
     if code not in (0, None):

@@ -951,19 +951,36 @@ def cmd_watch(args) -> int:
     provider = _provider(cfg)
     pod = _pod(provider, cfg)
     interval = getattr(args, "interval", 60.0)
+    once = bool(getattr(args, "once", False))
+    max_iterations = 1 if once else getattr(args, "max_iterations", None)
     with json_report(args):
-        emit(command="watch", interval_seconds=interval)
+        emit(command="watch", interval_seconds=interval, once=once,
+             max_iterations=max_iterations)
+        # The armed state is read *before* this call polls. A watch writes a heartbeat of its own, so
+        # asking afterwards would always report "armed" about a guard that has already returned —
+        # the exact question an agent needs answered honestly.
+        age_before = heartbeat_age_minutes(cfg.heartbeat_path)
+        armed_before = age_before is not None and age_before <= max(2 * interval / 60.0, 2.0)
+        emit(armed_before=armed_before, heartbeat_age_minutes=age_before)
         if pod is None:
             note("no instance recorded; nothing to watch")
-            emit(reason="no-instance")
+            emit(reason="no-instance", armed=False)
             return 1
         note(f"watching {pod.get('id')} — stop at ${cfg.budget.per_run_cap_usd:.2f} this run, "
               f"${cfg.budget.cap_usd:.2f} total, {cfg.budget.max_hours_per_run:.1f} h, "
               f"or {cfg.budget.idle_minutes:.0f} min idle")
         reason = guard_watch(cfg, provider, ledger, instance_id=pod["id"], interval=interval,
-                    log=note)
+                             log=note, max_iterations=max_iterations)
+        stopped = reason not in ("guard-iteration-limit", "instance gone")
         note(f"guard finished: {reason}")
-        emit(reason=reason, instance_id=pod.get("id"),
+        if stopped:
+            note(f"the guard stopped the machine: {reason}")
+        else:
+            # A bounded watch arms protection only while it runs. Say what is true on return.
+            note("protection : NOT armed now — a watch stops when it returns, so run it again (or "
+                 "keep `rentguard watch` running in a terminal) or the machine is unguarded")
+        emit(reason=reason, instance_id=pod.get("id"), stopped=stopped, armed=False,
+             armed_before=armed_before,
              total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
     return 0
 
@@ -991,11 +1008,23 @@ def cmd_adopt(args) -> int:
             return 1
         runtime = pod.get("runtime") or {}
         uptime = float(runtime.get("uptime") or 0.0)
+        status = str(pod.get("status") or "").upper()
         if args.uptime_hours is not None:
             # For recording an instance after it was stopped, when the provider no
             # longer reports how long it ran. The source of the number is printed.
             uptime = float(args.uptime_hours) * 3600.0
             note(f"note           : uptime given as {args.uptime_hours} h, not read from the provider")
+        elif uptime <= 0 and status in ("EXITED", "TERMINATED"):
+            # No silent zero. An instance that has stopped reports uptime 0, so a row opened now
+            # would start the clock at this moment and record ≈$0 for a machine that really ran.
+            # A row that lies quietly is worse than a refusal that asks for the number.
+            note(f"error: instance {pod.get('id')} is {status} and the provider reports no uptime, "
+                 f"so what it cost cannot be recovered from it. Re-run with `--uptime-hours <hours>` "
+                 f"(from the provider console or your own notes). Opening a row at $0 for a machine "
+                 f"that ran would be a quieter lie than opening none.")
+            emit(adopted=False, reason="uptime-unrecoverable", instance_id=pod.get("id"),
+                 status=status)
+            return 1
         started = now_utc() - timedelta(seconds=uptime)
         run = ledger.open(
             purpose=args.purpose or "(adopted, purpose unstated)",
@@ -1271,6 +1300,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("watch", help="foreground supervisor: stop at the cap or on idle")
     sp.add_argument("--interval", type=float, default=60.0)
+    sp.add_argument("--once", action="store_true",
+                    help="take one reading and report the decision; does not keep a guard alive")
+    sp.add_argument("--max-iterations", type=int, default=None,
+                    help="bounded: stop after N polls instead of running until the cap or a stop")
     structured(sp)
     sp.set_defaults(func=cmd_watch)
 
