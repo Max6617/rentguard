@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -21,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _scratch import scratch_dir  # noqa: E402 - the suite's tempfile-free scratch helper
 from rentguard.ledger import JobLog, Ledger, LedgerLocked  # noqa: E402
 
 T0 = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -28,9 +28,12 @@ T0 = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
 
 class LedgerCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        # Workspace-local scratch, not `tempfile`: the sandbox refuses the chmod a mode-0700 temp
+        # directory needs, so `tempfile.TemporaryDirectory` fails here *after* the assertions — a
+        # green test reported as an error. Forge measured 16 such failures against the first version
+        # of this file, which passed in my environment. Environment-dependent tests are worse than
+        # none, so this uses the same helper as the rest of the suite.
+        self.root = scratch_dir(self)
         self.ledger = Ledger(self.root / "runs.jsonl")
 
     def opened(self, rate=2.0, hours_ago=1.0, purpose="a run"):
