@@ -1768,6 +1768,84 @@ def _unmatched_patterns(patterns: list[str], names: list[str]) -> list[str]:
     return unmatched
 
 
+#: The marks a framed PTY pull puts around its body. A PTY is a text channel that folds stderr into
+#: stdout, so the body's extent is *stated* — a header with its character count, the body, a
+#: terminator — instead of being inferred from the end of the stream.
+FRAME_HEADER = "RENTGUARD-ARCHIVE"
+FRAME_END = "RENTGUARD-END"
+
+
+def _pty_pull_command(remote_dir: str, patterns: list[str]) -> str:
+    """The remote command for a PTY route: the archive inside a byte-counted, terminated frame.
+
+    POSIX shell only, and the tar status still travels by ``rc=$?`` rather than through a pipe. The
+    body is base64 with no newlines (``tr -d '\\n'``), so the pty's LF→CRLF rewriting cannot touch it
+    and the header's count is the body's actual length.
+    """
+    members = " ".join(patterns)
+    tmp = "/tmp/.rentguard-pull-$$.tar.gz"
+    b64 = "/tmp/.rentguard-pull-$$.b64"
+    return (f"cd {remote_dir} && tar czf {tmp} {members}; rc=$?; "
+            f"if [ $rc -eq 0 ]; then base64 {tmp} | tr -d '\\n' > {b64}; "
+            f"printf '{FRAME_HEADER} %s\\n' \"$(wc -c < {b64})\"; cat {b64}; "
+            f"printf '\\n{FRAME_END}\\n'; fi; rm -f {tmp} {b64}; exit $rc")
+
+
+def _parse_archive_frame(data: bytes) -> tuple[int, bytes]:
+    """``(declared characters, body)`` from a framed session, or a named ``ValueError``.
+
+    The failure shapes this repo has documents for all land here: a session that returned prompt text
+    instead of an archive (no header — measured: a 21-byte pull of exactly that), a transfer that
+    stopped early (no terminator), and a body that does not match its own header's count. Each one
+    names what is wrong rather than letting a decoder guess at whatever arrived.
+    """
+    text = data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    declared: int | None = None
+    body_at: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith(FRAME_HEADER + " "):
+            count = line[len(FRAME_HEADER) + 1:].strip()
+            if not count.isdigit():
+                raise ValueError(f"the frame header is not a byte count: {line!r}")
+            declared, body_at = int(count), index + 1
+            break
+    if declared is None or body_at is None:
+        raise ValueError(f"no {FRAME_HEADER} header: the session returned {len(data)} bytes that are "
+                         f"not a framed archive (prompt text, a banner, or a refusal)")
+    if FRAME_END not in text:
+        raise ValueError(f"the frame has no {FRAME_END} terminator: the transfer stopped early")
+    body = "".join("".join(lines[body_at:]).split(FRAME_END, 1)[0].split())
+    if len(body) != declared:
+        raise ValueError(f"the frame's body is {len(body)} characters and the header declared "
+                         f"{declared}: the transfer is incomplete")
+    return declared, body.encode("ascii", "replace")
+
+
+def _decode_framed_archive(archive: Path) -> Path:
+    """Decode a framed body to the archive file, checking the frame's arithmetic before extracting.
+
+    The order matters: the declared count is checked against the body that arrived, the body against
+    strict base64, the decoded length against what the count implies, and the result against the gzip
+    magic — all before anything is written out as an archive. "Ends inside a base64 group" becomes a
+    named framing failure, and an empty archive can never read as a successful empty result.
+    """
+    declared, body = _parse_archive_frame(archive.read_bytes())
+    try:
+        data = base64.b64decode(body, validate=True)
+    except binascii.Error as exc:
+        raise ValueError(f"the frame body is not base64 ({exc})") from exc
+    expected = declared // 4 * 3 - body.count(b"=")
+    if len(data) != expected:
+        raise ValueError(f"the header declared {declared} characters, which decode to {expected} "
+                         f"bytes; {len(data)} bytes arrived")
+    if data[:2] != b"\x1f\x8b":
+        raise ValueError(f"the decoded body is not a gzip stream (it starts {data[:2]!r})")
+    decoded = archive.with_name(archive.name + ".decoded")
+    decoded.write_bytes(data)
+    return decoded
+
+
 def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> str:
     """The command the remote shell runs to hand the archive back.
 
@@ -1787,39 +1865,7 @@ def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> 
     members = " ".join(patterns)
     if not pty:
         return f"cd {remote_dir} && tar czf - {members}"
-    tmp = "/tmp/.rentguard-pull-$$.tar.gz"
-    return (f"cd {remote_dir} && tar czf {tmp} {members}; rc=$?; "
-            f"if [ $rc -eq 0 ]; then base64 {tmp}; fi; rm -f {tmp}; exit $rc")
-
-
-def _decode_pty_stream(archive: Path) -> Path:
-    """Turn the base64 text a PTY session delivered back into the bytes it encoded.
-
-    Decoded in blocks rather than in one read: the archive may be far larger than is comfortable to
-    hold in memory, and this is the path a trained model's results come down. Whitespace is dropped
-    (a PTY turns every LF into CRLF, and base64 wraps its own lines), and any other non-base64
-    character is an error rather than something to skip — quietly dropping characters out of an
-    archive is how a corrupt stream decodes into a partial one that looks fine.
-    """
-    decoded = archive.with_name(archive.name + ".decoded")
-    remainder = b""
-    with archive.open("rb") as src, decoded.open("wb") as dst:
-        while True:
-            block = src.read(1 << 16)
-            if not block:
-                break
-            buffer = remainder + b"".join(block.split())
-            whole = len(buffer) - (len(buffer) % 4)
-            if whole:
-                try:
-                    dst.write(base64.b64decode(buffer[:whole], validate=True))
-                except binascii.Error as exc:
-                    raise ValueError(f"the session's output is not base64 ({exc})") from exc
-            remainder = buffer[whole:]
-    if remainder:
-        raise ValueError(f"the session's output ends inside a base64 group ({len(remainder)} "
-                         f"characters)")
-    return decoded
+    return _pty_pull_command(remote_dir, patterns)
 
 
 def cmd_pull(args) -> int:
@@ -1875,15 +1921,18 @@ def cmd_pull(args) -> int:
                      timeout_s=timeout)
                 return 1
             if pty:
-                # What landed in the file is base64 text, not the archive: decode it back. Every
-                # failure here is reported, never raised, because `down` pulls through this function
-                # and an exception between "pull" and "stop" leaves a machine billing.
+                # The frame is parsed and checked before anything is called an archive: the header's
+                # count against the body, the body against strict base64, the decoded length against
+                # what the count implies, and the result against the gzip magic. Every failure is
+                # named rather than raised, because `down` pulls through this function.
                 try:
-                    archive = _decode_pty_stream(archive)
+                    archive = _decode_framed_archive(archive)
                 except ValueError as exc:
-                    note(f"pull failed: the stream from {pod.get('id')} is not an archive "
-                         f"({archive.stat().st_size} bytes): {exc}")
-                    emit(pulled=False, reason="stream-not-base64", exit_code=code, files=[])
+                    _pull_summary(pulled=False, reason="frame-invalid", files=[],
+                                  unmatched_patterns=list(patterns))
+                    note(f"pull failed: the framed stream from {pod.get('id')} is not usable — {exc}")
+                    emit(pulled=False, reason="frame-invalid", exit_code=code, files=[],
+                         detail=str(exc))
                     return 1
             dest.mkdir(parents=True, exist_ok=True)
             try:

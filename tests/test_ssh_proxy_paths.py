@@ -103,7 +103,9 @@ class SshTransport:
             if self.body is not None:
                 self._bytes(sink, self.body)
             elif "base64" in remote:
-                self._text(sink, base64.b64encode(self.archive).decode() + "\n")
+                # The remote command frames the body now: header, body, terminator.
+                payload = base64.b64encode(self.archive).decode()
+                self._text(sink, f"{cli.FRAME_HEADER} {len(payload)}\n{payload}\n{cli.FRAME_END}\n")
             else:
                 self._bytes(sink, self.archive)
         return self if self.popen_mode else self.exit_code
@@ -279,7 +281,7 @@ class PullTest(ProxyCase):
         code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
 
         self.assertNotEqual(code, 0, f"a non-archive stream was reported as a pulled result:\n{out}")
-        self.assertIn("is not an archive", out, f"the failure did not name the stream:\n{out}")
+        self.assertIn("not a framed archive", out, f"the failure did not name the stream:\n{out}")
         self.assertNotIn("Traceback", out)
 
     def test_a_direct_pull_still_streams_the_tar(self):
@@ -323,7 +325,7 @@ class PullTest(ProxyCase):
         code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
 
         self.assertNotEqual(code, 0, f"a non-archive was reported as a pulled result:\n{out}")
-        self.assertIn("is not an archive", out, f"the failure did not name the stream:\n{out}")
+        self.assertIn("not a framed archive", out, f"the failure did not name the stream:\n{out}")
         self.assertNotIn("Traceback", out)
 
     def test_a_truncated_base64_stream_is_reported(self):
@@ -338,7 +340,7 @@ class PullTest(ProxyCase):
         code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
 
         self.assertNotEqual(code, 0, f"a truncated stream was reported as success:\n{out}")
-        self.assertIn("is not an archive", out, f"the failure did not name the stream:\n{out}")
+        self.assertIn("not a framed archive", out, f"the failure did not name the stream:\n{out}")
 
 
 class RunTest(ProxyCase):
