@@ -94,7 +94,14 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "rentguard_pull",
-        "description": "Pull the artefacts configured in [artefacts].pull from the instance now.",
+        "description": (
+            "Pull the artefacts configured in [artefacts].pull from the instance now. The result "
+            "carries `files`, and `unmatched_patterns` for configured patterns that matched nothing "
+            "— attributed by each pattern's literal prefix, which is a heuristic and not full glob "
+            "semantics, so it may over-claim a match and never mis-names a pattern that did match. "
+            "An unmatched pattern is a finding, not a failure: the members that did match are "
+            "extracted and the pull succeeds, with `tar_exit_code` recording the remote tar's own "
+            "status."),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {

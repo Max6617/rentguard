@@ -871,7 +871,34 @@ def cmd_up(args) -> int:
         pod = _pod(provider, cfg)
 
         if pod is not None:
+            state = _read_state(cfg)
+            mismatches = _config_mismatch(cfg, pod, state)
             status = pod.get("status")
+            starting = status in ("EXITED", "ERROR")
+            forced = bool(getattr(args, "force", False))
+            if mismatches:
+                if starting and not forced:
+                    note("error: the recorded instance is not what this config asks for, so it will "
+                         "not be started:")
+                    for line in mismatches:
+                        note(f"  {line}")
+                    note("  terminate it (`rentguard down`) and rent the config's card, or pass "
+                         "--force to start it anyway — the override is recorded")
+                    emit(action="refused", reason="recorded-instance-off-config",
+                         instance={"id": pod.get("id"), "status": status},
+                         mismatches=mismatches)
+                    return 2
+                overridden = bool(forced and starting)
+                note(f"warning: instance {pod['id']} does not match this config"
+                     + (" and --force overrides that" if overridden else "") + ":")
+                for line in mismatches:
+                    note(f"  {line}")
+                # Recorded, not only printed: the failure this defect is about was a silent action,
+                # and a warning on stdout is invisible to whoever reads the state afterwards.
+                state["config_override"] = {"at": iso(now_utc()), "instance_id": pod.get("id"),
+                                            "forced": overridden, "mismatches": mismatches}
+                _write_state(cfg, state)
+                emit(config_override={"forced": overridden, "mismatches": mismatches})
             if status in ("EXITED", "ERROR"):
                 if getattr(args, "dry_run", False):
                     note(f"dry run: would resume instance {pod['id']} (was {status})")
@@ -995,8 +1022,11 @@ def cmd_up(args) -> int:
                                                     "status": pod.get("status")}, stopped=True)
                 return 1
             state = _read_state(cfg)
+            # A new machine is not an override of anything, and the cloud is recorded so a later
+            # `up` can compare the config against this instance exactly rather than by card alone.
+            state.pop("config_override", None)
             state.update({"instance_id": pod.get("id"), "provider": provider_name(cfg),
-                          "gpu_id": chosen})
+                          "gpu_id": chosen, "cloud": _rp(cfg, "cloud")})
             _write_state(cfg, state)
             note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
             pod = provider.wait_running(pod["id"], log=note)
@@ -1179,6 +1209,29 @@ def _abandon_created(cfg: Config, provider: Provider, ledger: Ledger, pod: dict)
         note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
              f"${row['estimated_usd']}")
     note(f"total spend    : ${ledger.total_usd():.2f}")
+
+
+def _config_mismatch(cfg: Config, pod: dict, state: dict) -> list[str]:
+    """The ways the recorded instance contradicts the config, each naming **both** facts.
+
+    The config is the promise: a cloud tier and a card. A recorded instance may be reused or resumed,
+    but substituting a different one silently is how `up` spent a window on a community 3080 Ti while
+    the config asked for SECURE and an L40S — and then failed to start a stopped L40S at all
+    ("not enough free GPUs on the host machine to start this pod", 2026-10-14). Naming both facts is
+    the point: the defect was that the config was silently outvoted, so the message has to show what
+    was outvoted by what.
+    """
+    reasons: list[str] = []
+    wanted_cloud = str(_rp(cfg, "cloud") or "").upper()
+    recorded_cloud = str(state.get("cloud") or "").upper()
+    if wanted_cloud and recorded_cloud and recorded_cloud != wanted_cloud:
+        reasons.append(f"cloud: the config asks {wanted_cloud}, this instance was rented as "
+                       f"{recorded_cloud}")
+    preference = [str(gpu) for gpu in (_rp(cfg, "gpu_preference") or [])]
+    gpu = (pod.get("gpu") or {}).get("id")
+    if preference and gpu and str(gpu) not in preference:
+        reasons.append(f"gpu: the config asks {', '.join(preference)}, this instance is {gpu!r}")
+    return reasons
 
 
 def _print_access(cfg: Config, provider: Provider, pod: dict) -> None:
