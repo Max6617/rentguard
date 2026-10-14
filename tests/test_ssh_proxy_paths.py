@@ -265,6 +265,35 @@ class PullTest(ProxyCase):
         self.assertNotEqual(code, 0, f"a failed remote tar was reported as success:\n{out}")
         self.assertIn("pull failed", out)
 
+    def test_a_stream_that_decodes_to_something_that_is_not_an_archive_is_reported(self):
+        """Sequence: ssh exits 0 and the body is well-formed base64, but of something that is not a
+        tar archive — a truncated transfer, a proxy that answered in text it happened to encode.
+
+        Effect: a clear failure, not a traceback out of tarfile. The base64 decoder cannot tell an
+        archive from any other bytes; the archive check is the one that can.
+        """
+        transport = SshTransport(body=base64.b64encode(b"this is not a tar archive"))
+
+        code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
+
+        self.assertNotEqual(code, 0, f"a non-archive was reported as a pulled result:\n{out}")
+        self.assertIn("is not an archive", out, f"the failure did not name the stream:\n{out}")
+        self.assertNotIn("Traceback", out)
+
+    def test_a_truncated_base64_stream_is_reported(self):
+        """Sequence: the session's output is base64 that stops in the middle of a group (a dropped
+        connection, a killed transfer).
+
+        Effect: a reported failure. Decoding what arrived and calling it the archive is how a
+        partial file lands in the results directory looking complete.
+        """
+        transport = SshTransport(body=b"QUJD\r\nQQ\r\n")
+
+        code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
+
+        self.assertNotEqual(code, 0, f"a truncated stream was reported as success:\n{out}")
+        self.assertIn("is not an archive", out, f"the failure did not name the stream:\n{out}")
+
 
 class RunTest(ProxyCase):
     """`run` through the proxy: the command has to reach the machine at all."""

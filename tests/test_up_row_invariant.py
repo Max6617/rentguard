@@ -129,6 +129,55 @@ class RowBeforeConfirmation(UpCase):
         self.assertEqual(run.get("rate_usd_per_hour"), 0.19,
                          f"the row kept the catalogue estimate: {run}")
 
+    def test_a_create_that_reports_no_cost_falls_back_to_the_estimate(self):
+        """Sequence: the provider creates the machine but its payload carries no rate at all.
+
+        Effect: the row keeps the catalogue estimate instead of falling to zero. A rate of zero is
+        the quietest way for a rental to stop being counted — its accrued cost and its share of the
+        cap both become nothing — which is worse than a rate that is merely approximate.
+        """
+
+        class Unpriced(FakeProvider):
+            def create(self, **kwargs):
+                pod = super().create(**kwargs)
+                self.instances[pod["id"]].rate_usd_per_hour = 0.0
+                return self.get(pod["id"])
+
+        code, out = self.invoke_up(Unpriced())
+
+        self.assertEqual(code, 0, f"up failed.\noutput:\n{out}")
+        run = self.ledger.open_run()
+        self.assertGreater(run.get("rate_usd_per_hour") or 0.0, 0.0,
+                           f"the row bills at zero: {run}")
+        self.assertEqual(run.get("rate_usd_per_hour"), 0.13,
+                         f"the catalogue estimate was not kept: {run}")
+
+    def test_a_stale_row_is_closed_when_the_live_instance_is_reused(self):
+        """Sequence: the state names a live machine, and an open row names a different one (the
+        machine it was opened for is gone).
+
+        Effect: the stale row is closed with its cost — that money was really spent — and the row
+        that ends up open names the machine that is billing. Refusing instead would leave the live
+        machine untracked and the cap check reading low.
+        """
+        self.write_state({"instance_id": "pod-A"})
+        stale = self.ledger.open(purpose="vanished", provider="fake", instance_id="pod-Z",
+                                 gpu_id="Fake GPU 24GB", rate_usd_per_hour=2.0)
+        fake = FakeProvider()
+        fake.add("pod-A", uptime_seconds=120, rate_usd_per_hour=0.13)
+
+        code, out = self.invoke_up(fake)
+
+        self.assertEqual(code, 0, f"up failed.\noutput:\n{out}")
+        rows = {row["run_id"]: row for row in self.rows()}
+        self.assertTrue(rows[stale["run_id"]].get("stopped_at"),
+                        f"the stale row was left open: {rows[stale['run_id']]}")
+        self.assertFalse(rows[stale["run_id"]].get("voided"),
+                         "a row for a machine that really existed was voided")
+        open_run = self.ledger.open_run()
+        self.assertEqual(open_run.get("instance_id"), "pod-A",
+                         f"the open row does not name the machine that is billing: {open_run}")
+
 
 # ============================================================== the ways it ends
 
