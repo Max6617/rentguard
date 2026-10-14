@@ -94,7 +94,9 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     util = float(gpus[0].get("util") or 0.0) if gpus else None
     mem_util = float(gpus[0].get("memoryUtil") or 0.0) if gpus else None
     open_run = ledger.open_run()
-    uptime_hours = round(float(runtime.get("uptime") or 0) / 3600.0, 4)
+    raw_uptime = runtime.get("uptime")
+    uptime_seconds = float(raw_uptime) if raw_uptime is not None else None
+    uptime_hours = round((uptime_seconds or 0.0) / 3600.0, 4)
 
     if open_run is not None:
         run_usd = ledger.live_usd(at)
@@ -106,7 +108,7 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
         run_usd = round(rate * uptime_hours, 6)
     spent = round(ledger.total_usd() + run_usd, 6)
 
-    provider_idle = _idle_minutes_since_boot(runtime.get("gpus"))
+    provider_idle = _idle_minutes_since_boot(runtime.get("gpus"), uptime_seconds)
     return Snapshot(
         at=iso(at),
         status=str(pod.get("status") or "UNKNOWN"),
@@ -128,14 +130,21 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     )
 
 
-def _idle_minutes_since_boot(gpus) -> float | None:
-    """RunPod reports how long each GPU has been idle since boot; use the busiest one."""
-    if not gpus:
+def _idle_minutes_since_boot(gpus, uptime_seconds: float | None) -> float | None:
+    """How long the busiest GPU has been idle, bounded by how long the pod has existed.
+
+    RunPod reports per-GPU idle time against the **host**, not against the pod, so a machine seconds
+    old can report half an hour of idle. Comparing that with the idle window stops a healthy pod at
+    its first sample — measured on the real account: a pod 32 s old was stopped for "idle for 30 min
+    (limit 5 min)". With no uptime at all the reading cannot be attributed to this pod, so it is
+    ignored rather than trusted.
+    """
+    if not gpus or uptime_seconds is None:
         return None
     idle_seconds = [float(g.get("idle") or 0.0) for g in gpus if isinstance(g, dict)]
     if not idle_seconds:
         return None
-    return round(min(idle_seconds) / 60.0, 1)
+    return round(min(min(idle_seconds), uptime_seconds) / 60.0, 1)
 
 
 def decide(snap: Snapshot) -> str | None:

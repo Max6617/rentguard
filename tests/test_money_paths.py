@@ -835,5 +835,56 @@ class DryRunSpendsNothing(MoneyCase):
         self.assertIn("nothing was rented", out, f"the dry run did not say so.\noutput:\n{out}")
 
 
+# ====================================================================== idle must be bounded by life
+# RunPod's per-GPU "idle" is measured against the HOST, not the pod. Measured on the real account:
+# a pod 32 seconds old was stopped for "idle for 30 min (limit 5 min)".
+
+class GuardIdleIsBoundedByUptime(MoneyCase):
+    def _pod(self, *, uptime, idle):
+        return {"id": "pod-A", "status": "RUNNING", "cost": 2.0,
+                "gpu": {"id": "Fake GPU 24GB"},
+                "runtime": {"uptime": uptime, "ports": {"22": "tcp"},
+                            "gpus": [{"util": 0, "memoryUtil": 0, "idle": idle}]}}
+
+    def test_a_fresh_pod_is_not_stopped_by_a_host_wide_idle_reading(self):
+        """Sequence: a pod 32 s old whose GPU reports 30 min idle since the host booted; idle
+        window 5 min.
+
+        Effect: no idle stop — a machine cannot have been idle for longer than it has existed.
+        """
+        self.cfg = self.make_cfg(idle=5.0)
+        self.open_run(hours_ago=0.01, instance_id="pod-A")
+
+        snap = guard.snapshot(self._pod(uptime=32, idle=1800), self.cfg, self.ledger)
+
+        self.assertIsNone(guard.decide(snap),
+                          f"a 32 s old pod was stopped: {guard.decide(snap)!r} "
+                          f"(effective idle {snap.effective_idle_minutes} min)")
+
+    def test_idle_is_ignored_when_uptime_is_unknown(self):
+        """Sequence: the provider reports no uptime, and a host-wide idle reading.
+
+        Effect: no idle stop — with no uptime there is no way to know the reading is about this pod.
+        """
+        self.cfg = self.make_cfg(idle=5.0)
+        self.open_run(hours_ago=0.01, instance_id="pod-A")
+
+        snap = guard.snapshot(self._pod(uptime=None, idle=1800), self.cfg, self.ledger)
+
+        self.assertIsNone(snap.max_idle_minutes,
+                          "a provider idle reading was trusted with no uptime to bound it")
+        self.assertIsNone(guard.decide(snap), f"stopped on an unbounded reading: {guard.decide(snap)!r}")
+
+    def test_a_genuinely_idle_old_pod_is_still_stopped(self):
+        """Control: a pod an hour old, idle for 20 min, window 5 min — still stopped."""
+        self.cfg = self.make_cfg(idle=5.0)
+        self.open_run(hours_ago=1.0, instance_id="pod-A")
+
+        snap = guard.snapshot(self._pod(uptime=3600, idle=1200), self.cfg, self.ledger)
+
+        self.assertIsNotNone(guard.decide(snap), "a genuinely idle machine was left billing")
+        self.assertIn("idle", guard.decide(snap) or "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
