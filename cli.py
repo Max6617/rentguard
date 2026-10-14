@@ -301,6 +301,18 @@ _TEMPLATE_HEAD = """\
 """
 
 
+def _toml_str(value) -> str:
+    """A value rendered as a TOML basic string.
+
+    Windows paths are why this exists: ``"C:\\Users\\me"`` inside a basic string is read as a ``\\U``
+    escape and TOML rejects the whole file with "Invalid hex value". A generated config that cannot
+    be parsed is worse than no config at all, so every value that comes from a variable — and every
+    path in particular — goes through here.
+    """
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _template(cfg: Config) -> str:
     b, a, rp = cfg.budget, cfg.artefacts, cfg.runpod
     lines = [_TEMPLATE_HEAD, ""]
@@ -308,7 +320,17 @@ def _template(cfg: Config) -> str:
         "# Which cloud. Registered providers: " + ", ".join(providers_available()) + ".",
         '# "fake" is an in-memory provider: it rents nothing, costs nothing, and is how you can try',
         "# every command before an account exists.",
-        f'provider = "{cfg.provider}"',
+        f'provider = {_toml_str(cfg.provider)}',
+        "",
+        "# Where the ledger, the state file and the guard heartbeat live, relative to the project root.",
+        'state_dir = ".rentguard"',
+        "",
+        "# Power-user options, uncomment when needed:",
+        '# ssh_binary = "ssh"',
+        '# ssh_key = ""                     # empty means: use the provider\'s own key material',
+        "",
+        "# Keys above a [table] header are top-level; keys below one belong to that table. Keep every",
+        "# top-level key above the first header, or it silently becomes part of a table and is ignored.",
         "",
         "[budget]",
         f"cap_usd = {b.cap_usd}          # hard ceiling for the whole project, across all runs",
@@ -322,23 +344,17 @@ def _template(cfg: Config) -> str:
         "# Pulled when each `run` finishes and again on `down`, before the machine stops. An",
         "# instance with no network volume is a container: restart it and these files are gone.",
         'pull = ["results/**/*.json", "logs/*.log"]',
-        f'local_dir = "{a.local_dir}"',
-        f'remote_dir = "{a.remote_dir}"',
+        f"local_dir = {_toml_str(a.local_dir)}",
+        f"remote_dir = {_toml_str(a.remote_dir)}",
         "",
         "[runpod]",
-        f'cloud = "{rp.get("cloud", DEFAULTS["cloud"])}"              # SECURE or COMMUNITY',
-        f'image = "{rp.get("image", DEFAULTS["image"])}"',
+        f'cloud = {_toml_str(rp.get("cloud", DEFAULTS["cloud"]))}              # SECURE or COMMUNITY',
+        f'image = {_toml_str(rp.get("image", DEFAULTS["image"]))}',
         f'container_disk_gb = {rp.get("container_disk_gb", DEFAULTS["container_disk_gb"])}',
         "# First GPU with stock wins. Prices move; check before you rent.",
         f'gpu_preference = {json.dumps(rp.get("gpu_preference", DEFAULTS["gpu_preference"]))}',
-        f'volume_name = "{rp.get("volume_name", "")}"       # empty means no network volume',
-        "",
-        "# Where the ledger, the state file and the guard heartbeat live, relative to the project root.",
-        'state_dir = ".rentguard"',
-        "",
-        "# Power-user options, uncomment when needed:",
-        '# ssh_binary = "ssh"',
-        '# ssh_key = ""                     # empty means: use the provider\'s own key material',
+        f'volume_id = {_toml_str(rp.get("volume_id", ""))}       # empty means no network volume',
+        f'volume_mount = {_toml_str(rp.get("volume_mount", DEFAULTS["volume_mount"]))}   # mounted here',
     ]
     return "\n".join(lines) + "\n"
 

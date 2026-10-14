@@ -5,6 +5,10 @@ Transport: newline-delimited JSON-RPC 2.0 on stdin/stdout, per the MCP stdio con
 else may be written to stdout — every command's output is captured and returned in the tool result,
 because a stray print corrupts the stream and the client sees a dead server rather than an error.
 
+Each tool call runs its command with ``--json`` and returns **both** forms: ``content`` is the text
+a person would read, and ``structuredContent`` is the same answer as an object, so a Bot never has
+to parse prose to find a cost or an instance id.
+
 Environment:
     RENTGUARD_ROOT             project root: where rentguard.toml and .rentguard/ live
     DSH_SECRET_RUNPOD_API_KEY  the provider key (never printed, never returned)
@@ -120,50 +124,68 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _call(func, **kwargs) -> tuple[str, int | None]:
-    """Run a CLI command with stdout captured, so the JSON-RPC stream stays clean."""
-    args = argparse.Namespace(**kwargs)
-    buf = io.StringIO()
+def _call(func, *, json_mode: bool = True, **kwargs) -> tuple[str, dict | None, int | None]:
+    """Run a CLI command and capture its output, so the JSON-RPC stream stays clean.
+
+    With ``json_mode`` the command is asked for its structured document. Then stdout holds exactly
+    one JSON object (the CLI sends prose to stderr in that mode), and both are captured separately:
+    the caller gets the text a person would read *and* the object a Bot can act on. That is the
+    "return the structured data alongside its text" rule, and it is why the two are captured rather
+    than one being derived from the other.
+    """
+    args = argparse.Namespace(json=json_mode, **kwargs)
+    out, err = io.StringIO(), io.StringIO()
+    err_sink = contextlib.redirect_stderr(err) if json_mode else contextlib.nullcontext()
     code: int | None = 0
-    with contextlib.redirect_stdout(buf):
+    with contextlib.redirect_stdout(out), err_sink:
         try:
             code = func(args)
         except SystemExit as exc:  # cli raises SystemExit for user errors
             code = exc.code if isinstance(exc.code, int) else 1
-    text = buf.getvalue().strip()
-    return text, code
+    stdout, stderr = out.getvalue().strip(), err.getvalue().strip()
+    structured: dict | None = None
+    if json_mode:
+        try:
+            parsed = json.loads(stdout)
+            structured = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            structured = None
+    text = stderr or stdout
+    return text, structured, code
 
 
-def dispatch(name: str, arguments: dict) -> tuple[str, bool]:
+def dispatch(name: str, arguments: dict) -> tuple[str, dict | None, bool]:
+    """``(text, structured, is_error)`` for one tool call."""
     arguments = arguments or {}
     if name == "rentguard_status":
-        text, code = _call(cli.cmd_status)
+        text, structured, code = _call(cli.cmd_status)
     elif name == "rentguard_ledger":
-        text, code = _call(cli.cmd_ledger)
+        text, structured, code = _call(cli.cmd_ledger)
     elif name == "rentguard_doctor":
-        text, code = _call(cli.cmd_doctor)
+        text, structured, code = _call(cli.cmd_doctor)
     elif name == "rentguard_start":
-        text, code = _call(cli.cmd_up, purpose=arguments.get("purpose"),
-                           gpu=arguments.get("gpu"), cap=None, per_run_cap=None, force=False)
+        text, structured, code = _call(cli.cmd_up, purpose=arguments.get("purpose"),
+                                       gpu=arguments.get("gpu"), cap=None, per_run_cap=None,
+                                       force=False)
     elif name == "rentguard_run":
         command = arguments.get("command") or ""
         if not command.strip():
-            return "error: command is required", True
-        text, code = _call(cli.cmd_run, command=command.split(),
-                           workdir=arguments.get("workdir"))
+            return "error: command is required", None, True
+        text, structured, code = _call(cli.cmd_run, command=command.split(),
+                                       workdir=arguments.get("workdir"))
     elif name == "rentguard_pull":
-        text, code = _call(cli.cmd_pull)
+        text, structured, code = _call(cli.cmd_pull)
     elif name == "rentguard_stop":
-        text, code = _call(cli.cmd_down)
+        text, structured, code = _call(cli.cmd_down)
     elif name == "rentguard_adopt":
-        text, code = _call(cli.cmd_adopt, instance_id=arguments.get("instance_id"),
-                           purpose=arguments.get("purpose"),
-                           uptime_hours=arguments.get("uptime_hours"))
+        text, structured, code = _call(cli.cmd_adopt, instance_id=arguments.get("instance_id"),
+                                       purpose=arguments.get("purpose"),
+                                       uptime_hours=arguments.get("uptime_hours"))
     else:
-        return f"error: unknown tool {name}", True
+        return f"error: unknown tool {name}", None, True
     if code not in (0, None):
         text = f"{text}\n(exit code {code})".strip()
-    return text, code not in (0, None)
+    return text, structured, code not in (0, None)
 
 
 def _respond(msg_id, result=None, error=None) -> None:
@@ -204,9 +226,15 @@ def handle(message: dict) -> None:
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name") or ""
-        text, is_error = dispatch(name, params.get("arguments") or {})
-        _respond(msg_id, {"content": [{"type": "text", "text": text or "(no output)"}],
-                          "isError": is_error})
+        text, structured, is_error = dispatch(name, params.get("arguments") or {})
+        result: dict[str, Any] = {
+            "content": [{"type": "text", "text": text or "(no output)"}],
+            "isError": is_error,
+        }
+        if structured is not None:
+            # The same answer, as data. A Bot should not have to parse prose to find the cost.
+            result["structuredContent"] = structured
+        _respond(msg_id, result)
         return
 
     if msg_id is not None:
