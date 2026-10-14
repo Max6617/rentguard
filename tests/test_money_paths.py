@@ -813,5 +813,27 @@ class InstanceNaming(MoneyCase):
         self.assertEqual(_instance_name(self.cfg), "my-baseline-run")
 
 
+# ====================================================================== dry run must not spend
+# A flag whose entire purpose is "do not spend" reaching the API that spends is the worst kind of
+# bug: the message says nothing happened while three machines were created.
+
+class DryRunSpendsNothing(MoneyCase):
+    def test_up_dry_run_reaches_no_create_call(self):
+        """Sequence: `rentguard up --dry-run` with a config that names GPUs to try.
+
+        Effect: no create call is made and the command reports what it *would* have done.
+        """
+        self.cfg.runpod = {"gpu_preference": ["GPU-A", "GPU-B"]}
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+
+        code, out = self.invoke(cli.cmd_up, cli_args("up", "--dry-run"), provider)
+
+        self.assertEqual(provider.created, [],
+                         f"a dry run called provider.create {len(provider.created)} time(s).\n"
+                         f"output:\n{out}")
+        self.assertEqual(code, 0, f"a dry run failed.\noutput:\n{out}")
+        self.assertIn("nothing was rented", out, f"the dry run did not say so.\noutput:\n{out}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

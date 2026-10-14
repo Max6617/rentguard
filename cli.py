@@ -737,6 +737,18 @@ def cmd_up(args) -> int:
             emit(action="refused", reason="no-gpu-available", detail=str(exc))
             return 1
 
+        # The dry-run check comes *before* the create loop, not after it. A `--dry-run` that walks
+        # the preference list to learn which GPU would be accepted is spending money to answer a
+        # question about not spending money: on the real account it made three create calls and then
+        # printed "nothing was rented and nothing was spent". Say what would be tried, touch nothing.
+        if getattr(args, "dry_run", False):
+            first = offered[0]
+            fallbacks = f" (then {', '.join(offered[1:])})" if len(offered) > 1 else ""
+            note(f"dry run: would request {first}{fallbacks}; nothing was rented and nothing "
+                  f"was spent")
+            emit(action="dry-run", gpu_id=first, candidates=list(offered), instance_id=None)
+            return 0
+
         chosen: str | None = None
         pod: dict | None = None
         for attempt, candidate in enumerate(offered, start=1):
@@ -757,11 +769,6 @@ def cmd_up(args) -> int:
                 note(f"  {line}")
             emit(action="refused", reason="create-failed", attempts=errors, gpu_preference=offered)
             return 3
-
-        if getattr(args, "dry_run", False):
-            note(f"dry run: would request {chosen}; nothing was rented and nothing was spent")
-            emit(action="dry-run", gpu_id=chosen, instance_id=None)
-            return 0
 
         state = _read_state(cfg)
         state.update({"instance_id": pod.get("id"), "provider": provider_name(cfg),
