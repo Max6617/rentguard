@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -e .
+
+      # No API key and no network to RunPod: the suite drives the real CLI through the in-memory
+      # fake provider, which is the point of having one. A CI run that needs a key is a CI run that
+      # cannot be trusted by a stranger.
+      - name: Test
+        env:
+          RENTGUARD_PROVIDER: fake
+        run: python -m pytest tests -q
+
+      - name: Check the entry point exists
+        run: rentguard --version
