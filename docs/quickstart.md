@@ -111,8 +111,8 @@ already spent is recorded rather than hidden.
 
 ## 4. Rent a machine
 
-First check the choice without spending. `--dry-run` asks the provider what is available and checks
-the cap, then rents nothing (this output is real, from a read-only catalog call):
+First check the choice without spending. `--dry-run` checks the cap and the GPU choice, then rents
+nothing:
 
 ```console
 $ rentguard up --purpose "baseline" --cap 5 --dry-run

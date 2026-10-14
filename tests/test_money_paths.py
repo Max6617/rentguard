@@ -695,10 +695,13 @@ class RemoteCommandForm(MoneyCase):
 # refused it. `up` must walk the preference list until the provider accepts one.
 
 class GpuFallback(MoneyCase):
-    def _prefer(self, *gpus: str, unavailable: set[str] | None = None) -> FakeProvider:
+    def _prefer(self, *gpus: str, unavailable: set[str] | None = None,
+                offer_unavailable: bool = False) -> FakeProvider:
         self.cfg.runpod = {"gpu_preference": list(gpus)}
         provider = FakeProvider(rate_usd_per_hour=2.0)
         provider.unavailable_gpus = set(unavailable or ())
+        # Model the M2 shape: the catalogue offers the GPU, `create` refuses it.
+        provider.offer_unavailable = offer_unavailable
         return provider
 
     def test_up_falls_back_when_the_first_catalog_hit_is_refused(self):
@@ -708,7 +711,7 @@ class GpuFallback(MoneyCase):
         Effect: a machine is rented, and it is B — the next preference — not a dead end. Without the
         walk, the whole tool is unusable whenever the first catalogue hit is stale.
         """
-        provider = self._prefer("GPU-A", "GPU-B", unavailable={"GPU-A"})
+        provider = self._prefer("GPU-A", "GPU-B", unavailable={"GPU-A"}, offer_unavailable=True)
 
         code, out = self.invoke(cli.cmd_up, cli_args("up", "--purpose", "fallback"), provider)
 

@@ -4,10 +4,56 @@ What was actually run for the pages in this directory, with the real output. If 
 not here and not in a test, it is not verified.
 
 Environment: Windows, Python 3.12.6, `PYTHONUTF8=1` (without it the console mangles the em-dashes in
-the output), run from a scratch project directory with `PYTHONPATH` pointing at the checkout.
-Date: 2026-10-14, between 14:47 and 15:10 local. The tree changed several times during that window
-(Forge was landing `init`, `--json`, the provider interface and the drift checks); the transcripts
-below are from the final pass.
+the output), run from scratch project directories with `PYTHONPATH` pointing at the checkout.
+Date: 2026-10-14, between 14:47 and 15:25 local.
+
+## Revision
+
+The pages were re-run against **commit `8a97a48`** ("rentguard: quiesced M1 tree (53 tests green)"),
+extracted with `git archive` so that a mid-edit working tree could not affect the run, and against the
+working tree of 2026-10-14 15:22 while Forge was still editing `cli.py`.
+
+The commit is **not** green as extracted: **53 tests, 3 failures**, all the same defect — `status`
+erases the recorded instance id when the provider no longer shows it:
+
+```text
+FAIL test_status_json_carries_the_drift_for_a_machine_consumer   (recorded_instance_id is null)
+FAIL test_the_instance_id_is_still_recoverable_afterwards
+FAIL test_status_does_not_erase_the_recorded_instance_id_on_a_404
+```
+
+The working tree fixes it (53 tests, OK), but the fix is uncommitted (`git status`: `M cli.py`,
+`M tests/test_money_paths.py`, plus untracked `tests/_fix_pod.py`), so the hash does not carry the
+green claim yet.
+
+**`up --dry-run` differs between the two, and it is a money-risk difference.** At `8a97a48` the
+command calls `provider.create` inside the preference-retry loop *before* the dry-run check
+(`cli.py:713` against the check at `:730`), so a "dry" run makes real create calls. Against RunPod it
+printed:
+
+```console
+$ rentguard up --purpose baseline --cap 5 --dry-run
+requesting NVIDIA GeForce RTX 4090
+  NVIDIA GeForce RTX 4090 was refused; trying NVIDIA L40S
+requesting NVIDIA L40S
+  NVIDIA L40S was refused; trying NVIDIA RTX A6000
+requesting NVIDIA RTX A6000
+dry run: would request NVIDIA RTX A6000; nothing was rented and nothing was spent
+```
+
+Every attempt was refused, so nothing was created — but if stock had existed, `--dry-run` would have
+rented a machine and still printed "nothing was rented". The working tree checks `dry_run` before
+creating and prints one line. M2 must not use `--dry-run` on the hash until this is committed.
+
+Commands run against the extracted commit, all free, no network writes, $0: `init`; `doctor` keyless
+and with the fake; `ledger`; the fake span (`up` twice from separate processes, `status`, `down` with
+the new pre-stop pull, `ledger`); the nothing-rented paths for `status`, `watch`, `down`, `run`,
+`pull`, `adopt`; and an MCP `tools/call`. They matched the pages, except the `--dry-run` behaviour
+above.
+
+**Not run: the artefact round trip through the CLI.** The fake has no ssh server, so `run` would
+shell out to `ssh fake@127.0.0.1`; the pull path with real files is exercised in-process by
+`test_money_paths.py` and `test_artefacts_mcp_guards.py`, and its real output is M2's to produce.
 
 ## Version and help
 
@@ -222,25 +268,29 @@ is not JSON was sent and produced no reply, as designed.
 
 Run from the checkout, `python rentguard/tests/<file>`:
 
-| Suite | Result |
-| --- | --- |
-| `test_money_paths.py` | 23 tests, OK |
-| `test_artefacts_mcp_guards.py` | 5 tests, OK |
-| `test_rentguard.py` | 16 tests, OK |
-| `test_drift.py` | 3 tests, OK |
+| Suite | At commit `8a97a48` | Working tree, 15:22 |
+| --- | --- | --- |
+| `test_money_paths.py` | 23 tests, 1 failure | 23 tests, OK |
+| `test_artefacts_mcp_guards.py` | 5 tests, OK | 5 tests, OK |
+| `test_rentguard.py` | 16 tests, OK | 16 tests, OK |
+| `test_drift.py` | 3 tests, OK | 3 tests, OK |
+| `test_known_failures.py` | 4 tests, 2 failures | 4 tests, OK |
+| `test_fake_span.py` | 2 tests, OK | 2 tests, OK |
 
-47 tests, all passing, no network, no spend.
+53 tests: 3 failures at the commit (the erased instance id, above), 0 in the working tree. No network,
+no spend. The tree was not quiesced during the working-tree run (`cli.py` modified), so the 0 is a
+working-tree result and not attributable to a commit.
 
-The tree kept moving during the window: at 15:08 an intermediate edit made keyless `doctor` raise
-`TypeError: note() missing 1 required positional argument`, and it was fixed within minutes. The
-transcripts above are from the state that followed that fix. `resolve("runpod")` returning the base
-`Provider` class was another intermediate break, also fixed (it now returns `rentguard.runpod.RunPod`).
+The tree also moved earlier in the window: at 15:08 an intermediate edit made keyless `doctor` raise
+`TypeError: note() missing 1 required positional argument`, and `resolve("runpod")` briefly returned
+the base `Provider` class. Both were fixed within minutes and are not in the table above.
 
 ## Not verified
 
 - **A paid rental.** `up` against RunPod, `run` over ssh, a real `pull`, a real `down` and the
   resulting ledger row are milestone M2 and were not run: they spend money. The `up --dry-run` call
-  above touched the provider's catalog only.
+  above reached RunPod's create endpoint at commit `8a97a48` (see Revision); nothing was created
+  because every attempt was refused.
 - **`pip install .`.** The local sandbox refused `python -m venv` (`ensurepip` failed) and a
   `--target` install (temp-directory permissions), so the console script produced by `pyproject.toml`
   was not exercised here. The module is exercised as `python -m rentguard.cli`.

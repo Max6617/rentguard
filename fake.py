@@ -151,6 +151,9 @@ class FakeProvider(Provider):
         #: stale: "There are no longer any instances available with the requested specifications".
         #: This is the M2 finding — availability is not capacity — made reproducible.
         self.unavailable_gpus: set[str] = set()
+        #: Keep ``unavailable_gpus`` in the candidate list, so `create` refuses them: the M2 shape
+        #: where the catalogue says a GPU is there and the API says it is gone.
+        self.offer_unavailable = False
         self.requested_gpus: list[list[str]] = []
         self.artifacts = ArtifactStore()
         self._ids = itertools.count(1)
@@ -273,25 +276,35 @@ class FakeProvider(Provider):
                    need_memory_gb: int | None = None) -> list[str]:
         """The GPUs `up` may try, best first.
 
-        The fake owns exactly one GPU, so it is always on the list: the base implementation refuses
-        a preference list that does not name it, which makes the documented offline flow —
-        `RENTGUARD_PROVIDER=fake rentguard up`, from this module's own docstring — fail on a fresh
-        config.
+        The fake owns exactly one GPU, so it is appended to the list when the config does not name
+        it: the base implementation refuses a preference list whose GPUs it does not have, which
+        would make the documented offline flow — `RENTGUARD_PROVIDER=fake rentguard up`, from this
+        module's own docstring — fail on a fresh config.
 
-        ``unavailable_gpus`` entries **stay on the list**, because that is the M2 defect being
-        modelled: the catalogue says the GPU is there and ``create`` refuses it. If this method
-        filtered them out it would hide the very path `up` has to walk, and the fallback would look
-        tested when it had never run. Set ``refuse_gpus`` for the no-stock path where nothing is
-        offered at all.
+        ``unavailable_gpus`` entries are still offered **on purpose**: that is the M2 defect being
+        modelled, where the catalogue says the GPU is there and ``create`` refuses it, so `up` has a
+        real fallback path to walk. They are excluded only when the config names *nothing* this fake
+        will accept, so "everything I could try is refused" ends in one reported failure instead of
+        a GPU the caller never asked for sneaking in at the end of the walk. Set ``refuse_gpus`` for
+        the no-stock path, where the catalogue offers nothing at all.
         """
         self.requested_gpus.append(list(preference))
         if self.refuse_gpus:
             raise ProviderError(f"none of the preferred GPUs is available: {list(preference)}")
-        offered = list(preference)
-        if self.gpu_id not in offered:
-            offered.append(self.gpu_id)
+        if self.offer_unavailable:
+            # The catalogue still name-drops a GPU that `create` will refuse — the M2 shape, where
+            # availability is not capacity. It has to reach the caller for the fallback to be walked.
+            offered = list(preference)
+            if self.gpu_id not in offered:
+                offered.append(self.gpu_id)
+            return offered
+        offered = [gpu for gpu in preference if gpu not in self.unavailable_gpus]
+        if not offered and self.gpu_id not in self.unavailable_gpus:
+            offered = [self.gpu_id]
         if not offered:
-            raise ProviderError(f"none of the preferred GPUs is available: {list(preference)}")
+            raise ProviderError(
+                f"none of the preferred GPUs is available: {list(preference)} "
+                f"(the fake refuses {sorted(self.unavailable_gpus)})")
         return offered
 
     def choose_gpu(self, preference: list[str], cloud: str = "SECURE",
