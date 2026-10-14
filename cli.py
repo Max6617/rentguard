@@ -1271,7 +1271,12 @@ def _try_pull(cfg: Config, args) -> int:
     A pull that crashes must not skip whatever the caller owed the operator — the commonest case is
     `down`, where an exception between "pull" and "stop" leaves a machine billing because a tar
     stream failed. The money rule outranks the data rule: stop the machine, then report the pull.
+
+    The delivered-summary is cleared **here**, before a pull that can raise: it is module state that
+    survives between commands, so a `down` whose own pull blows up must not describe the *previous*
+    pull's delivery. A sentence built from it can be true of an earlier command and false of this one.
     """
+    _pull_summary(pulled=False, reason="not-attempted", files=[], unmatched_patterns=[])
     try:
         return cmd_pull(argparse.Namespace(json=getattr(args, "json", False)))
     except Exception as exc:  # noqa: BLE001 - surviving any of them is the entire point
@@ -1869,12 +1874,13 @@ def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> 
 
 
 def cmd_pull(args) -> int:
+    # Cleared before anything can raise: a caller that holds only the exit code (`down`) reads this,
+    # and it must never describe a pull other than the one that just ran.
+    _pull_summary(pulled=False, reason="not-attempted", files=[], unmatched_patterns=[])
     cfg = _config()
     provider = _provider(cfg)
     pod = _pod(provider, cfg)
     patterns = cfg.artefacts.pull
-    # A caller that holds only the exit code (`down`) reads this, so it is set on every path.
-    _pull_summary(pulled=False, reason="not-attempted", files=[], unmatched_patterns=[])
     with json_report(args):
         emit(command="pull", patterns=list(patterns),
              local_dir=str(Path(cfg.artefacts.local_dir)))
