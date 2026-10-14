@@ -38,6 +38,7 @@ runner; it starts machines and keeps the receipts.
 | R7 | Never reports an account balance | code: the provider interface has no such method | — | **met** |
 | R8 | Never publishes anything | — | — | **wish** — discipline, not a control |
 | R9 | The cap protects the user | only while `watch` runs | — | **wish** — see below |
+| R10 | 94% of the code and 100% of the features exercised | `tools/coverage.py`, ratchet floor in CI | the CI run | **NOT MET** — 74.8% measured 2026-10-14, `runpod.py` at 21.0% |
 
 ## The wishes
 
@@ -51,6 +52,16 @@ public remote. Given R8 matters to the user, "no remote configured" is a fact to
 being one silently.
 
 **W3 — network volumes are entirely unexercised.** A user who sets one is running untested code.
+
+**W4 — the guard is not merely unproven; it is wrong.** A paid run stopped a pod that was **32 seconds
+old**, reporting "idle for 30 min (limit 5 min)": the provider's per-GPU idle seconds are compared
+against the idle window without clamping to the machine's own uptime. So the requirement the tool
+exists for — a forgotten machine stops itself — can currently destroy a working one. This is what
+R4's wish looked like once it was tested, and it is why R4 is a defect rather than a gap.
+
+**The coverage number is a floor, and the guard defect proves it.** Those lines all executed. 74.8%
+of the code can be reached while the behaviour is wrong, so R10's first half is the cheap half; the
+feature matrix — command × provider × platform — is where the value is.
 
 ## Permissions
 

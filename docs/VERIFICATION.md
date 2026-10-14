@@ -312,7 +312,9 @@ Replies:
 
 `tools/list` returned eight tools: `rentguard_status`, `rentguard_ledger`, `rentguard_doctor`,
 `rentguard_start`, `rentguard_run`, `rentguard_pull`, `rentguard_stop`, `rentguard_adopt`. A line that
-is not JSON was sent and produced no reply, as designed.
+is not JSON was sent and produced no reply, as designed. That transcript is from `2ebe660`, when a
+reply carried `content` only; from `af1ba5a` each result also carries `structuredContent` (see
+[Exercised at af1ba5a](#exercised-at-af1ba5a)).
 
 ## Exercised at `af1ba5a`
 
@@ -435,7 +437,9 @@ For the ten CLI commands and the eight MCP tools at `af1ba5a`:
   were not run *for this log*: they spend money. They were run as milestone M2 — twice on 2026-10-14,
   $0.017 in total, the second pass green with the artefact pulled from the right machine and the ledger
   reconciled by hand: [M2 — the real rental](M2-REAL-RENTAL.md).
-- **`pip install .`.** The local sandbox refused `python -m venv` (`ensurepip` failed) and a
-  `--target` install (temp-directory permissions), so the console script produced by `pyproject.toml`
-  was not exercised here. The module is exercised as `python -m rentguard.cli`.
+- **`pip install .` by this pass.** Attempted again at `af1ba5a` with
+  `python -m pip install --no-deps --target <dir> .`; it still fails on this sandbox because the DSH
+  temp directory is not writable for a child process (the `pip-build-tracker-*` cleanup fails), not
+  because of the packaging. The publish checklist records the install blocker as fixed and the console
+  script running (commit `4abfcc8`); this log did not reproduce that, so it stays open here.
 - **A provider other than RunPod or the fake.** None exists yet.
