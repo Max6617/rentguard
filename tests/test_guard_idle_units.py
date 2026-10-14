@@ -269,5 +269,33 @@ class McpWatchSharesTheLoop(IdleCase):
                       "the result did not come from the loop that ran")
 
 
+class ACorruptStartDoesNotKillTheGuard(IdleCase):
+    def test_the_guard_survives_a_corrupt_start_on_the_open_row(self):
+        """Sequence: the open row's `started_at` is corrupt (an interrupted write), a machine is
+        live and busy, and the guard takes a reading.
+
+        Effect required: the loop survives it. The same `ledger.live_usd()` that prices the run is
+        what `doctor` and `up` call, so if it raises here the guard dies — and a dead guard on a
+        billing machine is the failure this whole tool exists to prevent.
+        """
+        from datetime import timedelta
+        self.ledger.open(purpose="corrupt", provider="fake", instance_id="pod-A",
+                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=2.0,
+                         started_at=now_utc() - timedelta(hours=1))
+        rows = self.ledger.entries()
+        rows[-1]["started_at"] = "the-ledger-was-truncated"
+        self.ledger._rewrite(rows)
+        provider = ScriptedProvider(pod_payload(uptime=3600, util=90.0))
+
+        try:
+            reason = guard.watch(self.cfg, provider, self.ledger, instance_id="pod-A",
+                                 interval=0.0, max_iterations=1, log=lambda *a: None)
+        except Exception as exc:  # noqa: BLE001 - the raised exception IS the finding
+            self.fail(f"a corrupt started_at on the open row killed the guard loop: "
+                      f"{type(exc).__name__}: {exc} — the machine is unwatched while it bills")
+
+        self.assertIsNotNone(reason, "the guard returned no reason")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
