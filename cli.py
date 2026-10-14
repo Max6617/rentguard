@@ -37,6 +37,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import fnmatch
 import io
 import json
 import os
@@ -1713,18 +1714,25 @@ def _temp_tar(directory: Path | None = None):
 
 
 def _unmatched_patterns(patterns: list[str], names: list[str]) -> list[str]:
-    """The configured patterns that no archived member answers.
+    """The configured patterns that no archived member actually answers.
 
-    Compared by each pattern's **literal prefix** — everything before its first wildcard — rather than
-    by full glob semantics, which this module does not own. ``results/*.json`` is answered by anything
-    under ``results/``; ``logs/*.log`` is answered by nothing under ``logs/``. A prefix comparison can
-    over-claim a match for a deeply nested pattern, which mis-names a pattern and loses no file; the
-    other direction would name a pattern that did match, which is what makes a finding untrustworthy.
+    A pattern counts as answered only when an extracted member **matches it** — ``fnmatch`` against
+    the member path, with ``**/`` also tried collapsed, because ``fnmatch`` has no recursive-wildcard
+    semantics and ``results/**/*.json`` should still be answered by ``results/out.json``.
+
+    A literal-prefix comparison is weaker than this in the dangerous direction: with only
+    ``results/notes.txt`` delivered, the prefix ``results/`` answers ``results/*.json``, and a run
+    whose JSON never arrived reads as a clean pull with nothing flagged. The prefix form is only a
+    hint in the tool description now, never the answer.
     """
     unmatched: list[str] = []
     for pattern in patterns:
-        prefix = re.split(r"[*?\[]", str(pattern), maxsplit=1)[0]
-        if not any(str(name).startswith(prefix) for name in names):
+        text = str(pattern)
+        collapsed = text.replace("**/", "")
+        answered = any(fnmatch.fnmatch(str(name), text)
+                       or fnmatch.fnmatch(str(name), collapsed)
+                       for name in names)
+        if not answered:
             unmatched.append(pattern)
     return unmatched
 
@@ -1868,6 +1876,16 @@ def cmd_pull(args) -> int:
                      f"({size} bytes, starting {head!r}): {exc}")
                 emit(pulled=False, reason="stream-not-an-archive", exit_code=1, files=[],
                      bytes=size, head=head.decode("utf-8", "replace"))
+                return 1
+            if not names:
+                # An archive with no members is not a delivery of zero files: the patterns matched
+                # nothing on the machine, and the artefacts may still be sitting on it. Naming this
+                # as the failure it is, is what stops `down` from quietly stopping the container that
+                # holds them — `down` names the paths it is about to lose either way.
+                note(f"pull failed: the remote tar archived no member — the configured patterns "
+                     f"matched nothing ({', '.join(patterns)}); the files may still be on the machine")
+                emit(pulled=False, reason="patterns-matched-nothing", exit_code=code, files=[],
+                     unmatched_patterns=list(patterns))
                 return 1
             # GNU tar writes the members it did match and exits non-zero for the patterns it could
             # not. The results are in hand, so the pattern is the finding and the pull is not a

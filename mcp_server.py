@@ -96,12 +96,12 @@ TOOLS: list[dict[str, Any]] = [
         "name": "rentguard_pull",
         "description": (
             "Pull the artefacts configured in [artefacts].pull from the instance now. The result "
-            "carries `files`, and `unmatched_patterns` for configured patterns that matched nothing "
-            "— attributed by each pattern's literal prefix, which is a heuristic and not full glob "
-            "semantics, so it may over-claim a match and never mis-names a pattern that did match. "
-            "An unmatched pattern is a finding, not a failure: the members that did match are "
-            "extracted and the pull succeeds, with `tar_exit_code` recording the remote tar's own "
-            "status."),
+            "carries `files`, and `unmatched_patterns` for configured patterns that no delivered "
+            "member matched (the pattern is a glob and is matched against each member path; a "
+            "literal-prefix reading is only a hint, never the answer). An unmatched pattern beside "
+            "delivered files is a finding and the pull still succeeds, with `tar_exit_code` "
+            "recording the remote tar's own status; a pull that delivered no member at all fails "
+            "with reason `patterns-matched-nothing`, because the files may still be on the machine."),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
