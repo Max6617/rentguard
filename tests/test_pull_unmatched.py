@@ -170,5 +170,113 @@ class ThePrefixRuleOverClaims(PullCase):
         self.assertEqual(cli._unmatched_patterns(["results/*.json"], ["results/out.json"]), [])
 
 
+class TheMatcherInBothDirections(PullCase):
+    """`_unmatched_patterns` tries each pattern literally and with `**/` collapsed, because `fnmatch`
+    has no recursive-wildcard semantics. Both directions matter: an over-claim says a pattern was
+    answered by a member it should not match (the original defect), and an under-claim flags a clean
+    pull as having lost something (its mirror)."""
+
+    def test_a_leading_recursive_wildcard_answers_a_top_level_member(self):
+        """Control: `**/*.json` and a member at the root — the collapse exists for exactly this, so
+        it must keep working."""
+        self.assertEqual(cli._unmatched_patterns(["**/*.json"], ["out.json"]), [])
+        self.assertEqual(cli._unmatched_patterns(["results/**/*.json"], ["results/out.json"]), [])
+
+    def test_a_nested_member_is_not_answered_by_a_prefix_wildcard_pattern(self):
+        """Sequence: the config asks for `**/logs/*.log` (logs anywhere) and the machine delivered
+        `x/logs/run.log`.
+
+        Effect required: the pattern *is* answered — the member is what it asked for. Only the fully
+        collapsed form (`logs/*.log`) is tried, and that one needs the member to start with `logs/`,
+        so a nested member under a prefix is reported as matching nothing. A clean pull then reads as
+        having lost the logs.
+
+        (The delivered member is the same file tar matched: GNU tar's wildcards cross `/`, so
+        `**/logs/*.log` did select `x/logs/run.log` remotely. This is the under-claim direction.)
+        """
+        result = cli._unmatched_patterns(["**/logs/*.log"], ["x/logs/run.log"])
+
+        self.assertEqual(result, [],
+                         "a member that matches the pattern (logs anywhere) was reported as "
+                         "matching nothing: only the fully collapsed form is tried, so a pattern "
+                         "with a prefix before `**/` cannot answer a nested member")
+
+    def test_a_star_crossing_a_directory_is_a_deliberate_boundary_not_an_over_claim(self):
+        """The closest thing to an over-claim: `results/*.json` is answered by
+        `results/nested/out.json`, because `fnmatch`'s `*` crosses `/`.
+
+        This is recorded as a *boundary*, not a finding: tar's own wildcards cross `/` too, so that
+        member is the file the remote tar selected for this pattern. Naming it as unmatched would
+        flag a pull that really did deliver what was asked for.
+        """
+        self.assertEqual(cli._unmatched_patterns(["results/*.json"], ["results/nested/out.json"]), [])
+
+
+class AOneSidedMissStaysAFinding(PullCase):
+    def test_members_arriving_while_one_pattern_missed_stays_a_named_finding(self):
+        """Sequence: two patterns configured, the archive holds a member for the first only, and tar
+        exits 2 because it could not find the second.
+
+        Effect required: the pull **succeeds**, the delivered member is on disk, and the missed
+        pattern is named. The empty-archive failure is one branch away and must not swallow this
+        class — a one-sided miss is a finding, not a lost result.
+        """
+        code, document = self.pull(["results/*.json", "logs/*.log"],
+                                   tar_members={"results/out.json": b'{"ok": true}'}, tar_exit=2)
+
+        self.assertEqual(code, 0, f"a delivered member was reported as a failed pull: {document}")
+        self.assertTrue(document.get("pulled"), document)
+        self.assertEqual(document.get("unmatched_patterns"), ["logs/*.log"], document)
+        self.assertEqual(document.get("files"), ["results/out.json"], document)
+        self.assertEqual(document.get("tar_exit_code"), 2, document)
+
+    def test_no_pattern_missed_means_no_finding(self):
+        """Control: a clean archive reports no unmatched patterns, so the finding above is about the
+        miss and not about the field always being populated."""
+        code, document = self.pull(["results/*.json"],
+                                   tar_members={"results/out.json": b"x"}, tar_exit=0)
+
+        self.assertEqual(code, 0, document)
+        self.assertEqual(document.get("unmatched_patterns"), [], document)
+
+
+class DownNamesWhatItIsAboutToLose(PullCase):
+    def down(self) -> tuple[int, str]:
+        self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
+        child = [sys.executable, "-c", WRITER, tar_hex({}), "2"]   # an empty archive, tar exit 2
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
+                mock.patch.object(cli, "_ssh_argv", lambda cfg, pod, provider=None: (child, "x")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                code = cli.cmd_down(cli_args("down"))
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue()
+
+    def test_the_sentence_names_the_patterns_the_failed_pull_could_not_deliver(self):
+        """Sequence: `down` on a live machine whose pull fails outright (the remote tar archived
+        nothing), two patterns configured.
+
+        Effect required: the machine is stopped, the row is closed, the exit is non-zero, and the
+        sentence names what could not be delivered. Asserted against the same list a standalone
+        `pull` reports, so the sentence cannot claim more than the pull found: with nothing
+        delivered, every configured pattern is genuinely not in hand.
+
+        Boundary worth stating: a pull that delivered *anything* returns 0, so this sentence only
+        ever fires when nothing arrived. "Paths that exist on the machine" cannot be narrower than
+        the patterns without a remote listing, which `down` does not do.
+        """
+        code, out = self.down()
+
+        self.assertIn(("pod-A", "stop"), self.provider.actions, f"the machine was left billing.\n{out}")
+        self.assertIsNone(self.ledger.open_run(), f"the row was left open.\n{out}")
+        self.assertNotEqual(code, 0, f"a lost pull exited 0.\n{out}")
+        self.assertIn("will be lost", out, f"the sentence was not printed.\n{out}")
+        for pattern in ("results/*.json", "logs/*.log"):
+            self.assertIn(pattern, out, f"{pattern} is not named as not pulled.\n{out}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
