@@ -270,21 +270,38 @@ class McpWatchSharesTheLoop(IdleCase):
 
 
 class ACorruptStartDoesNotKillTheGuard(IdleCase):
+    """Both halves of the requirement, because either alone can be satisfied the wrong way.
+
+    1. The guard **survives** a truncated `started_at` — a machine billing without a working guard
+       is money at risk, so the loop may not die on one unreadable field.
+    2. It does **not** survive by pricing the unreadable run as a silent `$0.00`. A guard that
+       forgets the spend is worse than one that dies: the cap then reads *low*, which is the
+       direction that lets a rental start against a number nobody can compute. Either the money is
+       priced from something readable — the provider's own uptime is the witness `up` already uses
+       when there is no row at all — or the condition is named.
+
+    A later "fix" that satisfies the first test by making the reading disappear fails the second.
+    """
+
+    def corrupt_open_row(self, *, hours_ago: float = 1.0, rate: float = 2.0) -> None:
+        from datetime import timedelta
+        self.ledger.open(purpose="corrupt", provider="fake", instance_id="pod-A",
+                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=rate,
+                         started_at=now_utc() - timedelta(hours=hours_ago))
+        rows = self.ledger.entries()
+        rows[-1]["started_at"] = "the-ledger-was-truncated"
+        self.ledger._rewrite(rows)
+
     def test_the_guard_survives_a_corrupt_start_on_the_open_row(self):
         """Sequence: the open row's `started_at` is corrupt (an interrupted write), a machine is
         live and busy, and the guard takes a reading.
 
-        Effect required: the loop survives it. The same `ledger.live_usd()` that prices the run is
-        what `doctor` and `up` call, so if it raises here the guard dies — and a dead guard on a
-        billing machine is the failure this whole tool exists to prevent.
+        Effect required (half 1): the loop survives it and returns a reason. The same
+        `ledger.live_usd()` that prices the run is what `doctor` and `up` call, so if it raises here
+        the guard dies — and a dead guard on a billing machine is the failure this tool exists to
+        prevent.
         """
-        from datetime import timedelta
-        self.ledger.open(purpose="corrupt", provider="fake", instance_id="pod-A",
-                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=2.0,
-                         started_at=now_utc() - timedelta(hours=1))
-        rows = self.ledger.entries()
-        rows[-1]["started_at"] = "the-ledger-was-truncated"
-        self.ledger._rewrite(rows)
+        self.corrupt_open_row()
         provider = ScriptedProvider(pod_payload(uptime=3600, util=90.0))
 
         try:
@@ -295,6 +312,36 @@ class ACorruptStartDoesNotKillTheGuard(IdleCase):
                       f"{type(exc).__name__}: {exc} — the machine is unwatched while it bills")
 
         self.assertIsNotNone(reason, "the guard returned no reason")
+
+    def test_a_corrupt_start_does_not_price_the_unreadable_run_as_a_silent_zero(self):
+        """Sequence: the same corrupt open row, two hours old at $2/h, on a machine the provider
+        reports with 7,200 s of uptime; the guard takes one reading.
+
+        Effect required (half 2): the run is **not** silently worth nothing. Either it is priced
+        from something readable — the provider's uptime supports about $4.00 — or the unreadable
+        field is named in the guard's own output. A heartbeat with `run_usd == 0.0` and no mention
+        of the corrupt field is the failure: the cap would read low and let a rental start.
+        """
+        self.corrupt_open_row(hours_ago=2.0)
+        provider = ScriptedProvider(pod_payload(uptime=7200, util=90.0))
+        lines: list[str] = []
+
+        try:
+            guard.watch(self.cfg, provider, self.ledger, instance_id="pod-A", interval=0.0,
+                        max_iterations=1, log=lines.append)
+        except Exception as exc:  # noqa: BLE001 - half 1 of the requirement, in this test's terms
+            self.fail(f"the guard did not survive the corrupt row, so it could not price it either: "
+                      f"{type(exc).__name__}: {exc}")
+
+        heartbeat = json.loads(self.cfg.heartbeat_path.read_text(encoding="utf-8"))
+        named = any(word in " ".join(lines).lower()
+                    for word in ("unreadable", "corrupt", "cannot read", "started_at"))
+        self.assertTrue(
+            float(heartbeat.get("run_usd") or 0.0) > 0.0 or named,
+            "the guard survived the corrupt row by making the money disappear: the heartbeat "
+            f"reports run_usd={heartbeat.get('run_usd')} and nothing in the guard's output names the "
+            f"unreadable field {list(heartbeat)[:6]}. Price the run from the provider's uptime, or "
+            f"name the condition — a cap that reads low lets a rental start.")
 
 
 if __name__ == "__main__":
