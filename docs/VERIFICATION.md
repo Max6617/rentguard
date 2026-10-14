@@ -447,19 +447,27 @@ For the ten CLI commands and the eleven MCP tools at `af1ba5a` and `d3b209a`:
 
 ## Later revisions
 
-After `af1ba5a` the tree grew fast: `d3b209a` adds the feature matrix and several suites
-(`test_watch_mcp`, `test_provider_contract`, `test_runpod_transport`, `test_ledger_paths`), taking the
-count well past 74. At **`74b9f7a`**, a clean worktree runs **189 passed, 45 subtests passed, 0 failed**
-(`python -m pytest -q --tb=no -p no:cacheprovider`), and the MCP surface matches the page: the feature
-matrix reads the tool names out of `docs/mcp.md` and compares them with `tools/list` — eleven each.
+After `af1ba5a` the tree grew fast. At **`74b9f7a`** a clean worktree ran 189 passed / 0 failed; at
+**`458e128`** — the publishing candidate in [PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md) — it runs
+**266 passed, 0 failed, 50 subtests**, and coverage measures **97.5% (2,200 / 2,256)** with the floor at
+97.0%. Per module: `cli.py` 99.6, `fake.py` 99.6, `config.py` 99.0, `guard.py` 99.0, `provider.py` 96.6,
+`runpod.py` 93.5, `ledger.py` 93.3, `mcp_server.py` 90.3 (the weakest; its uncovered lines are the
+transport's error and notification branches). `fake.py` was 87.7% at `18b5fc0`; a measured module
+changed, so the figure was re-measured rather than carried forward.
 
-Two notes from writing this, both about the environment rather than the product:
+Three notes, all measured:
 
+- **CI is red as written.** `.github/workflows/ci.yml` sets `RENTGUARD_PROVIDER: fake` for its Test and
+  Coverage steps. That variable makes two `tests/test_cli_branches.py` tests fail: `248 passed / 2
+  failed` with it set, `250 passed / 0 failed` without it, measured at `6f31c27` and again at `458e128`.
+  Those tests build a `runpod` provider and expect a missing-key error, and the variable overrides their
+  provider choice.
 - **A stale `.rentguard-tmp` makes `test_ledger_paths.py` fail** (`PermissionError` creating a
   `runs.jsonl.lock` inside it, 16 tests in the main checkout). Nothing is wrong with the ledger: a fresh
   worktree runs that file green. Delete `.rentguard-tmp` in the checkout if the suite goes red there.
-- **`pip install .` cannot be checked here** (see Not verified), but the packaging failure it used to
-  hide is fixed — `pyproject.toml` maps the package to the repo root.
+- **`pip install .` and a wheel build cannot be checked in this sandbox** (see Not verified): pip cannot
+  use the DSH temp directory, so the build tracker and wheel cache fail to clean up and the build exits 2.
+  The install evidence in the checklist is labelled as measured at an earlier revision for that reason.
 
 ## Storage
 

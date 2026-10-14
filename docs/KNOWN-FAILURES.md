@@ -2,9 +2,11 @@
 
 Open defects, with a reproduction. A defect leaves this file when a test covers it and the test passes.
 
-## F-5 — the guard can stop a freshly started machine as "idle"
+## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
-**Open at `af1ba5a`.** No test covers it.
+**Fixed** at `d5fdaea`: provider idle is bounded by the pod's own uptime and ignored when uptime is
+unknown. Covered by `tests/test_money_defects.py` — `test_a_thirty_second_old_machine_is_not_stopped_as_idle`,
+`test_a_machine_idle_past_the_window_is_still_stopped`, `test_the_locally_observed_idle_counter_still_stops`.
 
 `guard.snapshot` takes the idle time from the provider's per-GPU `idle` seconds
 (`_idle_minutes_since_boot`) and `decide` compares `max(idle_for_minutes, idle_since_start_minutes,
@@ -34,12 +36,14 @@ stop, and ignore an idle reading larger than the uptime. The locally observed ze
 already has that shape; the provider figure must not be able to outvote it.
 
 **The test that closes this.** Snapshot a pod with `uptime = 32` and `gpus[0].idle = 1800`, and assert
-`decide(...)` is `None`; a second case with real idle past the window must still stop. It must fail on
-`af1ba5a` before it passes.
+`decide(...)` is `None`; a second case with real idle past the window must still stop. It failed on
+`af1ba5a` and passes at `458e128`.
 
-## F-4 — `up --dry-run` rents the machine it says it did not rent
+## F-4 — `up --dry-run` rents the machine it says it did not rent (fixed)
 
-**Open at `af1ba5a`.** No test covers it.
+**Fixed** at `ce69cea`: `dry_run` is decided before any `create` call. The test asserts on the provider
+call rather than on the sentence that used to lie (`f7bf556`), in `tests/test_money_defects.py` —
+`test_dry_run_makes_zero_create_calls`, with `test_a_real_up_does_make_the_create_call` as the control.
 
 `cmd_up` calls `provider.create` inside the preference-retry loop *before* it checks `dry_run`, so the
 flag only changes the sentence printed afterwards. Against a provider with stock, `--dry-run` rents a
@@ -78,12 +82,14 @@ concern and must be skipped when the flag is set. A refused preference during a 
 reported as a refusal, not retried into a rental.
 
 **The test that closes this.** With the fake provider, `up --dry-run` must leave `fake-state.json`
-absent or empty and append no ledger row, while still printing the GPU it would have requested. It must
-fail on `af1ba5a` before it passes.
+absent or empty and append no ledger row, while still printing the GPU it would have requested. It
+failed on `af1ba5a` and passes at `458e128`.
 
 ## F-1 — an open ledger row with no instance reports zero spend, and `status` says nothing is renting
 
-**Confirmed** 2026-10-14 by hand, in a temp root, no network writes and no spend.
+**Fixed.** Confirmed 2026-10-14 by hand in a temp root, no network writes and no spend, and now covered
+by `tests/test_known_failures.py` (4 tests) and `tests/test_drift.py` (3 tests), green at `458e128`;
+the working output is the worked example in [Limitations](limitations.md).
 
 Setup: one ledger row, `instance_id` that does not exist, `started_at` three hours ago,
 `stopped_at` none.
@@ -130,7 +136,10 @@ the current code before it passes.
 
 ## F-3 — two state dirs for one account means two ledgers, and one of them is invisible
 
-**Found** 2026-10-14, on the live account.
+**Found** 2026-10-14 on the live account. **Partly addressed at `458e128`.** Item 2 is in: when the
+config names nothing, `cli._instance_name` derives `rentguard-<8 hex of the project root>`, so two state
+dirs rent under different names and a second ledger is visible from the provider's side. Item 1 is not:
+`doctor` still prints the state dir on the third line, after the version and the config path.
 
 `doctor` reported a live instance with no ledger row: `mtsd5jl89a520b`, RTX A6000 at $0.59/h, named
 `rentguard-workbench`. That name is the **default**. The project's config sets `rentguard-m2` and a

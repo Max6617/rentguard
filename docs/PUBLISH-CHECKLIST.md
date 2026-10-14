@@ -1,66 +1,139 @@
 # Publish checklist
 
-The definition of M3. Nothing here is asked of the user until every box below is true, and the only
-question that goes to them is the last section.
+What has to be true before rentguard goes public, and what the user's own publish action would do.
+This page performs no publish and prescribes no push: publishing is the user's decision alone, and it
+is the only question that goes back to them.
 
-## Status — 2026-10-14 15:28 UTC
+## The revision this page describes
 
-| section | state |
-|---|---|
-| 1. proven | M1 green (74 tests at `af1ba5a`, fake provider, no network). M2 **passed** on a real rented 4090 — artefact pulled from the right machine, ledger reconciled by hand, pod stopped. |
-| 2. repo | `.gitignore` thorough; no secrets in the working tree or in history (env-var *names* only); `LICENSE` (MIT) added; `CHANGELOG.md` added; CI workflow added; `pyproject.toml` has authors, keywords, classifiers; `rentguard.egg-info` and `cli.py.bak` removed. |
-| 3. docs | quickstart, cap semantics, provider guide, MCP page, limitations, M2 record, verification notes — all written and run against real output. |
-| 4. name | **`rentguard` is free on PyPI** — the JSON API returns 404. |
-| open | **resolved 15:38 UTC** — the package could not be installed at all (`pip install -e .` died with `error: package directory 'rentguard' does not exist`). Fixed by mapping the package to the repo root in `pyproject.toml`; no files moved, suite still green, and the installed console script runs. Remaining before the ask: none that I can verify. Forge's frozen sha is a nice-to-have, not a gate. |
+Everything below was measured at **`458e128`** (`458e1284b337cc0add4e44ef4ecbf5a7e30e52fd`) in a clean
+worktree, with the package path verified inside that worktree (`rentguard.mcp_server.__file__`).
+
+| Measurement | Value | How |
+| --- | --- | --- |
+| Suite | **266 passed, 0 failed, 50 subtests** | `python -m pytest -q -p no:cacheprovider` in a clean worktree at `458e128` |
+| Coverage | **97.5% (2,200 / 2,256)** | `python tools/coverage.py` at `458e128`; floor 97.0%, target 94.0% |
+| Features | **10 CLI commands, 11 MCP tools** | `tests/test_feature_matrix.py`, green here |
+
+The standard is **94% of the code and 100% of the features**. The line coverage above clears the code
+half; the feature matrix is the evidence for the other half, because a line number says code was
+*reached*, never that its behaviour was checked — the guard defect that stopped a 32-second-old pod
+lived in lines that all executed.
+
+Per module at `458e128` (missing counts exclude the tracer's sentinel line `0`):
+
+| Module | Lines | Cover | Missing |
+| --- | --- | --- | --- |
+| `cli.py` | 1000 | 99.6% | 3 |
+| `fake.py` | 266 | 99.6% | 0 |
+| `config.py` | 101 | 99.0% | 0 |
+| `guard.py` | 208 | 99.0% | 1 |
+| `provider.py` | 117 | 96.6% | 3 |
+| `runpod.py` | 139 | 93.5% | 8 |
+| `ledger.py` | 208 | 93.3% | 13 |
+| `mcp_server.py` | 217 | 90.3% | 20 |
+
+The coverage figures move with the tree. An earlier revision (`18b5fc0`) measured 96.1% with `fake.py`
+at 87.7%; `fake.py` is now 99.6%, so that line was re-measured rather than carried forward.
 
 ## 1. The tool is proven
 
-- [ ] M1: the fake-provider suite is green, no network, no spend.
-- [ ] M2: one real rental end to end — `up`, `run`, artefact pulled, `stop`, ledger row closed — with
-      the observed cost matching the ledger's arithmetic to the cent.
-- [ ] Every open defect in `docs/KNOWN-FAILURES.md` is either fixed with a test or moved to a
-      "known limitations" section with a reproduction.
-- [ ] `python -m unittest discover` and the fake-provider suite both pass from a clean checkout.
+- [x] **M1 — the suite is green with no network and no spend.** 266 passed, 0 failed at `458e128`,
+      driving the real CLI through the in-memory fake provider. `tests/test_ledger_paths.py` covers the
+      ledger's own file paths, including the lock and a truncated line.
+- [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total
+      ($0.0091 + $0.0079 + $0.0094), three ledger rows reconciled by hand from the rows' own fields, and
+      one artefact pulled from the right machine. The record is [M2 — the real rental](M2-REAL-RENTAL.md).
+- [x] **Money defects found and fixed, each with a test.**
+      `up --dry-run` could rent (`ce69cea`, asserted on the provider call by `f7bf556`);
+      `up` declared success on one alive sample (`4db7d3e`); the guard could stop a healthy pod (`d5fdaea`);
+      `adopt` mispriced an exited pod (`590c58e`); storage was invisible (`fb867b6`, `f4225ff`).
+- [ ] **R4 — the guard has never run against a rented pod.** The stop decision is exercised in-process
+      and through the CLI against the fake, but `watch` has never been armed on a real billing machine,
+      so the sentence "a forgotten machine stops itself" is still unproven end to end. This is the one
+      feature the matrix cannot cover and the fake cannot fake.
 
 ## 2. The repo is a repo
 
-- [ ] `LICENSE` (MIT) present and consistent with `pyproject.toml`.
-- [ ] `.gitignore` covers `__pycache__/`, `*.pyc`, `.rentguard/`, `artefacts/`, `*.egg-info/`,
-      `dist/`, `build/`, and any local config holding a key.
-- [ ] No secret anywhere in the tree or in git history. Verify with a search for the key prefix and
-      for the literal env var names; a leaked key in the first commit is the classic way a good tool
-      starts badly.
-- [ ] `pyproject.toml` has: name, version, description, readme, requires-python, license, authors,
-      classifiers, project URLs, and an entry point that works after `pip install .`
-- [ ] Version bumped to 0.1.0 for the first release, with a `CHANGELOG.md` entry.
-- [ ] CI workflow running the test suite on Python 3.11, 3.12 and 3.13, with no network access.
+- [x] **`LICENSE`** (MIT), `Copyright (c) 2026 Max Reischl (github.com/Max6617)`, consistent with
+      `pyproject.toml` (`license = { text = "MIT" }`, `authors = [{ name = "Max Reischl" }]`).
+- [x] **`.gitignore`** covers caches, build output, `.rentguard/` state, `artefacts/`, the test scratch
+      roots (`.rentguard-tmp/`, `.assay-tmp/`, `.verif/`), a local `rentguard.toml`, and `*.bak`.
+- [x] **No key material in the tree.** `git grep -l 'rpa_'` finds nothing; the key is read only from
+      `DSH_SECRET_RUNPOD_API_KEY` / `RUNPOD_API_KEY` and is never written to a file.
+- [x] **`pyproject.toml`** has name, version `0.1.0`, description, readme, `requires-python >= 3.11`,
+      MIT licence, the author, keywords, classifiers, and the console entry point
+      `rentguard = rentguard.cli:main`. Project URLs are deliberately absent until there is a public
+      home, with the reason recorded in the file.
+- [x] **`CHANGELOG.md`** carries the `0.1.0` (unreleased) entry.
+- [ ] **The install evidence is older than this pin.** The editable install and the console script were
+      verified at an earlier revision, after the `pyproject.toml` package-dir fix. They could **not** be
+      re-run at `458e128` in this sandbox: `python -m pip install -e . --no-deps` fails (exit 1) and
+      `python -m pip wheel .` fails (exit 2), both because pip's build tracker and wheel cache cannot use
+      the DSH temp directory. So that claim is **measured at an older revision, not at this one**, and
+      should be re-checked in a normal environment before publishing.
+- [ ] **CI is red as written, and this one is a gate.** `.github/workflows/ci.yml` sets
+      `RENTGUARD_PROVIDER: fake` for both the Test and the Coverage steps. That variable makes two
+      `tests/test_cli_branches.py` tests fail — measured at `6f31c27` and again at `458e128`:
+      **2 failed / 248 passed with it set, 250 passed / 0 failed without it**. Those tests build a
+      `runpod` provider and expect a missing-key error, and the variable overrides their provider
+      choice. A CI badge from this workflow would be red on the first push, and at `458e128` the two
+      failures also pull the coverage run below its floor.
 
 ## 3. The docs are true
 
-- [ ] Every command in the README has been run and its real output pasted.
-- [ ] The limitations page states: no reliable balance endpoint exists, so the tool reports spend
-      against a cap and never the account balance; the guard is a foreground process whose liveness
-      must be checked; an instance without a network volume is a container that a restart discards;
-      a machine reporting RUNNING with zero uptime is a crash loop.
-- [ ] The MCP page states the approval rule, and that the cap is the backstop for when it is
-      forgotten rather than the permission itself.
+- [x] README, quickstart, cap semantics, provider guide, the fake, the MCP page, limitations, the M2
+      record and the verification log are all written, with the output of the commands that back them.
+- [x] `docs/mcp.md` is the one page a test reads: `tests/test_feature_matrix.py` extracts the tool names
+      from it and compares them with `tools/list`, so the page and the server cannot drift apart.
+- [x] Every page marks what was **exercised** and what is only **described**; the table is in
+      [VERIFICATION](VERIFICATION.md).
+- [x] The pages state plainly that no provider balance is read, that the cap only exists while `watch`
+      runs, and that an instance without a network volume is a container.
 
 ## 4. The name is available
 
-- [ ] PyPI: is `rentguard` free? Check, and if taken pick a fallback — `rentguard-cli`, `gpu-rentguard`,
-      `spendcap` — and decide before the announcement, not after.
-- [ ] No existing project under a confusingly similar name dominates search results.
-- [ ] The CLI name does not collide with anything already on PATH in the usual environments.
+- [x] **`rentguard` is free on PyPI** — `https://pypi.org/pypi/rentguard/json` returns `404`, checked
+      2026-10-14. This is true as of that check and should be re-checked on the day of publishing.
 
-## 5. The ask
+## 5. Publication state
 
-When all of the above is true, one message to the user containing:
+- **No git remote is configured** (`git remote -v` is empty), nothing has been pushed, and there are no
+  tags. Everything lives in one local repository.
+- **The user's publish action would**: create a public repository under Max6617's GitHub account and
+  push this history to it, and — separately — publish version `0.1.0` to PyPI if they choose to.
+- **What becomes irreversible**: a public repository can be deleted, though its forks and clones cannot;
+  a published PyPI version cannot be unpublished, only yanked, and the name stays taken by this project.
+
+## 6. Known limitations
+
+- **The cap only exists while `watch` runs.** It is a property of the guard, not of the machine; if no
+  guard is running the instance bills until someone notices. The MCP surface arms it in bounded calls
+  (`watch_once`, `watch`) and every return says whether protection is still armed. See
+  [what the cap guarantees](cap.md).
+- **The guard has never been armed on a real pod** (R4 above). This is the largest gap between what is
+  tested and what is promised.
+- **No account balance is ever read.** No supported provider exposes one reliably, so the tool reports
+  recorded spend against the user's cap and nothing else. See [limitations](limitations.md).
+- **An instance with no network volume is a container.** A restart discards everything on it, which is
+  why artefacts are pulled as each run finishes and again before `down` stops the machine.
+- **The network-volume attach path is dropped for lack of a volume, not untested.** The account's only
+  volume was deleted on the user's instruction; with nothing left to attach, `[runpod].volume_id`
+  cannot be exercised here. The transport seam is unit-covered (`da51005`). See `CHARTER.md` W3.
+- **`mcp_server.py` is the weakest module at 90.3%** (20 lines). They are the transport's own error and
+  notification branches, not money paths.
+- **`fake.py` is no longer a limitation.** It is 99.6% with nothing real unhit; the only line the tracer
+  reports is its sentinel. It is the module where a fixture can manufacture a world that is not real, so
+  the standing rule is recorded in `tests/test_storage.py`: a provider-payload fixture comes from a live
+  response or the provider's schema, and an invented one says so.
+
+## 7. The ask
+
+When every gate above is settled, one message to the user, and it asks one question:
 
 1. what it is, in two sentences;
-2. the exact thing being published — public repo under which account, and a PyPI release or not;
-3. the evidence: test counts, the one real rental's cost, the ledger row;
-4. what becomes irreversible (a public repo can be deleted, but a published package version cannot be
-   unpublished);
-5. and the single question: publish?
-
-Anything that fails before then is my problem, not the user's.
+2. the exact thing being published — a public repo under which account, and whether a PyPI release is
+   wanted;
+3. the evidence: the test count and coverage at a named commit, the three real rentals and their total;
+4. what becomes irreversible;
+5. **publish?**
