@@ -201,6 +201,23 @@ class DoctorAcrossRoots(ClaimCase):
         self.assertEqual(code, 0, f"a pod named for this project was a hard error.\n{text}")
         self.assertIn("row-not-in-this-root", self.codes(doc), doc["findings"])
 
+    def test_a_tracked_pod_named_for_another_root_is_also_a_warning(self):
+        """Sequence: this root's state names a pod that carries another root's tag — the state file
+        outlived a pod another root then re-rented, or was copied between roots.
+
+        Effect: the same warning as the untracked case. This root's state naming a machine is not
+        evidence that this root's ledger records it.
+        """
+        provider = NamedPod(name=f"rentguard-{OTHER_TAG}")
+        provider.add("pod-A", uptime_seconds=600)
+        self.write_state({"instance_id": "pod-A"})
+
+        code, doc, text = self.invoke_doctor(provider)
+
+        self.assertEqual(code, 0, f"a pod named for another root was a hard error.\n{text}")
+        self.assertIn("tracked-by-another-root", self.codes(doc), doc["findings"])
+        self.assertEqual(self.errors(doc), [], doc)
+
     def test_a_tracked_unclaimed_pod_is_still_a_hard_error(self):
         """Control: the name claims no project, so nothing anywhere owns it. Exit 1, as before."""
         provider = NamedPod(name="small-agents-workbench")
