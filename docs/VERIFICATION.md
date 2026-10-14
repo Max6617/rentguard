@@ -17,6 +17,7 @@ working tree could not affect the run:
 | `8a97a48` | rentguard: quiesced M1 tree (53 tests green) | 53 tests, **3 failures** |
 | `528d15b` | run: pass a pre-quoted command through; up: walk the GPU preference list on refusal | 58 tests, 0 failures |
 | `2ebe660` | fake: offer_unavailable models catalogue-yes/create-no for the fallback path | 58 tests, 0 failures |
+| `af1ba5a` | licence and packaging: Max Reischl (Max6617) as the copyright holder and author | 74 tests, 0 failures |
 
 The first commit is **not** green as extracted. Its three failures are all the same defect —
 `status` erases the recorded instance id when the provider no longer shows it:
@@ -38,6 +39,13 @@ The hashes Forge pinned for `2ebe660` were checked against the commit's blobs, n
 58 tests, 0 failures, twice; `status` after a clean `down` prints
 `machine : stopped (EXITED) — nothing is billing for it now` with no crash-loop or "NO ROW" line; and
 `ledger --json` splits stdout and stderr as shown below.
+
+**`af1ba5a` (HEAD) is the current pass.** The worktree was clean except for the untracked
+`CHARTER.md`, and the suite is **74 passed / 0 failed** (twice). Everything added since `2ebe660` was
+run for real: the `init` template, `adopt`, the guard heartbeat wording in `status`, MCP
+`structuredContent`, and `down --keep-running` (through its own suite). Two defects remain open and are
+recorded below and in [KNOWN-FAILURES](KNOWN-FAILURES.md): F-4 (`--dry-run` creates) and F-5 (the idle
+clamp).
 
 **`up --dry-run` is a money-risk defect, present at all three revisions.** `cmd_up` calls
 `provider.create` inside the preference-retry loop (`cli.py:713`) *before* the dry-run check
@@ -306,25 +314,120 @@ Replies:
 `rentguard_start`, `rentguard_run`, `rentguard_pull`, `rentguard_stop`, `rentguard_adopt`. A line that
 is not JSON was sent and produced no reply, as designed.
 
+## Exercised at `af1ba5a`
+
+**`init`** now writes `volume_id` and `volume_mount` (not the old `volume_name`, which was silently
+ignored), and keeps `provider`, `state_dir` and the `ssh_*` keys **above the first `[table]`** so TOML
+cannot file them inside one. `init --print` was run; the template carries a comment saying why.
+
+**`adopt`**, free, against an untracked instance on the fake account with 1.5 h of uptime at $2.00/h:
+
+```console
+$ rentguard doctor
+account pods   : 1 total, 1 live
+  orphan-1  RUNNING      $2.0/h  Fake GPU 24GB                UNTRACKED
+
+  ERROR live-instance-no-ledger-row: 1 live instance(s) with no ledger row: orphan-1. Either `rentguard adopt <id> --purpose ...` or stop them.
+[exit 1]
+
+$ rentguard adopt orphan-1 --purpose "found billing"
+adopted        : orphan-1  RUNNING  $2.0/h
+row            : 20261014T122521Z-4b21b2
+backdated start: 2026-10-14T12:25:21+00:00  (uptime 1.50 h from the provider)
+cost already on the clock: $3.00 — this is spend that happened before the ledger knew about it, and it is now recorded rather than hidden
+[exit 0]
+```
+
+**The guard heartbeat in `status`** is expressed as age, not as "armed". After `watch` writes one:
+
+```console
+$ rentguard watch
+watching fake-1 — stop at $2.00 this run, $5.00 total, 6.0 h, or 10 min idle
+  2026-10-14T13:55:31+00:00  EXITED     up  0.01h  run $0.001 (unrecorded)  total $0.001/$5.00  gpu 0.0%  idle 60m
+guard finished: already stopped
+
+$ rentguard status
+...
+guard          : alive (heartbeat 0.0 min ago)
+```
+
+With no heartbeat it prints `NO HEARTBEAT — nothing is watching this instance`; past five minutes,
+`heartbeat 12.4 min old — the guard is probably dead`. There is no literal "armed" or "disarmed" string
+in the output.
+
+**F-5, the idle clamp**, on the pure decision path — no network, no spend:
+
+```text
+pod uptime                     : 32 s
+provider-reported GPU idle     : 30.0 min
+effective idle used by decide  : 30.0 min
+idle_minutes from config       : 5.0 min
+decide() -> 'idle for 30 min (limit 5 min, gpu util 0.0)'
+```
+
+**F-4, `--dry-run`**, free, in a fresh root:
+
+```console
+$ RENTGUARD_PROVIDER=fake rentguard up --purpose "dry" --dry-run
+requesting Fake GPU 24GB
+dry run: would request Fake GPU 24GB; nothing was rented and nothing was spent
+[exit 0]
+
+$ rentguard ledger
+no runs recorded
+# and .rentguard/fake-state.json holds fake-1 in PROVISIONING
+```
+
+**The MCP server** at this revision returns `structuredContent` next to `content`. One real session
+exercised all eight tools — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt` —
+against the fake. `rentguard_adopt` returned, in part:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "adopted        : orphan-2  RUNNING  $1.0/h\n..."}], "isError": false, "structuredContent": {"command": "adopt", "adopted": true, "uptime_hours": 0.5, "accrued_usd": 0.500176, ...}}}
+```
+
 ## Tests
 
-Run from the checkout, `python rentguard/tests/<file>`:
+Run from the checkout, `python -m pytest tests -q`:
 
-| Suite | At `8a97a48` | At `2ebe660` (HEAD, 15:3x) |
+| Suite | At `2ebe660` | At `af1ba5a` (HEAD) |
 | --- | --- | --- |
-| `test_money_paths.py` | 23 tests, 1 failure | 28 tests, OK |
-| `test_artefacts_mcp_guards.py` | 5 tests, OK | 5 tests, OK |
+| `test_money_paths.py` | 28 tests, OK | 33 tests, OK |
 | `test_rentguard.py` | 16 tests, OK | 16 tests, OK |
+| `test_artefacts_mcp_guards.py` | 5 tests, OK | 5 tests, OK |
+| `test_init_config.py` | — | 4 tests, OK |
+| `test_known_failures.py` | 4 tests, OK | 4 tests, OK |
+| `test_mcp_structured.py` | — | 4 tests, OK |
+| `test_down_keep_running.py` | — | 3 tests, OK |
 | `test_drift.py` | 3 tests, OK | 3 tests, OK |
-| `test_known_failures.py` | 4 tests, 2 failures | 4 tests, OK |
 | `test_fake_span.py` | 2 tests, OK | 2 tests, OK |
 
-53 tests at `8a97a48` with 3 failures (the erased instance id, above); 58 tests at `528d15b` and
-`2ebe660` with none. No network, no spend. `--dry-run` is not covered by any of them.
+58 tests at `2ebe660`, **74 at `af1ba5a`**, 0 failures at both; 53 at `8a97a48` with 3 failures (the
+erased instance id, above). No network, no spend. `--dry-run` (F-4) and the idle clamp (F-5) are
+covered by no test.
 
 The tree also moved earlier in the window: at 15:08 an intermediate edit made keyless `doctor` raise
 `TypeError: note() missing 1 required positional argument`, and `resolve("runpod")` briefly returned
 the base `Provider` class. Both were fixed within minutes and are not in the table above.
+
+## Exercised or only described
+
+For the ten CLI commands and the eight MCP tools at `af1ba5a`:
+
+| Surface | Exercised at `af1ba5a` | Only described |
+| --- | --- | --- |
+| `init` | `init --print`, plus a written file | — |
+| `doctor` | keyless (exit 1), with the fake, and with an untracked live instance (exit 1) | against RunPod: the key was stripped from the shell for this pass |
+| `up` | fake: a fresh rent and resuming an `EXITED` instance | against RunPod (M2 ran it; this pass did not) |
+| `status` | running, stopped, and with a fresh heartbeat | — |
+| `watch` | on a stopped instance (writes a heartbeat, exits) | stopping a live pod: the decisions are exercised in-process by the suite, never through the CLI against a real machine — charter R4 |
+| `down` | fake, with the pre-stop pull | `--keep-running` through the CLI: covered by `test_down_keep_running.py`, not by a failed pull in this log |
+| `ledger` | empty, and with an open row | — |
+| `pull` | fake (0 files, exit 0) | over ssh against a real machine (M2 ran it) |
+| `adopt` | fake orphan, 1.5 h uptime, backdated to $3.00 | — |
+| `run` | — | through the CLI: the fake has no ssh server. Covered in-process by the suite, and run for real once in M2 |
+| MCP `status`, `ledger`, `doctor`, `start`, `pull`, `stop`, `adopt` | one real session, `content` + `structuredContent` | — |
+| MCP `run` | its "nothing is rented" error path | remote execution (needs a real machine) |
 
 ## Not verified
 

@@ -139,22 +139,24 @@ is mounted.)
 **Artefact patterns are expanded by the remote shell and joined without quoting.** A pattern
 containing a space breaks the pull; `**` behaves like `*` under a POSIX `sh`. Use plain globs.
 
-**Artefacts are pulled at two moments, and nowhere else.** If `[artefacts].pull` is non-empty, `run`
-pulls when each run finishes and `down` pulls before stopping the machine. `[artefacts].on_run` was
-removed; a config that still contains it is accepted with the key dropped rather than rejected, so a
-stale file does not refuse to run. On `down`, a failed pull does not cancel the stop — it stops anyway,
-exits non-zero, and prints which patterns were lost. There is no flag yet to keep the machine running
-instead, so trading money for a retry is not available: the stop wins by default. Call `rentguard pull`
-yourself between runs if you want a copy at any other moment.
+**Artefacts are pulled at two moments by default, and once deliberately.** If `[artefacts].pull` is
+non-empty, `run` pulls when each run finishes and `down` pulls before stopping the machine.
+`[artefacts].on_run` was deleted; a config that still contains it is accepted with the key dropped
+rather than rejected, so a stale file does not refuse to run. On `down`, a failed pull does not cancel
+the stop — it stops anyway, exits non-zero, and prints which patterns were lost.
+`down --keep-running` is the explicit opposite: leave the machine up so the copy can be retried, which
+keeps billing. The stop is the default because a machine that keeps billing is the worse loss. Call
+`rentguard pull` yourself between runs if you want a copy at any other moment.
 
 **`--json` splits the two streams, so merge them deliberately.** With `--json`, stdout carries exactly
 one JSON document and the human prose goes to stderr, so `json.loads(stdout)` works without hunting for
 the last JSON value. A caller that wants both reads two streams; one that already merges them with
 `2>&1` gets the prose in front of the document, which is not valid JSON.
 
-**The MCP server still returns text only.** [MCP server](mcp.md) hands a Bot the same text the CLI
-prints. Returning the structured form alongside it — which is what the tool descriptions imply and the
-team decided — is not wired yet.
+**The MCP server covers eight of the ten commands.** [MCP server](mcp.md) returns both forms now —
+`content` is the text, `structuredContent` is the same answer as an object. What it does not expose is
+`watch` (so a Bot can rent through MCP but cannot arm the guard that enforces the cap) or `init`. Those
+two are CLI-only.
 
 ## Data on your side
 
@@ -174,15 +176,15 @@ lost — but `up` cross-checks live instances against the ledger and refuses to 
 the ledger does not name, and `doctor` reports it. The ledger is the record that counts; the state
 file is only the convenience pointer.
 
-**`[runpod]` keys are not validated.** `[budget]` and `[artefacts]` reject unknown keys at startup; the
-provider section is passed through untouched, so a typo such as `volume_name` instead of `volume_id`
-is accepted and ignored.
+**`[runpod]` keys are not validated, and a top-level key below a table is swallowed.** `[budget]` and
+`[artefacts]` reject unknown keys at startup; the provider section is passed through untouched, so a
+typo there is accepted and ignored. Worse, `state_dir`, `provider` and the `ssh_*` keys are top-level:
+put one below a `[table]` header and TOML files it inside that table, where nothing reads it. `init`
+now writes them above the first header, with a comment saying why.
 
-**`rentguard init` writes one key that the rent path does not read.** The generated template writes
-`[runpod].volume_name`; the code reads `[runpod].volume_id`. Until that is fixed, edit the file after
-`init` if you need a network volume, or your volume is silently not attached. There is also only one
-provider settings section (`[runpod]`) with no name of its own, so a second provider has nowhere
-natural to put its own keys.
+**There is only one provider settings section.** Provider settings are read from `[runpod]` regardless
+of which provider is selected, so a second provider has nowhere natural to put its own keys — see
+[Providers](providers.md), step 5.
 
 **Commands that need the provider need the API key even when nothing is rented.** `status`, `watch`,
 `down`, `run` and `pull` build the provider before they read the state file, so without a key they

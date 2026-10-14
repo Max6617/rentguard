@@ -32,5 +32,13 @@ jobs:
           RENTGUARD_PROVIDER: fake
         run: python -m pytest tests -q
 
+      # The floor is a ratchet, not a target: it fails if coverage goes backwards. The target the
+      # user set is 94% of the code with 100% of the features, and the floor is raised in the same
+      # commit that earns the rise.
+      - name: Coverage
+        env:
+          RENTGUARD_PROVIDER: fake
+        run: python tools/coverage.py
+
       - name: Check the entry point exists
         run: rentguard --version

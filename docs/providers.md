@@ -102,7 +102,7 @@ RENTGUARD_PROVIDER=fake rentguard doctor
 
 Its helper list, how to drive the real CLI with it across processes, and a runnable demonstration of
 the cap firing with nothing spent: **[Test the cap without spending](fake.md)**. The suite's money
-paths (`tests/test_money_paths.py`, 28 tests) run on it.
+paths (`tests/test_money_paths.py`, 33 tests) run on it.
 
 ## Adding Vast, Lambda, or a local box
 

@@ -3,6 +3,27 @@
 A cap is a dollar number in `rentguard.toml`. It is the reason this tool exists, so it is worth
 stating exactly what it does.
 
+**The cap only exists while `rentguard watch` is running.** It is not a property of the machine and not
+something the provider enforces; it is a property of the guard. `watch` is a foreground process that
+nothing starts for you. If no guard is running, there is no cap: the instance bills until someone
+notices. That is the failure this tool was built for, and it is the honest limit of everything below.
+
+**The guard has a known defect.** It can stop a freshly started machine: `watch` compares the provider's
+per-GPU idle seconds against `idle_minutes` without clamping them to the machine's own uptime, so a pod
+can be stopped at its first sample. Reproduced on the pure decision path (no network, no spend) with the
+provider reporting 30 minutes of GPU idle on a machine 32 seconds old:
+
+```text
+pod uptime                     : 32 s
+provider-reported GPU idle     : 30.0 min
+effective idle used by decide  : 30.0 min
+idle_minutes from config       : 5.0 min
+decide() -> 'idle for 30 min (limit 5 min, gpu util 0.0)'
+```
+
+Until this is fixed, use `idle_minutes` with care or run `watch` with a large interval. It is filed in
+[KNOWN-FAILURES](KNOWN-FAILURES.md), and the wording here comes out when the fix lands with a test.
+
 **The short version.** While `rentguard watch` is running, it stops the instance when the estimate for
 spend crosses the cap. `watch` is a foreground process. If it is not running, the cap does not fire.
 
@@ -13,7 +34,7 @@ spend crosses the cap. `watch` is a foreground process. If it is not running, th
 | Recorded spend against the cap | `rentguard up`, before anything is rented | closed rows **plus the accrued cost of the open row** | refuses, exit code 2, unless `--cap N` or `--force` |
 | A live instance with no ledger row | `rentguard up`, before renting | live instances on the account | refuses; `adopt` it or stop it |
 | An open row naming a missing instance | `rentguard up`, before renting | the ledger and the provider | refuses; `down` closes the row |
-| The choice, without renting | `rentguard up --dry-run` | **broken at `2ebe660`** — `cmd_up` calls `create` before it checks the flag, so it can rent a machine and still print "nothing was rented" | see [limitations](limitations.md); do not use |
+| The choice, without renting | `rentguard up --dry-run` | **broken at `af1ba5a`** — `cmd_up` calls `create` before it checks the flag, so it can rent a machine and still print "nothing was rented" | see [limitations](limitations.md); do not use |
 | Total cap | every `watch` poll | closed rows plus the live estimate of the open row | stops the instance, closes the row |
 | Per-run cap | every `watch` poll | the live estimate of the open row | stops the instance, closes the row |
 | Maximum hours | every `watch` poll | the provider's uptime for the instance | stops the instance, closes the row |
@@ -93,19 +114,22 @@ it the ledger proceeds unlocked rather than refusing to write; in that case the 
 ## Prove the decision without spending
 
 The guard is a pure decision (`rentguard.guard.decide`) fed by a snapshot, and the money paths run
-against an in-memory provider with no network and no spend. At commit `2ebe660`, `python -m pytest
+against an in-memory provider with no network and no spend. At commit `af1ba5a`, `python -m pytest
 tests -q` from the checkout:
 
 | Suite | Tests | What it covers |
 | --- | --- | --- |
-| `test_money_paths.py` | 28 | the cap, the per-run cap, idle, drift, artefacts, provider refusals |
-| `test_artefacts_mcp_guards.py` | 5 | artefacts, the MCP tool surface, guard locks |
+| `test_money_paths.py` | 33 | the cap, the per-run cap, idle, drift, artefacts, provider refusals |
 | `test_rentguard.py` | 16 | ledger arithmetic and guard decisions |
+| `test_artefacts_mcp_guards.py` | 5 | artefacts, the MCP tool surface, guard locks |
+| `test_init_config.py` | 4 | the generated config is valid TOML and the keys are the ones read |
+| `test_known_failures.py` | 4 | the drift defect, as a regression guard |
+| `test_mcp_structured.py` | 4 | every tool returns `structuredContent` alongside its text |
+| `test_down_keep_running.py` | 3 | the failed-pull rule, and the `--keep-running` opt-in |
 | `test_drift.py` | 3 | ledger and account drift |
 | `test_fake_span.py` | 2 | the fake's account persisting across processes |
-| `test_known_failures.py` | 4 | the drift defect, as a regression guard |
 
-58 tests, 0 failures, no network, no spend. What the suite proves is the fake's copy of a provider, not
+74 tests, 0 failures, no network, no spend. What the suite proves is the fake's copy of a provider, not
 RunPod's real behaviour — that is what M2 is for. The `--dry-run` defect above is not covered by any of
 these tests.
 

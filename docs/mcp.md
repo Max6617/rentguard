@@ -1,8 +1,13 @@
 # MCP server
 
-`rentguard` runs as an MCP server over stdio, so a Bot team can rent, watch and stop machines through
-tool calls instead of a shell. It is the same code as the CLI: each tool is one CLI command with its
-output captured.
+`rentguard` runs as an MCP server over stdio, so a Bot team can rent and stop machines through tool
+calls instead of a shell. It is the same code as the CLI: each tool is one CLI command, and each reply
+carries both the text and the structured document.
+
+Eight of the ten commands are exposed. The two that are not are `watch` and `init`: a Bot can rent
+through this server but cannot arm the guard that enforces the cap, and per [the cap page](cap.md) the
+cap only exists while a guard runs. That is a gap, not a design choice — a caller that rents here must
+start `rentguard watch` in a shell itself, or the machine bills until someone notices.
 
 ```bash
 python -m rentguard.mcp_server
@@ -93,14 +98,17 @@ above):
 ```json
 {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "rentguard", "version": "0.1.0"}}}
 {"jsonrpc": "2.0", "id": 2, "result": {"tools": [ ... 8 tools ... ]}}
-{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "no runs recorded"}], "isError": false}}
-{"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "no instance recorded\nspend so far   : $0.00 of $25.00"}], "isError": false}}
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "no runs recorded"}], "isError": false, "structuredContent": {"command": "ledger", "runs": [], "total_usd": 0.0, ...}}}
+{"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "no instance recorded\nspend so far   : $0.00 of $25.00"}], "isError": false, "structuredContent": {"command": "status", "instance": null, ...}}}
 ```
 
-**Not structured yet.** `content` carries the CLI's text and nothing else. The structured form
-(`--json`) exists in the CLI; handing it to the caller as well is not wired into this server, so a Bot
-that wants numbers must parse the text or call the CLI itself. That is a known gap, listed in
-[limitations](limitations.md).
+**Both forms, one call.** `content` gives the text a person would read and `structuredContent` gives the
+same answer as an object, so a Bot does not have to parse prose. The server asks the command for
+`--json`: stdout is the structured document, stderr is the text, and the tool result is
+`isError: true` when the command exits non-zero. All eight tools were exercised through a real session
+at commit `af1ba5a` — `status`, `ledger`, `doctor`, `start`, `run`, `pull`, `stop`, `adopt` — see
+[VERIFICATION](VERIFICATION.md). `run` was exercised on its "nothing is rented" path; the remote
+execution path needs ssh to a real machine and is M2's, not this page's.
 
 ## Errors
 

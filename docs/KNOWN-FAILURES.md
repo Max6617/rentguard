@@ -2,9 +2,44 @@
 
 Open defects, with a reproduction. A defect leaves this file when a test covers it and the test passes.
 
+## F-5 — the guard can stop a freshly started machine as "idle"
+
+**Open at `af1ba5a`.** No test covers it.
+
+`guard.snapshot` takes the idle time from the provider's per-GPU `idle` seconds
+(`_idle_minutes_since_boot`) and `decide` compares `max(idle_for_minutes, idle_since_start_minutes,
+max_idle_minutes)` against `idle_minutes`. Nothing clamps the provider's idle figure to the machine's own
+uptime, so a pod whose provider-reported GPU idle exceeds the window is stopped at its first sample —
+even seconds after it started. On a paid run that destroys the work it was rented for.
+
+Reproduction on the pure decision path, no network and no spend: a pod 32 seconds old whose provider
+reports 30 minutes of GPU idle, with `idle_minutes = 5`:
+
+```text
+pod uptime                     : 32 s
+provider-reported GPU idle     : 30.0 min
+effective idle used by decide  : 30.0 min
+idle_minutes from config       : 5.0 min
+decide() -> 'idle for 30 min (limit 5 min, gpu util 0.0)'
+```
+
+Observed on a real pod as `idle for 30 min (limit 5 min)` on a machine that was 32 seconds old.
+
+**Why it matters.** The idle rule exists to stop a machine nobody is using. Firing it on a machine that
+has barely started turns the safety net into the accident, and it is the one path where the guard
+spends money by acting.
+
+**Required behaviour.** Clamp the provider's idle figure to the machine's uptime before it can decide a
+stop, and ignore an idle reading larger than the uptime. The locally observed zero-utilisation counter
+already has that shape; the provider figure must not be able to outvote it.
+
+**The test that closes this.** Snapshot a pod with `uptime = 32` and `gpus[0].idle = 1800`, and assert
+`decide(...)` is `None`; a second case with real idle past the window must still stop. It must fail on
+`af1ba5a` before it passes.
+
 ## F-4 — `up --dry-run` rents the machine it says it did not rent
 
-**Open at `2ebe660`.** No test covers it.
+**Open at `af1ba5a`.** No test covers it.
 
 `cmd_up` calls `provider.create` inside the preference-retry loop *before* it checks `dry_run`, so the
 flag only changes the sentence printed afterwards. Against a provider with stock, `--dry-run` rents a
@@ -44,7 +79,7 @@ reported as a refusal, not retried into a rental.
 
 **The test that closes this.** With the fake provider, `up --dry-run` must leave `fake-state.json`
 absent or empty and append no ledger row, while still printing the GPU it would have requested. It must
-fail on `2ebe660` before it passes.
+fail on `af1ba5a` before it passes.
 
 ## F-1 — an open ledger row with no instance reports zero spend, and `status` says nothing is renting
 
