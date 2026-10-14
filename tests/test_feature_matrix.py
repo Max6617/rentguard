@@ -11,11 +11,10 @@ and the exit codes are the real ones. Child stdout and stderr go to files, never
 confined Windows token this suite runs under cannot open named pipes. The MCP surface is driven over
 its own stdio transport (one JSON-RPC message per line), because that transport is the feature.
 
-Two rows here are expected to be red, and both are defects to report rather than tests to soften:
-
-- `up` prints two prose lines to **stdout** before its JSON document, so `up --json` is not one
-  parseable document, and `rentguard_start` over MCP loses its `structuredContent` because of it;
-- the server advertises eleven tools while `docs/mcp.md` documents eight.
+This file was written red: `up --json` printed prose to stdout, `rentguard_start`/`rentguard_stop`
+lost their `structuredContent` because of it, and the server advertised three tools `docs/mcp.md`
+did not document. All three are fixed and the file is green; the rows stay here because they are the
+spec for that behaviour, and a fix that breaks one is a regression, not a failing test to soften.
 """
 
 from __future__ import annotations
