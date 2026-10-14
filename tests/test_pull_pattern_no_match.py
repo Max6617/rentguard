@@ -30,6 +30,7 @@ sys.path.insert(0, str(WS))
 from rentguard import cli  # noqa: E402
 from rentguard.config import Artefacts, Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
+from rentguard.ledger import Ledger  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 MATCH = "results/declared-timing-3080ti/out.json"
@@ -123,6 +124,58 @@ class PullNoMatch(unittest.TestCase):
 
         self.assertNotEqual(code, 0, f"an empty pull was reported as success.\n{out}")
         self.assertIn("matched", out, f"the reason is not named:\n{out}")
+
+
+    def test_a_down_whose_pull_delivered_nothing_names_patterns_not_paths(self):
+        """Sequence: `down` on a live machine, and its pre-stop pull delivered nothing.
+
+        Effect: the sentence says what the code can know — the *patterns* the pull could not deliver.
+        There is no remote listing in that branch, so promising paths claimed more than it had.
+        """
+        self.cfg.artefacts.pull = ["results/*.json"]
+        self.ledger = Ledger(self.cfg.ledger_path)
+        self.ledger.open(purpose="down with an empty pull", provider="fake", instance_id="pod-A",
+                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=0.18)
+        provider = self.ssh_provider()
+        args = cli.build_parser().parse_args(["down"])
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: provider), \
+                mock.patch.object(cli.subprocess, "Popen", SshDouble(b"", exit_code=2)), \
+                contextlib.redirect_stdout(out):
+            code = cli.cmd_down(args)
+        text = out.getvalue()
+
+        self.assertIn("patterns", text, f"the loss was not named as patterns:\n{text}")
+        self.assertIn("results/*.json", text, text)
+        self.assertNotIn("paths", text.lower(), f"a path promise was made:\n{text}")
+        self.assertIn(("pod-A", "stop"), provider.actions, text)
+
+    def test_a_down_whose_pull_delivered_something_surfaces_the_unmatched_pattern(self):
+        """Sequence: `down` pulls; one file arrives and one configured pattern matched nothing.
+
+        Effect: the unmatched pattern is said out loud, and the sentence does not claim the machine
+        is about to lose what has already been fetched.
+        """
+        self.cfg.artefacts.pull = list(PATTERNS)
+        self.ledger = Ledger(self.cfg.ledger_path)
+        self.ledger.open(purpose="down with a partial pull", provider="fake", instance_id="pod-A",
+                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=0.18)
+        provider = self.ssh_provider()
+        args = cli.build_parser().parse_args(["down"])
+        out = io.StringIO()
+        transport = SshDouble(gzip_tar({MATCH: b"x"}), exit_code=2)
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: provider), \
+                mock.patch.object(cli.subprocess, "Popen", transport), \
+                contextlib.redirect_stdout(out):
+            code = cli.cmd_down(args)
+        text = out.getvalue()
+
+        self.assertIn("results/batchA-*/*", text, f"the unmatched pattern was hidden:\n{text}")
+        self.assertIn("matched nothing", text, text)
+        self.assertNotIn("nothing was delivered", text,
+                         f"a successful delivery was called nothing:\n{text}")
 
 
 if __name__ == "__main__":

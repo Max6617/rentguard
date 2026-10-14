@@ -98,6 +98,16 @@ RUN_OUTPUT_LIMIT = 64 * 1024
 # printing code and the structured form is assembled in one place.
 _REPORT: dict | None = None
 
+#: What the last pull actually delivered. `down` pulls before it stops and holds only the exit code,
+#: and it must say whether anything arrived and which patterns did not — a file count without the
+#: unmatched patterns is the same false success one branch over. One entry, overwritten per pull.
+_LAST_PULL: dict | None = None
+
+
+def _pull_summary(**fields) -> None:
+    global _LAST_PULL
+    _LAST_PULL = fields
+
 
 @contextlib.contextmanager
 def json_report(args=None):
@@ -1286,20 +1296,31 @@ def cmd_down(args) -> int:
             note(f"pulling artefacts from {pod.get('id')} before stopping it")
             pull_exit = _try_pull(cfg, args)
             if pull_exit != 0:
-                lost = ", ".join(cfg.artefacts.pull)
+                summary = _LAST_PULL or {}
+                delivered = list(summary.get("files") or [])
+                missing = list(summary.get("unmatched_patterns") or []) or list(cfg.artefacts.pull)
+                # What the code can actually know: in the failing branch there is no remote listing,
+                # so this names *patterns* the pull could not deliver — the word "paths" claimed a
+                # listing that does not exist. And the sentence fires only when nothing arrived,
+                # because "about to lose" is false once a file landed.
+                if not delivered:
+                    note(f"pull failed (exit {pull_exit}); stopping anyway — nothing was delivered, "
+                         f"and these configured patterns may still hold files that will be lost: "
+                         f"{', '.join(missing)}")
+                else:
+                    note(f"pull delivered {len(delivered)} file(s), but these configured patterns "
+                         f"matched nothing: {', '.join(missing)} — the machine may still hold them")
                 if getattr(args, "keep_running", False):
                     note(f"pull failed (exit {pull_exit}); --keep-running was given, so "
                           f"the machine stays up to retry. It is BILLING until you run "
                           f"`rentguard down` without --keep-running.")
-                    note(f"paths not pulled: {lost}")
+                    note(f"patterns not delivered: {', '.join(missing)}")
                     emit(action="kept-running", stopped=False, kept_running=True,
                          instance={"id": pod.get("id"), "status": status},
                          pull_exit_code=pull_exit,
-                         paths_not_pulled=list(cfg.artefacts.pull),
+                         patterns_not_delivered=missing,
                          total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
                     return 1
-                note(f"pull failed (exit {pull_exit}); stopping anyway — the container "
-                      f"holds files that will be lost: {lost}")
                 note("--keep-running would leave the machine up to retry; stopping is "
                      "the default because a machine that keeps billing is the worse loss.")
 
@@ -1796,6 +1817,8 @@ def cmd_pull(args) -> int:
     provider = _provider(cfg)
     pod = _pod(provider, cfg)
     patterns = cfg.artefacts.pull
+    # A caller that holds only the exit code (`down`) reads this, so it is set on every path.
+    _pull_summary(pulled=False, reason="not-attempted", files=[], unmatched_patterns=[])
     with json_report(args):
         emit(command="pull", patterns=list(patterns),
              local_dir=str(Path(cfg.artefacts.local_dir)))
@@ -1884,6 +1907,8 @@ def cmd_pull(args) -> int:
                 # holds them — `down` names the paths it is about to lose either way.
                 note(f"pull failed: the remote tar archived no member — the configured patterns "
                      f"matched nothing ({', '.join(patterns)}); the files may still be on the machine")
+                _pull_summary(pulled=False, reason="patterns-matched-nothing", files=[],
+                              unmatched_patterns=list(patterns))
                 emit(pulled=False, reason="patterns-matched-nothing", exit_code=code, files=[],
                      unmatched_patterns=list(patterns))
                 return 1
@@ -1892,6 +1917,7 @@ def cmd_pull(args) -> int:
             # failure: reading the exit code alone lost a successful run's only copy of its results
             # and then let the container holding them be stopped (measured 2026-10-14).
             unmatched = _unmatched_patterns(patterns, names)
+            _pull_summary(pulled=True, reason=None, files=list(names), unmatched_patterns=unmatched)
             if code != 0:
                 note(f"tar exited {code}: at least one configured pattern matched nothing, and the "
                      f"members that did match are extracted")
