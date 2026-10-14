@@ -506,11 +506,21 @@ def cmd_doctor(args) -> int:
               + ("  (in-memory: no network, no spend)" if name == "fake" else ""))
         note(f"api key        : {'present' if api_key() else 'MISSING ($DSH_SECRET_RUNPOD_API_KEY)'}"
               + ("  (not needed for the fake)" if name == "fake" else ""))
-        note(f"spend recorded : ${ledger.total_usd():.2f} of a ${cfg.budget.cap_usd:.2f} cap "
-              f"({len(ledger.entries())} run(s))")
-        emit(spend={"recorded_usd": ledger.total_usd(), "cap_usd": cfg.budget.cap_usd,
+        # One figure for the money, with its parts named. The closed rows are *recorded*; the open
+        # run is *accruing* — and the cap is enforced against their sum (`up` checks
+        # `total_usd() + live_usd()`, and the guard's snapshot prices the open run too). Printing
+        # the closed total alone showed a human $0.61 while the tool enforced $1.42: the reading and
+        # the enforcement have to be the same number (2026-10-14, a live $0.89/h window).
+        closed_usd = ledger.total_usd()
+        accruing_usd = ledger.live_usd()
+        note(f"spend recorded : ${closed_usd:.2f} closed + ${accruing_usd:.2f} accruing = "
+             f"${closed_usd + accruing_usd:.2f} of a ${cfg.budget.cap_usd:.2f} cap "
+             f"({len(ledger.entries())} run(s), the open one included as an estimate from its start)")
+        emit(spend={"recorded_usd": closed_usd, "accruing_usd": accruing_usd,
+                    "total_usd": round(closed_usd + accruing_usd, 6),
+                    "cap_usd": cfg.budget.cap_usd,
                     "runs": len(ledger.entries()),
-                    "open_run_accrued_usd": ledger.live_usd()})
+                    "open_run_accrued_usd": accruing_usd})
         note(f"open run       : {open_run['run_id'] if open_run else '(none)'}")
         emit(open_run=_open_run_dict(ledger))
 
