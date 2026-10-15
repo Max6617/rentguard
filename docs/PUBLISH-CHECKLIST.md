@@ -10,16 +10,15 @@ They are not the same revision, so every number below says which one it was read
 
 - **`7f52cc3` is published.** It is the tip of `origin/master` on the public repository
   (<https://github.com/Max6617/rentguard>) — what a stranger clones today.
-- **`042fd21` is the revision measured for this pass.** The tree is two commits further on —
-  `9df8481` (this page's own earlier docs commit) and `be4e7c7` (tests only: the fix for the flaky
-  spend assertion, defect 19) — and `master` is **17 commits ahead** of the published tip, not pushed.
-  Nothing after `042fd21` touches a measured module, so the coverage figure below still describes the
-  tree.
+- **`be4e7c7` is the revision this pass describes, and the one being pushed.** It is the last commit of
+  the product and test work, **17 of the commits ahead of `7f52cc3`**; this page's own docs commits ride
+  on top of it, so they travel in the same push. Everything below was measured there in a clean worktree
+  with the package path verified inside it, and Gilbert re-measured the same revision independently with
+  CI's own environment (`RENTGUARD_PROVIDER=fake` for the Test and the Coverage step) and got the same
+  figures. Nothing after `042fd21` touches a measured module — the two commits since are this page's own
+  docs and `be4e7c7` (tests only), so the coverage figures transfer.
 
-Everything in these tables was measured in a clean worktree with the package path verified inside that
-worktree (`rentguard.mcp_server.__file__`), unless the line says otherwise.
-
-| Measurement | Published tip `7f52cc3` | Local HEAD `042fd21` |
+| Measurement | Published tip `7f52cc3` | `be4e7c7` |
 | --- | --- | --- |
 | Suite | **418 passed, 0 failed, 54 subtests** | **490 passed, 0 failed, 54 subtests** |
 | Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **3,037 / 3,080 = 98.6%**, floor 98.0%, exit **0** |
@@ -36,7 +35,7 @@ is now **100%** (154 lines); `fake.py`, `provider.py` and `runpod.py` are at 100
 measured module is `ledger.py` at 96.2%. Nothing is below the 94% figure, and the total clears the
 floor.
 
-| Module | `7f52cc3` | `042fd21` |
+| Module | `7f52cc3` | `be4e7c7` |
 | --- | --- | --- |
 | `fake.py` | 99.6% | **100.0%** |
 | `provider.py` | 99.2% | **100.0%** |
@@ -51,10 +50,11 @@ floor.
 The figures move with the tree, and each was re-measured when a measured module changed rather than
 carried forward: `18b5fc0` 96.1%; `458e128` 97.5%; `cdd7113` 98.4%; `f158396` **97.99%, exit 1**, one
 line short; `7febd07` 98.4%; `310f449` 98.1%; `721436a` 98.1%; `eef6bdb` 98.6%; `7f52cc3` 98.2%;
-`ddd79c9` **97.3%, exit 1**; `a9cffa0` 98.7%; `042fd21` **98.6%, exit 0**. The floor was never lowered
-on any of the three occasions it went red. **The tree moved three times during this pass** (`ddd79c9` →
-`a9cffa0` → `042fd21` while the page was being written), so the numbers above are pinned to the revision
-named beside them and any commit after `042fd21` that touches one of these modules makes them stale.
+`ddd79c9` **97.3%, exit 1**; `a9cffa0` 98.7%; `042fd21` 98.6%; `be4e7c7` **98.6%, exit 0**. The floor
+was never lowered on any of the three occasions it went red. **The tree moved three times during this
+pass** (`ddd79c9` → `a9cffa0` → `042fd21` → `be4e7c7`, the last two both after a measurement), so the
+numbers above are pinned to the revision named beside them; any commit after `be4e7c7` that touches one
+of these modules makes them stale.
 
 ## 1. The published revision's CI is red; the fix for it is in the unpushed tree
 
@@ -84,7 +84,7 @@ The same commit makes the tracer reach other threads (`threading.settrace`), for
 that ran on a worker thread were not counted at all. `tests/test_coverage_tool.py` pins both halves, and
 the `None`-entry artefact is gone with them. What this host cannot say is whether the 3.13 job then
 passes end to end: there is no pytest for 3.13 here, so the one thing that can be stated is that the
-divisor it failed on is fixed and the local 3.12 measurement at `042fd21` is 3,037 / 3,080 = 98.6%,
+divisor it failed on is fixed and the local 3.12 measurement at `be4e7c7` is 3,037 / 3,080 = 98.6%,
 exit 0.
 
 ## 2. The tool is proven
@@ -121,12 +121,12 @@ exit 0.
       `13d7dc7` live); `up` renting a second machine while a live one bills (`3287a4f`); a price that
       was never read printed as a number (`946ba28`); defect 16, a guard armed while a stale state
       file names the previous pod — it watched a dead id, reported itself armed, and left the live
-      machine billing unguarded (`a9cffa0`); and defect 17, `run` failing a clean command because its
+      machine billing unguarded (`a9cffa0`); defect 17, `run` failing a clean command because its
       pull legitimately delivered nothing (`042fd21`, which adds `run --require-artefacts` for the
       caller who wants an empty delivery to fail); and defect 19, a spend assertion that compared two
       samples of a live meter at a fixed four decimal places — a wall-clock race rather than a code
-      defect (`be4e7c7`, tests only). All are green at the current HEAD (`be4e7c7`) — and **all of them
-      are unpushed**, so the published tip does not have them.
+      defect (`be4e7c7`, tests only). All are green at `be4e7c7` — and **all of them are unpushed**, so
+      the published tip does not have them.
 - [ ] **R4 — the guard has never run against a rented pod.** The stop decision is exercised in-process
       and through the CLI against the fake, but `watch` has never been armed on a real billing machine,
       so "a forgotten machine stops itself" is still unproven end to end. This is the one feature the
@@ -190,15 +190,17 @@ exit 0.
 
 - **The repository is public and part of its history is pushed.** `github.com/Max6617/rentguard`
   exists, public, MIT, with `origin` wired to it in the local clone. The pushed tip is **`7f52cc3`**.
-- **17 commits are unpushed** (`git rev-list --count origin/master..master` = 17): the defect-15 fix
-  and its attack, the pricing-unknown contract, the money-direction fixes, the 3.13 line-number
-  artefact, the `session.py` session driver, the coverage-tool fix, defects 16, 17 and 19, and this
-  page's own docs commits. So the published repository is behind this tree, and it does not contain the
-  fixes listed in §2.
-- **The local gates are green.** Coverage at `042fd21` is 3,037 / 3,080 = 98.6%, exit 0, and the suite
-  is 490 passed / 0 failed. The 3.13 tracer artefact that reddens the published badge is fixed in the
-  tree by `f832596` (§1), and what remains for a green badge is the push itself. This host cannot run
-  3.13, so "CI will be green" is not claimed here — only that the reason it failed is gone.
+- **`be4e7c7` is the 17th commit ahead of the published tip**, and this page's own docs commits sit on
+  top of it — so `git rev-list --count origin/master..master` reads higher than 17 by exactly the
+  number of docs commits in this pass. The 17 are: the defect-15 fix and its attack, the
+  pricing-unknown contract, the money-direction fixes, the 3.13 line-number artefact, the `session.py`
+  session driver, the coverage-tool fix, and the fixes for defects 16, 17 and 19. The published
+  repository is behind this tree and does not contain the fixes listed in §2.
+- **The local gates are green.** Coverage at `be4e7c7` is 3,037 / 3,080 = 98.6%, exit 0, and the suite
+  is 490 passed / 0 failed — the same figures Gilbert measured at the same revision with CI's own
+  environment. The 3.13 tracer artefact that reddens the published badge is fixed in the tree by
+  `f832596` (§1), and what remains for a green badge is the push itself. This host cannot run 3.13, so
+  "CI will be green" is not claimed here — only that the reason it failed is gone.
 - **The user's publish action would**: push those commits (`git push origin master`) — and, separately,
   publish version `0.1.0` to PyPI if they choose to. Nothing else is outstanding on the local side.
 - **What becomes irreversible**: the repository is already public, so its history is already out;

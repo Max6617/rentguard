@@ -489,7 +489,12 @@ verified inside it:
 | `1452718` | 456 passed, 0 failed, 54 subtests | 2,809 / 2,863 = 98.1%, exit 0 |
 | `ddd79c9` | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
 | `a9cffa0` | 485 passed, 0 failed, 54 subtests | 3,013 / 3,054 = 98.7%, exit 0 |
-| `042fd21` — **local HEAD** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
+| `042fd21` | 490 passed, 0 failed, 54 subtests | 3,037 / 3,080 = 98.6%, exit 0 |
+| `be4e7c7` — **local HEAD, and the revision being pushed** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
+
+`be4e7c7` is tests-only on top of `042fd21` (defect 19's fix to the flaky spend assertion), so it
+changes no measured module and the figures carry over; the suite was re-run there, and Gilbert measured
+the same revision with CI's environment and got the same numbers.
 
 **The red at `ddd79c9` was closed by a tool fix and by tests, not by a lower floor.** `f832596` made the
 tracer count lines rather than line-table artefacts (`isinstance(n, int) and n > 0`) and reach worker
