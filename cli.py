@@ -209,8 +209,25 @@ def _pod(provider: Provider, cfg: Config) -> dict | None:
     is the only link between the state file and an open ledger row, and erasing it silently is how a
     run in progress becomes invisible — see F-1 in docs/KNOWN-FAILURES.md. Callers that mean to
     forget the instance do so explicitly.
+
+    When the state file names no instance — it is a cache, and may be empty or truncated — the
+    **open ledger row** is the next record of which machine this project meant, but only while that
+    machine is still *billing*: that row is the record that survives a lost state file (the comment
+    below says so out loud), and without this fallback a live machine named only by the ledger was
+    neither reused nor refused — `up` closed its row and rented a second machine, leaving the first
+    billing with nothing recording it (2026-10-15). A row open against a machine that has already
+    stopped is not the same thing: its rental is over, `up` closes it on the way to a new machine, and
+    the config-mismatch refusal belongs to an instance the *state file* records, not to one recovered
+    from the books.
     """
     instance_id = _read_state(cfg).get("instance_id")
+    if not instance_id:
+        row = Ledger(cfg.ledger_path).open_run() or {}
+        candidate = row.get("instance_id")
+        if candidate:
+            shown = provider.get(candidate)
+            if shown is not None and shown.get("status") in LIVE_STATUSES:
+                instance_id = candidate
     if not instance_id:
         return None
     pod = provider.get(instance_id)
@@ -1010,12 +1027,13 @@ def cmd_up(args) -> int:
             return 0
 
         # A live instance that nothing recorded. `state.json` may be empty or truncated, and a
-        # machine that is billing must not be forgotten just because the file is unreadable. The
-        # ledger is the record that counts: an instance the ledger names is accounted for even when
-        # the state file lost it.
-        recorded = {r.get("instance_id") for r in ledger.entries() if r.get("instance_id")}
-        if open_run:
-            recorded.add(open_run.get("instance_id"))
+        # machine that is billing must not be forgotten just because the file is unreadable. What
+        # accounts for a machine is the state file naming it, or an **open** row naming it. A closed
+        # row is not enough: it says the rental it recorded is over, so a live machine whose only row
+        # is closed has nothing recording it now. Accepting the closed row made this check pass and
+        # `up` rent a second machine beside a billing one, outside the cap (2026-10-15).
+        recorded = {value for value in (_read_state(cfg).get("instance_id"),
+                                        (open_run or {}).get("instance_id")) if value}
         unknown = [p for p in _live(provider) if p.get("id") not in recorded]
         if unknown and not args.force:
             ids = ", ".join(str(p.get("id")) for p in unknown)
