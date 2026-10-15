@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`a9cffa0`** (2026-10-15).
+say where they stand at the revision this file describes, **`042fd21`** (2026-10-15).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`a9cffa0` unless the entry says otherwise.
+`042fd21` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -271,16 +271,21 @@ it. The related shapes that came with it are fixed at `946ba28` — a price nobo
 as a number, and a reused row starts where the last one ended (`tests/test_pricing_unknown.py`, `tests/
 test_up_reuse_after_close.py`, `tests/test_state_lost_ledger_fallback.py`).
 
-### The flaky one that came with them
+### The flaky one that came with them (fixed at `be4e7c7`)
 
 `tests/test_doctor_spend_edges.py::VoidedAndFutureRows::test_a_voided_row_contributes_to_neither_number`
-asserts that the total `doctor` *prints* and the total it *enforces* agree to four decimal places. The
-two figures are computed from the wall clock at different instants, so a slow run can widen the gap
-past the tolerance: in a traced coverage run at `7f52cc3` it failed ($4.001065 vs $4.001132), and it
-failed again in the traced run at `a9cffa0`, while two untraced suite runs at each revision passed. Red
-when the machine is busy, green when it is not — recorded here rather than called a fix, because a
-wall-clock-dependent assertion can fail for a stranger too. The coverage runs are the slow ones, so this
-is the one test that will be flaky precisely when the gate is being measured.
+asserted that the total `doctor` *prints* and the total it *enforces* agree to four decimal places. The
+two figures are two samples of a live quantity — the second is recomputed when the assertion runs — so at
+the $2/h rate these cases use (about $0.000556 per second) `places=4` demanded that both samples be taken
+within about 0.09 s of each other. It failed three times: in the traced coverage run at `7f52cc3`, twice
+untraced at the same revision, and again under the tracer at `a9cffa0` ($4.001065 vs $4.001132, a 6.7e-5
+gap — 0.12 s of drift).
+
+**Fixed at `be4e7c7`** (called defect 19 there). The tolerance is now the accrual rather than a fixed
+four places, and the failure message names the interval instead of implying a code defect. The reasoning
+is in the test: one cent is about 18 s of accrual at that rate, so `places=2` cannot mask what these
+cases hunt for — each looks for a whole $2.00 row that was counted, mispriced or invented, two hundred
+times the tolerance.
 
 ## Defect 16 — a guard can report itself armed while watching a dead instance (fixed)
 
@@ -292,3 +297,31 @@ resolves the live instance through the ledger's open row first, and `tests/test_
 lines) is the test that closes it. Note for anyone reading the numbers: `tests/test_pull_pattern_no_match.py`
 also calls its own finding "defect 16", from the earlier unmatched-pattern work — the same number, two
 different defects.
+
+## Defect 17 — `run` failed a clean command whose pull legitimately delivered nothing (fixed)
+
+**Found** by Cadence during the 2026-10-15 shakedown: `stage()` uploads inputs and produces no
+artefacts, so the framed pull answered `patterns-matched-nothing`, and `run` exited non-zero — a clean
+command reported as a failed run (37 s, $0.0091, row `20261015T204112Z-d52aa6`).
+
+**Fixed at `042fd21`**, and the change is a distinction rather than a blanket exemption:
+
+- a pull that **matched nothing** is not evidence that a result was lost; it is evidence that there was
+  nothing to deliver, which is normal for a command that only reads, stages or validates. `run`'s exit
+  code then follows the **command**, and the result still says `pulled: false` with
+  `pull_reason: "patterns-matched-nothing"` — visible, never silent;
+- a pull that **broke** (a timed-out session, an unreadable frame, a stream that is not an archive) still
+  fails the run, because that is the class where files may exist and be lost;
+- **`run --require-artefacts`** is the strict caller's opt-in: then any pull that did not deliver fails
+  the run, matched-nothing included. `run --help` and the MCP tool description say so.
+
+`down` is deliberately unchanged: it is the last moment before the container is destroyed, so a pull
+that delivered nothing stays visible and non-zero there. `tests/test_run_pull_nothing.py` is the test
+that closes it.
+
+**One inconsistency left in place and reported rather than fixed at midnight**, from that file's own
+docstring: the two pull seams disagree about an *empty* delivery. The tar path names it
+`patterns-matched-nothing` and exits 1; a provider that hands its artefacts over in memory matching
+nothing is reported `pulled: true, files: []` and exits 0, which is what `tests/test_stop_cannot_hang.py`
+and `tests/test_feature_matrix.py` rely on. Since `down`'s non-zero exit is keyed on the pull's exit
+code, the two seams cannot be made consistent without changing `down`'s ruled behaviour.

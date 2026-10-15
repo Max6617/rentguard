@@ -3,7 +3,7 @@
 What rentguard does not do, and what it cannot promise. Read this before trusting it with money you
 cannot lose.
 
-Describes **`a9cffa0`** (2026-10-15). Where a number or a quote appears, it names the revision it was
+Describes **`042fd21`** (2026-10-15). Where a number or a quote appears, it names the revision it was
 read at.
 
 ## Worked example: an open row whose instance is gone
@@ -192,6 +192,14 @@ artefacts may still be on the machine; and a partial pull keeps the members it d
 ones it did not. When a machine cannot be pulled at all, `down`'s sentence names the configured patterns
 that are about to be lost rather than saying "artefacts" in general.
 
+**`run` does not fail because a pull delivered nothing, unless you tell it to.** A command that only
+reads, stages or validates produces no artefacts, so a pull that matched nothing leaves `run`'s exit
+code to the command, with `pulled: false` and `pull_reason: "patterns-matched-nothing"` still in the
+result. A pull that **broke** fails the run, because there the files may exist and be lost.
+`run --require-artefacts` is the opt-in that makes an empty delivery fail the run too. `down` keeps the
+stricter rule unchanged: it is the last moment before the container is destroyed, so a pull that
+delivered nothing stays non-zero there.
+
 **`--json` splits the two streams, so merge them deliberately.** With `--json`, stdout carries exactly
 one JSON document and the human prose goes to stderr, so `json.loads(stdout)` works without hunting for
 the last JSON value. A caller that wants both reads two streams; one that already merges them with
@@ -248,7 +256,7 @@ comes from a live response or the provider's schema, and an invented one says so
 case in point: the first version invented the response key, passed, and hid that the live call returned
 nothing (`f4225ff`). The fake is also a program that can be wrong on its own terms — a helper that never
 saved the machine it added was found and fixed at `458e128` — so "green against the fake" means the
-decisions and the arithmetic are right, never that the provider was understood. At `a9cffa0` the lowest
+decisions and the arithmetic are right, never that the provider was understood. At `042fd21` the lowest
 measured module is `ledger.py` at 96.2% and nothing is below the 94% figure — but that number is a
 snapshot: `session.py` was added at `ddd79c9` and measured 83.2% before it had tests, which put the
 whole project under its own 98.0% coverage floor for a night. Coverage moves when code lands, and the

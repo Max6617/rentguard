@@ -11,7 +11,7 @@ Date: 2026-10-14, between 14:47 and 15:25 local.
 
 **This log is a history, not a snapshot.** The record in this section and the ones under "Exercised at
 `af1ba5a`" was written at `af1ba5a` (2026-10-14) and is kept as it was measured then. The revisions and
-numbers that are current — through the published tip `7f52cc3` and the local HEAD `a9cffa0` — are in
+numbers that are current — through the published tip `7f52cc3` and the local HEAD `042fd21` — are in
 [After `eef6bdb`](#after-eef6bdb-measured-2026-10-15) and
 [Install](#install-the-wheel-into-a-clean-venv).
 
@@ -488,26 +488,29 @@ verified inside it:
 | `e53f544` | 425 passed, **9 failed** — the red-first attacks, awaiting the fixes | 2,710 / 2,761 = 98.2%, exit 0 |
 | `1452718` | 456 passed, 0 failed, 54 subtests | 2,809 / 2,863 = 98.1%, exit 0 |
 | `ddd79c9` | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
-| `a9cffa0` — **local HEAD** | 485 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,013 / 3,054 = **98.7%, exit 0** — floor cleared, no module below 94% |
+| `a9cffa0` | 485 passed, 0 failed, 54 subtests | 3,013 / 3,054 = 98.7%, exit 0 |
+| `042fd21` — **local HEAD** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
 
 **The red at `ddd79c9` was closed by a tool fix and by tests, not by a lower floor.** `f832596` made the
 tracer count lines rather than line-table artefacts (`isinstance(n, int) and n > 0`) and reach worker
 threads (`threading.settrace`) — the second half matters because lines that ran off the main thread were
-not counted at all: `session.py` was 83.2% (129/155) and is **100%** (154/154) at `a9cffa0`, with
+not counted at all: `session.py` was 83.2% (129/155) and is **100%** (154/154) since `a9cffa0`, with
 `fake.py`, `provider.py` and `runpod.py` also at 100%. The lowest measured module is `ledger.py` at
 96.2%, and the total is above the 0.98 floor. No module is below the 94% figure.
 
 The nine reds at `e53f544` are one story, and each names the effect on money: the two `up` shapes that
 rent a second machine while a live one is billing, defect 15's live half (a live machine priced from its
 whole uptime), a doubled row after a refused stop, and an unreadable price printed as zero. They are
-closed by `3287a4f`, `13d7dc7` and `946ba28`, and green at `a9cffa0`; the reproductions stay in
+closed by `3287a4f`, `13d7dc7` and `946ba28`, and green since `a9cffa0`; the reproductions stay in
 [KNOWN-FAILURES](KNOWN-FAILURES.md).
 
-One failure is not part of that story. In the **traced** run at `7f52cc3`,
+One failure is not part of that story, and it is now fixed. In the **traced** run at `7f52cc3`,
 `tests/test_doctor_spend_edges.py::VoidedAndFutureRows::test_a_voided_row_contributes_to_neither_number`
-failed ($4.001065 vs $4.001132, `places=4`) while two untraced suite runs at the same revision passed.
-The assertion compares two figures computed from the wall clock at different instants, so a slow, busy
-machine can widen the gap past the tolerance. Recorded, not fixed: it can fail for a stranger too.
+failed ($4.001065 vs $4.001132, `places=4`), and in the traced run at `a9cffa0` again — the assertion
+compared two samples of a live quantity, and the second one is recomputed when it runs. `be4e7c7`
+(tests only, defect 19 there) makes the tolerance the accrual rather than a fixed four places. It changes
+no measured module, so the `042fd21` coverage figure stands; the suite passes at every revision named
+above.
 
 **CI is red at the published tip, and the culprit is the divisor.** At `7f52cc3` the CI run
 `38721243756` passes `test (3.11)` and `test (3.12)` through every step and fails `test (3.13)` at the
@@ -524,7 +527,7 @@ adds `threading.settrace` so lines that ran on a worker thread are counted too; 
 pins both halves. The published badge is still red because the published revision does not have it, and
 it will stay red until the push. Whether the 3.13 job then passes cannot be checked on this host — there
 is no pytest for 3.13 here — so the claim recorded is the narrow one: the divisor it failed on is fixed,
-and the 3.12 measurement at `a9cffa0` is 3,013 / 3,054 = 98.7%, exit 0.
+and the 3.12 measurement at `042fd21` is 3,037 / 3,080 = 98.6%, exit 0.
 
 Notes, all measured:
 

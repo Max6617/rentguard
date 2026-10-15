@@ -5,7 +5,7 @@ contained job: a provider knows how to rent, inspect, stop and reach one kind of
 else. The cap, the ledger, the guard and the artefact logic sit above it and are identical for every
 provider.
 
-Everything below is the contract in [`rentguard/provider.py`](../provider.py) at **`a9cffa0`**
+Everything below is the contract in [`rentguard/provider.py`](../provider.py) at **`042fd21`**
 (2026-10-15), the revision this page describes.
 
 ## The canonical shape
@@ -119,7 +119,7 @@ RENTGUARD_PROVIDER=fake rentguard doctor
 
 Its helper list, how to drive the real CLI with it across processes, and a runnable demonstration of
 the cap firing with nothing spent: **[Test the cap without spending](fake.md)**. The suite's money
-paths (`tests/test_money_paths.py`, 40 tests at `a9cffa0`) run on it.
+paths (`tests/test_money_paths.py`, 40 tests at `042fd21`) run on it.
 
 ## Adding Vast, Lambda, or a local box
 

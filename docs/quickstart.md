@@ -256,6 +256,18 @@ after it returns — including after a failure, which is usually when you want t
 instance disappeared mid-run, `run` says the artefacts are lost and exits 1 rather than reporting a
 clean success.
 
+A pull that **matched nothing** is not that case, and it does not fail the command: a command that only
+reads, stages or validates legitimately produces no artefacts, and `run` still reports
+`pull_reason: "patterns-matched-nothing"` so the empty delivery is visible. If you want an empty
+delivery to fail the run anyway, ask for it:
+
+```bash
+rentguard run --require-artefacts -- python validate.py
+```
+
+`--require-artefacts` makes the run fail unless the pull delivered something; a pull that *broke* fails
+the run either way, because there the files may exist and be lost.
+
 If the machine reports `RUNNING` but has zero uptime and no ports, it is crash-looping and `run`
 refuses to touch it:
 

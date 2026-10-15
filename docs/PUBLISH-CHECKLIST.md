@@ -10,37 +10,40 @@ They are not the same revision, so every number below says which one it was read
 
 - **`7f52cc3` is published.** It is the tip of `origin/master` on the public repository
   (<https://github.com/Max6617/rentguard>) — what a stranger clones today.
-- **`a9cffa0` is the local HEAD** measured for this pass: **14 commits ahead** of the published tip, on
-  `master`, not pushed.
+- **`042fd21` is the revision measured for this pass.** The tree is two commits further on —
+  `9df8481` (this page's own earlier docs commit) and `be4e7c7` (tests only: the fix for the flaky
+  spend assertion, defect 19) — and `master` is **17 commits ahead** of the published tip, not pushed.
+  Nothing after `042fd21` touches a measured module, so the coverage figure below still describes the
+  tree.
 
 Everything in these tables was measured in a clean worktree with the package path verified inside that
 worktree (`rentguard.mcp_server.__file__`), unless the line says otherwise.
 
-| Measurement | Published tip `7f52cc3` | Local HEAD `a9cffa0` |
+| Measurement | Published tip `7f52cc3` | Local HEAD `042fd21` |
 | --- | --- | --- |
-| Suite | **418 passed, 0 failed, 54 subtests** | **485 passed, 0 failed, 54 subtests** |
-| Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **3,013 / 3,054 = 98.7%**, floor 98.0%, exit **0** |
+| Suite | **418 passed, 0 failed, 54 subtests** | **490 passed, 0 failed, 54 subtests** |
+| Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **3,037 / 3,080 = 98.6%**, floor 98.0%, exit **0** |
 | CI, on push | 3.11 **green**, 3.12 **green**, 3.13 **RED** at the Coverage step | not run — nothing is pushed |
 
 The suite figures are identical with and without `RENTGUARD_PROVIDER=fake` at both revisions. The
 coverage floor is `0.98` in `tools/coverage.py`, and it was not lowered to make any number look better.
 
-**The coverage gate is green again at `a9cffa0`, and both halves of that were fixes rather than
-patience.** The red 97.3% at `ddd79c9` had two causes: the new `session.py` was barely reached, and the
-tracer counted a `None` line-table entry per module and missed every line that ran on a thread other
-than the main one. `f832596` fixed the tool (`isinstance(n, int) and n > 0`, plus `threading.settrace`),
-and `session.py` is now **100%** (154 lines); `fake.py`, `provider.py` and `runpod.py` are at 100% too,
-and the lowest measured module is `ledger.py` at 96.2%. Nothing is below the 94% figure, and the total
-clears the floor.
+**The coverage gate is green again, and both halves of that were fixes rather than patience.** The red
+97.3% at `ddd79c9` had two causes: the new `session.py` was barely reached, and the tracer counted a
+`None` line-table entry per module and missed every line that ran on a thread other than the main one.
+`f832596` fixed the tool (`isinstance(n, int) and n > 0`, plus `threading.settrace`), and `session.py`
+is now **100%** (154 lines); `fake.py`, `provider.py` and `runpod.py` are at 100% too, and the lowest
+measured module is `ledger.py` at 96.2%. Nothing is below the 94% figure, and the total clears the
+floor.
 
-| Module | `7f52cc3` | `a9cffa0` |
+| Module | `7f52cc3` | `042fd21` |
 | --- | --- | --- |
 | `fake.py` | 99.6% | **100.0%** |
 | `provider.py` | 99.2% | **100.0%** |
 | `runpod.py` | 99.3% | **100.0%** |
 | `session.py` | — (does not exist) | **100.0%** |
 | `mcp_server.py` | 98.7% | 99.1% |
-| `cli.py` | 98.0% | 98.4% |
+| `cli.py` | 98.0% | 98.3% |
 | `guard.py` | 99.2% | 98.3% |
 | `config.py` | 99.0% | 99.0% |
 | `ledger.py` | 94.3% | **96.2%** — the lowest, and well above 94% |
@@ -48,8 +51,10 @@ clears the floor.
 The figures move with the tree, and each was re-measured when a measured module changed rather than
 carried forward: `18b5fc0` 96.1%; `458e128` 97.5%; `cdd7113` 98.4%; `f158396` **97.99%, exit 1**, one
 line short; `7febd07` 98.4%; `310f449` 98.1%; `721436a` 98.1%; `eef6bdb` 98.6%; `7f52cc3` 98.2%;
-`ddd79c9` **97.3%, exit 1**; `a9cffa0` **98.7%, exit 0** after the tool fix and `session.py`'s tests.
-The floor was never lowered on any of the three occasions it went red.
+`ddd79c9` **97.3%, exit 1**; `a9cffa0` 98.7%; `042fd21` **98.6%, exit 0**. The floor was never lowered
+on any of the three occasions it went red. **The tree moved three times during this pass** (`ddd79c9` →
+`a9cffa0` → `042fd21` while the page was being written), so the numbers above are pinned to the revision
+named beside them and any commit after `042fd21` that touches one of these modules makes them stale.
 
 ## 1. The published revision's CI is red; the fix for it is in the unpushed tree
 
@@ -79,13 +84,13 @@ The same commit makes the tracer reach other threads (`threading.settrace`), for
 that ran on a worker thread were not counted at all. `tests/test_coverage_tool.py` pins both halves, and
 the `None`-entry artefact is gone with them. What this host cannot say is whether the 3.13 job then
 passes end to end: there is no pytest for 3.13 here, so the one thing that can be stated is that the
-divisor it failed on is fixed and the local 3.12 measurement at `a9cffa0` is 3,013 / 3,054 = 98.7%,
+divisor it failed on is fixed and the local 3.12 measurement at `042fd21` is 3,037 / 3,080 = 98.6%,
 exit 0.
 
 ## 2. The tool is proven
 
 - [x] **M1 — the suite is green with no network and no spend.** 418 passed, 0 failed, 54 subtests at
-      `7f52cc3`; 485 at `a9cffa0`, identical with and without `RENTGUARD_PROVIDER=fake` at both. The
+      `7f52cc3`; 490 at `042fd21`, identical with and without `RENTGUARD_PROVIDER=fake` at both. The
       real CLI is driven through the in-memory fake provider.
 - [x] **The coverage ratchet works, and it has caught a regression three times.** The series is the
       evidence:
@@ -95,8 +100,8 @@ exit 0.
       - at `310f449`, `721436a`, `eef6bdb`, `7f52cc3` and `1452718` it holds at 98.1–98.6%, exit 0;
       - at `ddd79c9` it is **2,957 / 3,038 = 97.3%, exit 1** again, because a new module (`session.py`)
         landed before its tests and the tracer was missing threaded lines;
-      - at `a9cffa0` it is **3,013 / 3,054 = 98.7%, exit 0**, after `f832596` fixed the tracer and
-        `session.py` reached 100%.
+      - at `a9cffa0` (3,013 / 3,054 = 98.7%) and `042fd21` (3,037 / 3,080 = 98.6%) it is green again,
+        after `f832596` fixed the tracer and `session.py` reached 100%.
       The floor was **not** lowered on any of the three occasions: each was flagged as the open gate and
       the tests closed it.
 - [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total ($0.0091 +
@@ -114,10 +119,14 @@ exit 0.
       partial pull names its gap (`eef6bdb`, attacked by `fec0305`). 2026-10-15 added the money-direction
       family: defect 15, a closed row priced a second time from the machine's uptime (`cdb2fba` terminal,
       `13d7dc7` live); `up` renting a second machine while a live one bills (`3287a4f`); a price that
-      was never read printed as a number (`946ba28`); and defect 16, a guard armed while a stale state
+      was never read printed as a number (`946ba28`); defect 16, a guard armed while a stale state
       file names the previous pod — it watched a dead id, reported itself armed, and left the live
-      machine billing unguarded (`a9cffa0`). All are green at `a9cffa0` — and **all of them are
-      unpushed**, so the published tip does not have them.
+      machine billing unguarded (`a9cffa0`); and defect 17, `run` failing a clean command because its
+      pull legitimately delivered nothing (`042fd21`, which adds `run --require-artefacts` for the
+      caller who wants an empty delivery to fail); and defect 19, a spend assertion that compared two
+      samples of a live meter at a fixed four decimal places — a wall-clock race rather than a code
+      defect (`be4e7c7`, tests only). All are green at the current HEAD (`be4e7c7`) — and **all of them
+      are unpushed**, so the published tip does not have them.
 - [ ] **R4 — the guard has never run against a rented pod.** The stop decision is exercised in-process
       and through the CLI against the fake, but `watch` has never been armed on a real billing machine,
       so "a forgotten machine stops itself" is still unproven end to end. This is the one feature the
@@ -181,13 +190,13 @@ exit 0.
 
 - **The repository is public and part of its history is pushed.** `github.com/Max6617/rentguard`
   exists, public, MIT, with `origin` wired to it in the local clone. The pushed tip is **`7f52cc3`**.
-- **14 commits are unpushed** at `a9cffa0` (`git rev-list --count origin/master..master` = 14): the
-  defect-15 fix and its attack, the pricing-unknown contract, the money-direction fixes, the 3.13
-  line-number artefact, the `session.py` session driver, the coverage-tool fix, and defect 16. So the
-  published repository is behind this tree, and it does not contain the fixes listed in §2. This page's
-  own commits are docs-only and sit on top of `a9cffa0`, so a push would carry 16.
-- **The local gates are green.** Coverage at `a9cffa0` is 3,013 / 3,054 = 98.7%, exit 0, and the suite
-  is 485 passed / 0 failed. The 3.13 tracer artefact that reddens the published badge is fixed in the
+- **17 commits are unpushed** (`git rev-list --count origin/master..master` = 17): the defect-15 fix
+  and its attack, the pricing-unknown contract, the money-direction fixes, the 3.13 line-number
+  artefact, the `session.py` session driver, the coverage-tool fix, defects 16, 17 and 19, and this
+  page's own docs commits. So the published repository is behind this tree, and it does not contain the
+  fixes listed in §2.
+- **The local gates are green.** Coverage at `042fd21` is 3,037 / 3,080 = 98.6%, exit 0, and the suite
+  is 490 passed / 0 failed. The 3.13 tracer artefact that reddens the published badge is fixed in the
   tree by `f832596` (§1), and what remains for a green badge is the push itself. This host cannot run
   3.13, so "CI will be green" is not claimed here — only that the reason it failed is gone.
 - **The user's publish action would**: push those commits (`git push origin master`) — and, separately,

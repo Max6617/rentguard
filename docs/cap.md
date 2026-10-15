@@ -109,8 +109,8 @@ it the ledger proceeds unlocked rather than refusing to write; in that case the 
 ## Prove the decision without spending
 
 The guard is a pure decision (`rentguard.guard.decide`) fed by a snapshot, and the money paths run
-against an in-memory provider with no network and no spend. At `a9cffa0`, `python -m pytest tests -q`
-from the checkout collects **485 tests, 0 failures** (54 subtests); these are the files this page leans
+against an in-memory provider with no network and no spend. At `042fd21`, `python -m pytest tests -q`
+from the checkout collects **490 tests, 0 failures** (54 subtests); these are the files this page leans
 on:
 
 | Suite | Tests | What it covers |
