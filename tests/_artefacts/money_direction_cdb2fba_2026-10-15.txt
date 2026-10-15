@@ -1,0 +1,74 @@
+﻿==============================================================================
+P1  state lost + an OPEN row naming a live machine; `up` again
+==============================================================================
+before : live=pod-A:RUNNING:up=3600  rows=20261015T180608 inst='pod-A' open=True usd=None rate=2.0 by=None
+before : state.json exists=False  ledger total=0.0 accruing=4.000396
+after  : up exit=0  created=[{'gpu_id': 'NVIDIA GeForce RTX 4090', 'image': 'runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404', 'container_disk_gb': 50, 'cloud': 'SECURE', 'ports': ['22/tcp', '8888/http'], 'name': 'rentguard-88604d67', 'volume_id': None, 'volume_mount': '/workspace', 'env': None}]
+after  : live=pod-A:RUNNING:up=3600, fake-1:RUNNING:up=1
+after  : rows=20261015T180608 inst='pod-A' open=False usd=4.000556 rate=2.0 by=superseded-open-run | 20261015T200608 inst='fake-1' open=True usd=None rate=2.0 by=None
+after  : state={'instance_id': 'fake-1', 'provider': 'runpod', 'gpu_id': 'NVIDIA GeForce RTX 4090', 'cloud': 'SECURE'}
+after  : ledger total=4.000556 accruing=0.000447 open=fake-1
+after  : the machine pod-A is still RUNNING; its row is closed
+up output tail:
+closed stale row: 20261015T180608Z-ca9127 ($4.000556) was open against 'pod-A'; continuing with the instance in hand
+ledger row     : 20261015T200608Z-c8ee45  (provisional: opened before the machine exists)
+requesting NVIDIA GeForce RTX 4090
+instance       : fake-1  $2.0/h
+ssh            : ssh fake@127.0.0.1
+
+cap            : $5.00 total, $5.00 per run, 6.0 h max
+next           : `rentguard watch` in another terminal, or start it with nohup. Until something is watching, only you are.
+doctor : exit=1
+         account pods   : 2 total, 2 live
+           pod-A  RUNNING      $2.0/h  Fake GPU 24GB                UNTRACKED  name='pod-A'
+           ERROR live-instance-no-ledger-row: 1 live instance(s) with no ledger row and no project's name: pod-A. Either `rentguard adopt <id> --purpose ...` or stop them.
+
+==============================================================================
+P2  state lost + a CLOSED row naming a live machine (stop failed at `down`); `up` again
+==============================================================================
+before : live=pod-A:RUNNING:up=7200  rows=20261015T180608 inst='pod-A' open=False usd=4.000556 rate=2.0 by=down
+before : closed row cost=4.000556  cap=5.0  state.json exists=False
+after  : up exit=0  created=[{'gpu_id': 'NVIDIA GeForce RTX 4090', 'image': 'runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404', 'container_disk_gb': 50, 'cloud': 'SECURE', 'ports': ['22/tcp', '8888/http'], 'name': 'rentguard-88604d67', 'volume_id': None, 'volume_mount': '/workspace', 'env': None}]
+after  : live=pod-A:RUNNING:up=7200, fake-1:RUNNING:up=1
+after  : rows=20261015T180608 inst='pod-A' open=False usd=4.000556 rate=2.0 by=down | 20261015T200608 inst='fake-1' open=True usd=None rate=2.0 by=None
+after  : ledger total=4.000556 accruing=0.000513
+
+==============================================================================
+P3  a row closed while its machine is RUNNING: guard.snapshot / guard.decide
+==============================================================================
+ledger : closed=6.000556 accruing=0.0 closed+accruing=6.000556
+snap   : run_usd=8.0 spent_usd=14.000556 recorded=False accrual_unknown=False priced_from=None
+truth  : the machine's own bill = 6.000556 closed + $2.00 for the hour since = $8.0
+decide : 'total cap reached ($14.00 of $10.00)'
+
+==============================================================================
+P4  two rows naming one instance: `down` closed R1 (stop refused), state still names it, `up` again
+==============================================================================
+after  : up exit=0  created=[]
+after  : live=pod-A:RUNNING:up=10800
+after  : rows=20261015T170608 inst='pod-A' open=False usd=6.000556 rate=2.0 by=down | 20261015T170609 inst='pod-A' open=True usd=None rate=2.0 by=None
+after  : ledger total=6.000556 accruing=6.00003 sum=12.000587
+truth  : the machine's own bill = $6.00 (3 h at $2/h)
+snap   : run_usd=6.000031 spent_usd=12.000587
+
+==============================================================================
+P5  a rate that changes between the row opening and the close
+==============================================================================
+ledger : closed=4.0 (2 h at the row's $2/h)
+truth  : the machine billed 2 h at its own $4/h = $8.00
+cap    : cap=5.0; up's pre-rent check would read 4.0
+
+==============================================================================
+P6  an open row whose start is unreadable and whose pod cannot be witnessed: status/snapshot
+==============================================================================
+ledger : open_run=20260101T000000Z-aaaaaa quarantined=[{'run_id': '20260101T000000Z-aaaaaa', 'field': 'started_at', 'instance_id': 'pod-A', 'rate_usd_per_hour': 2.0, 'reason': "ValueError: Invalid isoformat string: 'the-ledger-was-truncated'"}] total=0.0 accrual()=(0.0, [{'run_id': '20260101T000000Z-aaaaaa', 'field': 'started_at', 'instance_id': 'pod-A', 'rate_usd_per_hour': 2.0, 'reason': "ValueError: Invalid isoformat string: 'the-ledger-was-truncated'"}])
+snap   : run_usd=0.0 spent_usd=0.0 accrual_unknown=False priced_from=None
+status : exit=0
+         instance       : pod-A  RUNNING
+         usable         : NO � RUNNING is a claim, and this one has uptime=None and ports=NULL: a crash loop, not a machine to upload to
+         this run       : $0.000 of $15.00
+         all runs       : $0.000 of $15.00  (~450.0 min to the cap at this rate)
+         guard          : NO GUARD � nothing is watching this instance, so it will bill until someone stops it
+
+==============================================================================
+done
