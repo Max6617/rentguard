@@ -46,16 +46,20 @@ BANNER = ("Welcome to the RunPod community cloud.\r\n"
 
 def transcript(*, output: str = "epoch 1 loss 0.5\n", code: int = 0, banner: str = BANNER,
                echo: bool = True, marker: bool = True, sentinel: bool = True,
-               crlf: bool = True, blank_before_sentinel: bool = False) -> bytes:
-    """A transcript shaped the way the real route returns one: banner, echo, output, sentinel."""
+               crlf: bool = True) -> bytes:
+    """A transcript shaped the way the real route returns one: banner, echo, output, sentinel.
+
+    The driver always prints one newline immediately before the sentinel (`printf '\\n%s %d\\n'`), so
+    a faithful transcript has it too: it is what terminates a command's last line when that line has
+    no newline of its own, and what makes an empty line when it has one.
+    """
     body = banner
     if echo:
         body += ECHO + "\r\n"
     if marker:
         body += BEGIN + "\r\n" + output
     if sentinel:
-        if blank_before_sentinel:
-            body += "\r\n"
+        body += "\r\n"                       # the driver's own newline, always present
         body += f"{EXIT_SENTINEL} {code}\r\n"
     return body.encode("utf-8") if crlf else body.replace("\r\n", "\n").encode("utf-8")
 
@@ -80,13 +84,53 @@ class TheDriverLineCarriesTheStatus(unittest.TestCase):
 
     def test_the_drivers_own_blank_line_is_not_the_commands_output(self) -> None:
         """The sentinel is printed after a blank line so it cannot glue onto a command whose output
-        lacks a final newline; that blank line must not reach the caller as output."""
+        lacks a final newline; that blank line must not reach the caller as output. This is the case
+        where the command **did** end with a newline (`'driver-ok\\n'` → `'driver-ok\\n'`); the case
+        where it did not is `test_a_command_without_a_final_newline_keeps_its_exact_bytes` below, and
+        the two are different branches of the same trim."""
         code, output = session.parse_transcript(
-            transcript(output="driver-ok\n", sentinel=True, blank_before_sentinel=True))
+            transcript(output="driver-ok\n"))
 
         self.assertEqual(code, 0, "the sentinel was not parsed")
         self.assertEqual(output, "driver-ok\n",
                          f"the driver's own blank line reads as the command's output: {output!r}")
+
+    def test_a_command_without_a_final_newline_keeps_its_exact_bytes(self) -> None:
+        """The other branch, pinned here as well as in Max's shell-driven
+        `tests/test_session_protocol_attack.py::…test_a_command_without_a_final_newline_keeps_its_exact_bytes`
+        (which skips where no POSIX shell runs): there the driver's newline terminated the command's
+        last line, so it is dropped rather than reduced to a blank line. `printf 'x'` must read back
+        as `'x'`, not `'x\\n'`."""
+        code, output = session.parse_transcript(
+            transcript(output="x"))
+
+        self.assertEqual(code, 0, "the sentinel was not parsed")
+        self.assertEqual(output, "x", f"a newline was invented for a command that printed none: {output!r}")
+
+    def test_the_raw_transcript_keeps_the_drivers_newline(self) -> None:
+        """The trim is in the *parser*, never in the driver line: the newline before the sentinel is
+        what stops a command without a final newline gluing its output onto it, so a "fix" that
+        removed it from `driver_command` would trade one defect for the other. Max's shell-driven
+        file asserts this on the raw transcript; this asserts it where no POSIX shell runs."""
+        raw = transcript(output="x")
+
+        self.assertIn(b"\n" + EXIT_SENTINEL.encode(), raw,
+                      f"the driver's newline before the sentinel is gone: {raw!r}")
+        self.assertIn("\r\n" + EXIT_SENTINEL, raw.decode("utf-8", "replace"),
+                      "the driver's newline is not its own line in the transcript")
+
+    def test_the_commands_own_newlines_survive_the_trim(self) -> None:
+        """Both directions of the same rule, at the parser: only the driver's own newline goes."""
+        for printed, expected in (("", ""), ("\n", "\n"), ("\n\n", "\n\n"), ("a\nb", "a\nb"),
+                                 ("a\nb\n", "a\nb\n")):
+            with self.subTest(printed=printed):
+                code, output = session.parse_transcript(
+                    transcript(output=printed))
+
+                self.assertEqual(code, 0, f"the sentinel was not parsed for {printed!r}")
+                self.assertEqual(output, expected,
+                                 f"the command printed {printed!r} and the driver returned "
+                                 f"{output!r}")
 
 
 class ATranscriptIsParsedByItsMarkers(unittest.TestCase):
@@ -123,13 +167,15 @@ class ATranscriptIsParsedByItsMarkers(unittest.TestCase):
 
     def test_the_output_arrives_as_the_bytes_do(self) -> None:
         """The filter is incremental: the same code serves the parse and a live reader, including a
-        multi-byte character split across two reads."""
+        multi-byte character split across two reads and the driver's own newline before the sentinel
+        arriving in its own chunk."""
         parsed = session.TranscriptFilter()
         text = ""
         for chunk in [b"banner\r\n", BEGIN.encode() + b"\r\n", "café ".encode()[:4],
-                      "café ".encode()[4:] + b"\n", f"{EXIT_SENTINEL} 0\r\n".encode()]:
+                      "café ".encode()[4:] + b"\n", b"\r\n",
+                      f"{EXIT_SENTINEL} 0\r\n".encode()]:
             text += parsed.feed(chunk)
-        parsed.finish()
+        text += parsed.finish()
 
         self.assertEqual(text, "café \n", f"a split character or the CRLF was mangled: {text!r}")
         self.assertEqual(parsed.exit_code, 0)

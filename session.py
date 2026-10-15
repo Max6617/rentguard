@@ -95,6 +95,11 @@ class TranscriptFilter:
         self._buffer = ""
         self.started = False
         self._chunks: list[str] = []
+        #: The newest output line, held back until the next line (or the sentinel) says whether its
+        #: final newline is the command's or the driver's. Without this hold the live stream and the
+        #: final output disagree by exactly that newline — measured in the window and again by Max's
+        #: `test_a_command_without_a_final_newline_keeps_its_exact_bytes`.
+        self._pending: str | None = None
         self.exit_code: int | None = None
         self.done = False
         self.malformed: str | None = None
@@ -113,7 +118,15 @@ class TranscriptFilter:
     def finish(self) -> str:
         """Flush the decoder and the last partial line (a session killed mid-line)."""
         self._buffer += self._decoder.decode(b"", final=True)
-        return self._drain(flush=True)
+        return self._drain(flush=True) + self._release()
+
+    def _release(self) -> str:
+        """Deliver the held-back line: its newline is the command's, because no sentinel claimed it."""
+        if self._pending is None:
+            return ""
+        chunk, self._pending = self._pending, None
+        self._chunks.append(chunk)
+        return chunk
 
     def _drain(self, flush: bool = False) -> str:
         produced: list[str] = []
@@ -139,21 +152,37 @@ class TranscriptFilter:
         if self.done:
             return ""
         if line.strip().startswith(EXIT_SENTINEL + " "):
-            # The driver prints a blank line before the sentinel so that a command whose output does
-            # not end with a newline cannot glue the sentinel onto its last line. That blank line is
-            # the driver's, not the command's, so it is dropped here — measured on the window pod:
-            # `echo driver-ok` came back as `'driver-ok\n\n'`.
-            if self._chunks and self._chunks[-1] == "\n":
-                self._chunks.pop()
+            # The driver prints exactly one newline before the sentinel, so that a command whose
+            # output does not end with one cannot glue the sentinel onto its last line. That newline
+            # is the driver's, and which line it terminates says which case this is:
+            #
+            # - the command ended with a newline, so the driver's made an **empty line** — drop it
+            #   (measured on the window pod: `echo driver-ok` came back as `'driver-ok\n\n'`);
+            # - the command did **not** end with a newline, so the driver's terminated its last
+            #   line — drop that newline and only that one (`printf 'x'` must come back as `'x'`,
+            #   not `'x\n'`; measured by Max's `test_a_command_without_a_final_newline_keeps_its_exact_bytes`).
+            #
+            # None of the command's own bytes are touched: `printf '\n'` and `echo; echo` still read
+            # back as `'\n'` and `'\n\n'`, because in those cases the driver's newline is the *extra*
+            # one, which is the empty line dropped above.
+            if self._pending == "\n":
+                self._pending = None
+            elif self._pending is not None and self._pending.endswith("\n"):
+                self._pending = self._pending[:-1]
+            produced = self._release()
             code = line.strip()[len(EXIT_SENTINEL) + 1:].strip()
             try:
                 self.exit_code = int(code)
             except ValueError:
                 self.malformed = (f"the exit sentinel carried {code!r}, which is not an exit code")
             self.done = True
-            return ""
-        self._chunks.append(line + "\n")
-        return line + "\n"
+            return produced
+        # One line is held back: which line the driver's newline terminates is only knowable once the
+        # next line (or the sentinel) arrives, and the live stream must be the same bytes as the
+        # final output.
+        produced = self._release()
+        self._pending = line + "\n"
+        return produced
 
 
 def parse_transcript(data: bytes) -> tuple[int, str]:
