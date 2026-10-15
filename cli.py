@@ -506,39 +506,20 @@ def cmd_doctor(args) -> int:
               + ("  (in-memory: no network, no spend)" if name == "fake" else ""))
         note(f"api key        : {'present' if api_key() else 'MISSING ($DSH_SECRET_RUNPOD_API_KEY)'}"
               + ("  (not needed for the fake)" if name == "fake" else ""))
-        # One figure for the money, with its parts named. The closed rows are *recorded*; the open
-        # run is *accruing* — and the cap is enforced against their sum (`up` checks
-        # `total_usd() + live_usd()`, and the guard's snapshot prices the open run too). Printing
-        # the closed total alone showed a human $0.61 while the tool enforced $1.42: the reading and
-        # the enforcement have to be the same number (2026-10-14, a live $0.89/h window).
         closed_usd = ledger.total_usd()
         accruing_usd, unknown_rows = ledger.accrual()
-        # The closed total is printed whatever happens: the number a human reads must not disappear
-        # because one row is broken. What cannot be computed is named, beside it, as a finding.
-        if unknown_rows:
-            for row in unknown_rows:
-                findings.append(Finding(
-                    code="ledger-row-unreadable-start", severity="error",
-                    message=f"ledger row {row['run_id']} has an unreadable {row['field']} "
-                            f"({row['reason']}): its accrual is UNKNOWN, so the spend below is "
-                            f"closed runs only and the cap cannot be computed from the ledger"))
-            note(f"spend accrual : UNKNOWN — {len(unknown_rows)} open row(s) cannot be priced:")
-            for row in unknown_rows:
-                note(f"  {row['run_id']}  {row['field']}: {row['reason']}")
-            note(f"spend recorded : ${closed_usd:.2f} closed (the open run's accrual is UNKNOWN) of a "
-                 f"${cfg.budget.cap_usd:.2f} cap ({len(ledger.entries())} run(s))")
-        else:
-            note(f"spend recorded : ${closed_usd:.2f} closed + ${accruing_usd:.2f} accruing = "
-                 f"${closed_usd + accruing_usd:.2f} of a ${cfg.budget.cap_usd:.2f} cap "
-                 f"({len(ledger.entries())} run(s), the open one included as an estimate from its "
-                 f"start)")
-        emit(spend={"recorded_usd": closed_usd, "accruing_usd": accruing_usd,
-                    "total_usd": None if unknown_rows else round(closed_usd + accruing_usd, 6),
-                    "accrual_unknown": bool(unknown_rows),
-                    "unreadable_rows": unknown_rows,
-                    "cap_usd": cfg.budget.cap_usd,
-                    "runs": len(ledger.entries()),
-                    "open_run_accrued_usd": accruing_usd})
+        # The finding is recorded here — a broken row is a fact about the ledger, not about the
+        # provider — but the *figure* is printed below, once the provider has been asked how long the
+        # open run's machine actually billed. That clock is the witness that prices a row whose start
+        # is unreadable, and the end of that clock is where an already-stopped machine's accrual
+        # stops. Computing it here is what made `doctor` both unable to price such a row and able to
+        # accrue a finished machine up to `now` (2026-10-15).
+        for row in unknown_rows:
+            findings.append(Finding(
+                code="ledger-row-unreadable-start", severity="error",
+                message=f"ledger row {row['run_id']} has an unreadable {row['field']} "
+                        f"({row['reason']}): its accrual is priced from the provider's own uptime "
+                        f"where that is known, and is UNKNOWN where it is not"))
         note(f"open run       : {open_run['run_id'] if open_run else '(none)'}")
         emit(open_run=_open_run_dict(ledger))
 
@@ -619,6 +600,48 @@ def cmd_doctor(args) -> int:
                   + (f"  name={pod.get('name')!r}" if pod.get("name") else ""))
         if not live:
             note("  (nothing is billing)")
+
+        # The money figure, now that the provider can witness the open run. One figure with its parts
+        # named: closed rows are *recorded*, the open run is *accruing*, and the cap is enforced
+        # against their sum. A row whose start is unreadable is priced from the machine's own clock
+        # (`priced_from: uptime`); where that clock is unavailable it stays UNKNOWN, never zero.
+        priced_from: str | None = None
+        if open_run is not None:
+            row_pod = next((p for p in pods if p.get("id") == open_run.get("instance_id")), None)
+            if row_pod is None:
+                row_pod = probe(open_run.get("instance_id")) if open_run.get("instance_id") else None
+            uptime = ((row_pod or {}).get("runtime") or {}).get("uptime")
+            if uptime is not None:
+                witness = round(float(open_run.get("rate_usd_per_hour") or 0.0) * float(uptime)
+                                / 3600.0, 6)
+                if unknown_rows:
+                    accruing_usd, priced_from = witness, "uptime"
+                else:
+                    accruing_usd = min(accruing_usd, witness)
+        if unknown_rows and priced_from is None:
+            note(f"spend accrual : UNKNOWN — {len(unknown_rows)} open row(s) cannot be priced:")
+            for row in unknown_rows:
+                note(f"  {row['run_id']}  {row['field']}: {row['reason']}")
+            note(f"spend recorded : ${closed_usd:.2f} closed (the open run's accrual is UNKNOWN) of a "
+                 f"${cfg.budget.cap_usd:.2f} cap ({len(ledger.entries())} run(s))")
+        else:
+            note(f"spend recorded : ${closed_usd:.2f} closed + ${accruing_usd:.2f} accruing"
+                 + (" (priced from the machine's own uptime; its row's start is unreadable)"
+                    if priced_from else "")
+                 + f" = ${closed_usd + accruing_usd:.2f} of a ${cfg.budget.cap_usd:.2f} cap "
+                 f"({len(ledger.entries())} run(s))")
+        for row in unknown_rows:
+            note(f"row {row['run_id']} stays quarantined: unreadable {row['field']} "
+                 f"({row['reason']})")
+        emit(spend={"recorded_usd": closed_usd, "accruing_usd": accruing_usd,
+                    "total_usd": (None if unknown_rows and priced_from is None
+                                  else round(closed_usd + accruing_usd, 6)),
+                    "accrual_unknown": bool(unknown_rows),
+                    "priced_from": priced_from,
+                    "unreadable_rows": unknown_rows,
+                    "cap_usd": cfg.budget.cap_usd,
+                    "runs": len(ledger.entries()),
+                    "open_run_accrued_usd": accruing_usd})
 
         # Storage bills whether or not a pod exists, so a report that lists only pods can be right
         # about every instance and still miss the largest recurring cost on the account. Severity is
