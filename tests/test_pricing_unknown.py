@@ -19,7 +19,11 @@ Red at `cdb2fba`, measured before this file existed:
 
 What is asserted here is the effect: the snapshot carries the unknown state, the printed figure
 names it, and the guard keeps watching a healthy machine instead of stopping it over an unreadable
-field.
+field. The ruling is narrow — **the flag means "no price could be established"; the provenance
+field means "this price came from somewhere other than the row"**. A price derived from the pod's
+own clock is derived, not unknown, so `pricing_unknown` stays false there while `priced_from`
+records the witness, and `up` may price rather than refuse; marking it unknown would refuse in
+exactly the case where a witness exists.
 """
 
 from __future__ import annotations
@@ -112,18 +116,33 @@ class PricingUnknownIsInTheSnapshot(unittest.TestCase):
 
         self.assert_names_the_unknown(snap, "started_at", "start")
 
-    def test_an_unreadable_start_with_a_witness_is_still_pricing_unknown(self) -> None:
-        """The same flag covers the witnessed case: the pod's clock priced it, so the number is a
-        witness rather than a reading, and ``priced_from`` says where it came from."""
+    def test_an_unreadable_start_with_a_witness_is_priced_not_unknown(self) -> None:
+        """The narrow ruling (2026-10-15): the flag means "no price could be established", the
+        provenance field means "this price came from somewhere other than the row". The pod's own
+        clock priced this row, so it is priced — `pricing_unknown` false, `priced_from: "uptime"` —
+        while the row stays quarantined and named beside the number.
+
+        Red at `cdb2fba` for the second half: `priced_from` is assigned at `guard.py:145` and never
+        passed to the `Snapshot(...)` constructor at `guard.py:179`, so every snapshot reports
+        `priced_from=None` and a witness-priced number reads as if it came from the row."""
         cfg = cfg_for(10.0, scratch_dir(self))
         ledger = Ledger(cfg.ledger_path)
         corrupt_start_row(ledger)
 
         snap = guard.snapshot(pod(uptime=3600.0), cfg, ledger)
 
+        self.assertFalse(getattr(snap, "pricing_unknown", False),
+                         f"a price established from a witness was called unknown: {snap}")
         self.assertEqual(snap.priced_from, "uptime",
-                         f"the pod's own clock did not price the row: {snap}")
-        self.assert_names_the_unknown(snap, "started_at", "start")
+                         f"the pod's own clock priced the row and the snapshot dropped the "
+                         f"provenance: run_usd={snap.run_usd} priced_from={snap.priced_from!r}")
+        self.assertAlmostEqual(snap.run_usd, RATE, delta=0.01,
+                               msg=f"the witnessed price is not the pod's clock at the row's rate: "
+                                   f"{snap}")
+        self.assertEqual(snap.open_run_id, ledger.open_run().get("run_id"),
+                         f"the quarantined row is not named beside the number: {snap}")
+        self.assertTrue(ledger.unreadable_open_rows(),
+                        "the unreadable row stopped being quarantined once it was priced")
 
 
 class StatusDoesNotPrintAZeroItDidNotRead(unittest.TestCase):
