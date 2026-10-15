@@ -29,6 +29,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import types
@@ -88,6 +89,15 @@ class SshTransport:
 
     def __call__(self, argv, *args, **kwargs):
         self.calls.append(list(argv))
+        if kwargs.get("stdin") is subprocess.PIPE:
+            # The **session driver**'s shape (2026-10-15): `ssh -tt target` with pipes, no command in
+            # the argv at all — the command is written into stdin behind a marker, because an exec
+            # passed as an argument is dropped on this route and the session hangs. Modelled the same
+            # way the pty behaves: the line is echoed back, the command runs, and the driver's own
+            # sentinel carries the status out in-band.
+            self.stdout = SessionPipe()
+            self.stdin = DriverStdin(self)
+            return self
         target, remote = argv[-2], argv[-1]
         sink = kwargs.get("stdout")
         self.stdin = kwargs.get("stdin", self.stdin)
@@ -128,6 +138,53 @@ class SshTransport:
             return                      # `run` inherits stdout; those tests assert the argv instead
         sink.write(data)
         sink.flush()
+
+
+class SessionPipe:
+    """The read end of a session's stdout: everything the session produced, then EOF."""
+
+    def __init__(self) -> None:
+        self._data = bytearray()
+
+    def feed(self, data: bytes) -> None:
+        self._data += data
+
+    def read(self, size: int = -1) -> bytes:
+        data = bytes(self._data)
+        self._data.clear()
+        return data
+
+
+class DriverStdin:
+    """The write end of a session's stdin: the driver's line, echoed and then run.
+
+    Reading it here is the *point* of the double: what the command is can only be learned from the
+    bytes the driver writes, because the argv carries no command on this route.
+    """
+
+    def __init__(self, transport: "SshTransport") -> None:
+        self.transport = transport
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.buffer += data
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+        line = self.buffer.decode()
+        begin = line.find(cli.session.BEGIN)
+        if begin < 0:
+            return
+        command = line[begin + len(cli.session.BEGIN) + 2:].split("; rc=$?")[0]
+        self.transport.executed.append(command)
+        self.transport.stdout.feed(
+            ("Welcome to the proxy\r\n" + line.replace("\n", "\r\n") + "\r\n"
+             + cli.session.BEGIN + "\r\nran\r\n"
+             + f"{cli.session.EXIT_SENTINEL} 0\r\n").encode())
 
 
 class ProxyCase(unittest.TestCase):
@@ -356,16 +413,22 @@ class RunTest(ProxyCase):
 
         Effect: the session carries a PTY and the remote command really ran. Without the PTY the
         endpoint answers with its refusal text and the command never executes, which is the defect.
+
+        Since 2026-10-15 the command travels **inside the session** (`stdin`) rather than as an ssh
+        argument: on this route an exec argument is dropped and the session never returns (measured —
+        `run --json` hung past 120 s while the machine billed). What this test asserts is unchanged:
+        a PTY was asked for, the endpoint refused nothing, and exactly one command ran on the
+        machine. The double learns the transport; the effect is the same.
         """
         transport = SshTransport()
 
-        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport,
-                                patch="call")
+        code, out = self.invoke(cli.cmd_run, ["run", "--", "python", "train.py"], transport)
 
         self.assertEqual(code, 0, f"the run through the proxy failed.\noutput:\n{out}")
         self.assertIn("-tt", transport.calls[0], "the proxy session did not ask for a PTY")
         self.assertEqual(transport.refused, [], "the command never ran on the machine")
         self.assertEqual(transport.executed, ["cd /workspace && python train.py"])
+        self.assertIn("ran", out, f"the command's own output did not reach the caller:\n{out}")
 
     def test_run_on_a_direct_pod_is_unchanged(self):
         """The control: no PTY is forced where the route does not need one."""

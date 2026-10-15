@@ -32,6 +32,11 @@ class Budget:
     #: instead. A socket that hangs must not be able to hold a machine open: measured 2026-10-14,
     #: a stuck route kept a machine billing while the operator stopped it by hand.
     stop_timeout_s: float = 45.0
+    #: How long one `run` may take before its session is killed and reported as bounded. This is not
+    #: a limit on the work: it exists because a *dropped* session never returns at all — measured
+    #: 2026-10-15, `run --json` on the community route hung past 120 s while the machine billed and
+    #: nothing ran. A legitimate job that needs longer sets this higher.
+    run_timeout_s: float = 3600.0
 
     def __post_init__(self) -> None:
         if self.cap_usd <= 0:
@@ -44,6 +49,8 @@ class Budget:
             raise ConfigError("budget.max_hours_per_run must be > 0")
         if self.idle_minutes < 0:
             raise ConfigError("budget.idle_minutes must be >= 0")
+        if self.run_timeout_s < 0:
+            raise ConfigError("budget.run_timeout_s must be >= 0 (0 means: do not bound a run)")
 
 
 @dataclass

@@ -51,6 +51,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from . import __version__
+from . import session
 from .config import Config, ConfigError, api_key, load
 from .guard import (
     CLAIM_ANOTHER_ROOT,
@@ -451,6 +452,9 @@ def _template(cfg: Config) -> str:
         f"stop_timeout_s = {b.stop_timeout_s:g}       # a stop call slower than this escalates to the",
         "#                                provider's own stop endpoint: a hung socket must never hold",
         "#                                a billing machine open",
+        f"run_timeout_s = {b.run_timeout_s:g}      # one `run` may take this long, then its session is",
+        "#                                killed and reported as bounded; 0 means no bound. It exists",
+        "#                                because a dropped session never returns at all",
         "# balance_usd would be an OPTIONAL local assumption, never a reading. No provider exposes a",
         "# reliable balance, so rentguard never reports one: it reports spend against your cap.",
         "",
@@ -1719,7 +1723,8 @@ def _tail(text: str, limit: int = RUN_OUTPUT_LIMIT) -> tuple[str, bool]:
 
 
 def _run_remote(provider: Provider, argv: list[str], target: str, remote: str,
-                *, capture: bool) -> tuple[int, str, str]:
+                *, capture: bool, pty: bool = False, timeout: float = 0.0,
+                on_text=None) -> tuple[int, str, str]:
     """Run the command on the machine: ``(exit code, stdout, stderr)``.
 
     ``capture`` is set when a structured result is being collected, and it is the whole point: the
@@ -1731,6 +1736,11 @@ def _run_remote(provider: Provider, argv: list[str], target: str, remote: str,
     Without ``capture`` nothing changes: the child inherits the terminal, and a person watching a
     training run sees it live. The provider's in-memory command seam is captured at the Python level,
     because that runner runs in this process rather than in a child.
+
+    ``pty`` selects the **session driver** instead: on a route whose channel is a PTY the command
+    passed as an ssh argument is dropped and the session returns prompt text (measured 2026-10-15),
+    so the command goes into the session's stdin and the exit status comes back as a sentinel. On
+    that route the two streams are one stream, which the result says out loud.
     """
     if provider.command_runner is not None:
         if not capture:
@@ -1739,6 +1749,12 @@ def _run_remote(provider: Provider, argv: list[str], target: str, remote: str,
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = provider.command_runner(argv, remote)
         return code, out.getvalue(), err.getvalue()
+
+    if pty:
+        result = session.run_session(argv, target, remote, timeout=timeout, on_text=on_text)
+        if result.reason:
+            note(f"session        : {result.reason}")
+        return result.exit_code, result.output, ""
 
     if not capture:
         return subprocess.call([*argv, target, remote]), "", ""
@@ -1781,8 +1797,16 @@ def cmd_run(args) -> int:
         # our stdout is the document, and for the MCP server it is the JSON-RPC stream. `note()` the
         # tail so a person still sees it, and put both streams in the result for the machine.
         capture = json_wanted(args)
+        # A PTY route cannot run a command passed as an ssh argument: the exec is dropped and the
+        # session returns prompt text (measured 2026-10-15), which is why `run` hung and had to be
+        # killed. There the command goes into the session's stdin with a begin marker and an exit
+        # sentinel, and the read is bounded — a dropped session never returns at all.
+        pty = _ssh_pty(provider, pod)
+        bound = float(getattr(cfg.budget, "run_timeout_s", 3600.0) or 0.0)
+        on_text = (lambda text: sys.stdout.write(text)) if (pty and not capture) else None
         code, run_out, run_err = _run_remote(provider, argv, target, remote_command,
-                                             capture=capture)
+                                            capture=capture, pty=pty, timeout=bound,
+                                            on_text=on_text)
         shown_out, out_dropped = _tail(run_out)
         shown_err, err_dropped = _tail(run_err)
         if capture and (shown_out or shown_err):
@@ -1828,7 +1852,10 @@ def cmd_run(args) -> int:
         # Whether the pull actually worked, not merely whether it was configured: claiming artefacts
         # were kept while the line above says "pull failed" is how a lost result reads as a kept one.
         pulled_ok = bool(cfg.artefacts.pull) and not artefacts_lost and pull_exit == 0
-        if code != 0 or (pull_exit not in (None, 0)) or artefacts_lost:
+        if code < 0 and pty:
+            note(f"no exit status came back from the session; artefacts "
+                 f"{'pulled' if pulled_ok else 'NOT pulled'}")
+        elif code != 0 or (pull_exit not in (None, 0)) or artefacts_lost:
             note(f"command exited {code}; artefacts "
                  f"{'pulled' if pulled_ok else 'NOT pulled'}")
         emit(ran=True, command=remote, exit_code=code,
@@ -1839,7 +1866,9 @@ def cmd_run(args) -> int:
              truncated=bool(out_dropped or err_dropped))
     if artefacts_lost or (pull_exit not in (None, 0)):
         return 1
-    return code
+    # `-1` is the session driver's "no exit status came back" — the command may still be running on
+    # the machine, so it must never read as a clean status to a script or a Bot.
+    return 1 if code < 0 else code
 
 
 # ------------------------------------------------------------------ artefacts
