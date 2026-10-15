@@ -15,6 +15,11 @@ beats it, in the same commit that earns the rise.
 A line number is a floor, not a promise. It says code was *reached*, never that its behaviour was
 checked: the guard defect that stopped a 32-second-old pod lives in lines that all executed. Feature
 coverage is the half this script cannot see, and the half that catches that class of bug.
+
+**A suite that does not pass is not a coverage result.** `pytest.main` returns a count, not a verdict,
+and coverage can sit above the floor on a red tree: lines run whether or not the assertions hold.
+Measured 2026-10-15 — this gate printed `target met`, exit 0, over `1 failed, 499 passed`. So the
+suite's own exit code is checked *before* the floor is compared, and a red suite fails the gate.
 """
 
 from __future__ import annotations
@@ -76,7 +81,7 @@ def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
     # count as uncovered — the measurement would be of the main thread, not of the program.
     threading.settrace(tracer)
     try:
-        pytest.main(argv)
+        suite_status = int(pytest.main(argv))
     finally:
         threading.settrace(None)
         sys.settrace(None)
@@ -95,8 +100,8 @@ def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
         # Every module present, nothing hit: that is never a legitimate result of running the
         # suite, it is a checkout whose package resolved somewhere the tracer was not watching.
         # Reporting it as 0.0% would let a hand-set floor turn a broken measurement into a pass.
-        return {}, seen
-    return result, seen
+        return {}, seen, suite_status
+    return result, seen, suite_status
 
 
 def _diagnose_unmeasured(seen: set[str]) -> None:
@@ -122,7 +127,7 @@ def main() -> int:
     parser.add_argument("pytest_args", nargs="*", default=["tests", "-q", "-p", "no:cacheprovider"])
     args = parser.parse_args()
 
-    rows, seen = measure(args.pytest_args or ["tests", "-q", "-p", "no:cacheprovider"])
+    rows, seen, suite_status = measure(args.pytest_args or ["tests", "-q", "-p", "no:cacheprovider"])
     if not rows:
         _diagnose_unmeasured(seen)
         return 2
@@ -139,6 +144,12 @@ def main() -> int:
     print(f"{'TOTAL':<22}{total_lines:>7}{total_hit:>7}{overall * 100:>8.1f}%")
     print(f"floor {args.min * 100:.1f}%   target {args.target * 100:.1f}%")
 
+    # The suite's verdict comes before the floor: a red suite is not a coverage result, and a green
+    # number over failing assertions is exactly how "the gate is green" gets quoted for a publish.
+    if suite_status != 0:
+        print(f"\nFAIL: the suite did not pass (pytest exit {suite_status}). Lines run whether or not "
+              f"the assertions hold, so {overall * 100:.1f}% over a red suite is not a green gate.")
+        return 1
     if overall < args.min:
         print(f"\nFAIL: {overall * 100:.1f}% is below the floor of {args.min * 100:.1f}%")
         return 1

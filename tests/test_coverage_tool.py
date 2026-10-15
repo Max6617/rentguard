@@ -1,4 +1,4 @@
-﻿"""The coverage gate's divisor counts **lines**, not line-table artefacts.
+"""The coverage gate's divisor counts **lines**, not line-table artefacts.
 
 The GitHub CI failed the `Coverage` step on Python 3.13 only (`test (3.13)`, 2026-10-15) while 3.11 and
 3.12 were green: `TOTAL 2769 lines, 2710 hit = 97.9%` against a 98.0% floor. The cause was measured
@@ -54,6 +54,45 @@ class TheDivisorCountsLines(unittest.TestCase):
         self.assertEqual(coverage_tool.DEFAULT_FLOOR, 0.98,
                          "the floor was changed; a per-interpreter floor needs its denominator and its "
                          "reason written down, which this is not")
+
+
+class ARedSuiteIsNotAGreenGate(unittest.TestCase):
+    """Defect 21: the gate printed `target met`, exit 0, over `1 failed, 499 passed`.
+
+    `pytest.main` returns a count rather than a verdict, and lines run whether or not the assertions
+    hold — so a publish precondition reading "the gate is green" could be met by a red tree. Keel's
+    gate states the rule; this pins it here.
+    """
+
+    def run_gate(self, rows: dict[str, tuple[int, int]], suite_status: int, *argv: str) -> int:
+        with mock.patch.object(coverage_tool, "measure",
+                               lambda args: (rows, set(), suite_status)), \
+                mock.patch.object(sys, "argv", ["coverage.py", *argv]):
+            return coverage_tool.main()
+
+    def test_a_failing_suite_fails_the_gate_even_above_the_floor(self) -> None:
+        code = self.run_gate({"cli.py": (100, 100)}, suite_status=1)
+
+        self.assertEqual(code, 1,
+                         "a gate over a failing suite exited 0: a publish precondition that reads "
+                         "\"the gate is green\" can then be met by a red tree")
+
+    def test_a_failing_suite_fails_even_below_a_lowered_floor(self) -> None:
+        """The suite's verdict comes first, so no floor setting can turn a red suite green."""
+        code = self.run_gate({"cli.py": (100, 100)}, 1, "--min", "0")
+
+        self.assertEqual(code, 1, "a hand-set floor turned a red suite into a green gate")
+
+    def test_a_passing_suite_still_gates_on_the_floor(self) -> None:
+        """The control: the floor is still what fails a green suite that measured too little."""
+        code = self.run_gate({"cli.py": (1, 4)}, suite_status=0)
+
+        self.assertEqual(code, 1, "a green suite below the floor passed the gate")
+
+    def test_a_passing_suite_above_the_floor_passes(self) -> None:
+        code = self.run_gate({"cli.py": (100, 100)}, suite_status=0)
+
+        self.assertEqual(code, 0, "a green suite above the floor failed the gate")
 
 
 if __name__ == "__main__":
