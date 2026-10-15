@@ -6,11 +6,11 @@ cost, and have the machine stop itself.
 Time: about ten minutes, most of it waiting for the pod to boot. Money: whatever your chosen GPU
 costs per hour, capped by the `cap_usd` you set.
 
-**This page describes `e53f544`** (2026-10-15). The install evidence in §1 and the free rehearsal in
-"Rehearse without paying" were run against the wheel built from that revision. The command transcripts
-are the free fake-provider ones and their real output is in [VERIFICATION.md](VERIFICATION.md). The paid
-step was run separately as milestone M2 — see [M2 — the real rental](M2-REAL-RENTAL.md) — and this page
-marks which transcripts are free and which are M2's.
+**The install evidence in §1 was re-run at `51e350e`; the free rehearsal in "Rehearse without paying"
+was run at `e53f544`** (both 2026-10-15), and each says which. The command transcripts are the free
+fake-provider ones and their real output is in [VERIFICATION.md](VERIFICATION.md). The paid step was run
+separately as milestone M2 — see [M2 — the real rental](M2-REAL-RENTAL.md) — and this page marks which
+transcripts are free and which are M2's.
 
 ## 1. Install
 
@@ -24,9 +24,9 @@ python -m pip install .
 rentguard --version
 ```
 
-**What was actually run here, at `e53f544` on Python 3.12.6**, is the wheel below, installed into a fresh
-virtual environment and run from its console script. `python -m pip install .` itself could not be run on
-this machine: there is no route to PyPI, so pip's isolated build waits at
+**What was actually run here, at `51e350e` on Python 3.12.6**, is the wheel below, built with the host
+interpreter and installed into a fresh virtual environment. `python -m pip install .` itself could not be
+run on this machine: there is no route to PyPI, so pip's isolated build waits at
 `Installing build dependencies: started` (measured: still there after 7 minutes, then killed) because it
 cannot fetch `setuptools>=68`. With network, that is the one command you need, and CI runs
 `python -m pip install -e .` plus `rentguard --version` on every push.
@@ -34,7 +34,7 @@ cannot fetch `setuptools>=68`. With network, that is the one command you need, a
 ```console
 $ python -m pip wheel . --no-deps --no-build-isolation -w dist
 Building wheels for collected packages: rentguard
-  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=76824 sha256=cf160ad3…
+  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=85921 sha256=ac4116b2…
 Successfully built rentguard
 [20 s, exit 0]
 
@@ -47,7 +47,8 @@ rentguard 0.1.0
 
 `--no-build-isolation` uses the `setuptools` already installed instead of fetching one; `--no-index
 --no-deps` installs the wheel with nothing to resolve, which is correct because rentguard has no
-dependencies. Installed that way, `rentguard doctor --json` works against a root that has a ledger:
+dependencies. Both flags are for this host only — a machine with PyPI does not need either. Installed
+that way, `rentguard doctor --json` works against a root that has a ledger:
 
 ```console
 $ rentguard doctor --json
@@ -55,7 +56,7 @@ $ rentguard doctor --json
   "command": "doctor",
   "version": "0.1.0",
   ...
-  "open_run": {"run_id": "20261015T202238Z-cf2d06", "purpose": "install check", ...},
+  "open_run": {"run_id": "20261015T210041Z-383698", "purpose": "install rerun", ...},
   "spend": {"recorded_usd": 0.0, "accruing_usd": 8.6e-05, "total_usd": 8.6e-05, ...},
   "findings": []
 }

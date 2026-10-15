@@ -592,8 +592,8 @@ Endpoint: `GET /v2/network-volumes` on `api.runpod.io`, response key `networkVol
 
 ## Install: the wheel, into a clean venv
 
-Run at `e53f544` (2026-10-15), on Python 3.12.6. The claim this backs is the one a stranger cares
-about: the checkout builds, installs, and its console script runs.
+Run at `51e350e` (2026-10-15), on Python 3.12.6, and first run the same way at `e53f544`. The claim this
+backs is the one a stranger cares about: the checkout builds, installs, and its console script runs.
 
 **`python -m pip install .` was not run here, and the step it stops at is named.** With no route to
 PyPI, pip's isolated build never gets past fetching `setuptools>=68` for the build environment:
@@ -634,7 +634,7 @@ $ python -m pip wheel . --no-deps --no-build-isolation -w dist
 Processing c:\...\rentguard
   Preparing metadata (pyproject.toml): finished with status 'done'
 Building wheels for collected packages: rentguard
-  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=76824 sha256=cf160ad361a83df1b4b93e23e551a80637722592f1540aff692eba84fffdf26f
+  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=85921 sha256=ac4116b2a3d7899239cade713d1f94a7e559987270b0eb832eb0ed3ee2592991
 Successfully built rentguard
 [20 s, exit 0]
 
@@ -649,7 +649,7 @@ $ <venv>\Scripts\rentguard.exe doctor --json      # in a root that has a ledger,
   "command": "doctor",
   "version": "0.1.0",
   ...
-  "open_run": {"run_id": "20261015T202238Z-cf2d06", "purpose": "install check", ...
+  "open_run": {"run_id": "20261015T210041Z-383698", "purpose": "install rerun", ...
   "spend": {"recorded_usd": 0.0, "accruing_usd": 8.6e-05, "total_usd": 8.6e-05, ...},
   "findings": []
 }

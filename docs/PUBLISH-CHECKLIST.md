@@ -112,21 +112,31 @@ That makes both interpreters measure the same 2,767 lines and keeps a single flo
       so "a forgotten machine stops itself" is still unproven end to end. This is the one feature the
       feature matrix cannot cover and the fake cannot fake.
 
-## 3. The install is proven
+## 3. The install is proven, by the wheel route
 
-- [x] **A wheel builds, installs into a clean venv, and the console script runs.** Measured at
-      `e53f544` (the code is unchanged in the files that matter at `ddd79c9`): `pip wheel` produced
-      `rentguard-0.1.0-py3-none-any.whl` (76,824 bytes, sha256 `cf160ad3…`) in 20 s; installing it gave
-      `Successfully installed rentguard-0.1.0`; `rentguard --version` printed `rentguard 0.1.0`; and
-      `rentguard doctor --json` on a root holding a ledger printed one JSON document and exited 0. The
-      commands and their output are in [the quickstart](quickstart.md#1-install) and
-      [VERIFICATION](VERIFICATION.md#install-the-wheel-into-a-clean-venv).
-- [ ] **`python -m pip install .` itself was not run here, and the reason is named.** This host has no
-      route to PyPI, so pip's isolated build waits at `Installing build dependencies: started` — it was
-      still there after 7 minutes and was killed; it is fetching `setuptools>=68` for the build
-      environment. On a machine with network that is the one command, and **CI runs
-      `python -m pip install -e .` plus `rentguard --version` on every push**: green on 3.11 and 3.12 at
-      `7f52cc3`, and the 3.13 job's Install step also succeeds — it stops later, at Coverage.
+- [x] **A wheel builds with the host interpreter, installs into a clean venv, and the console script
+      runs.** Re-run at `51e350e` (2026-10-15), on Python 3.12.6, in this order:
+      1. `python -m pip wheel . --no-deps --no-build-isolation -w dist` — the build runs where a backend
+         exists (`C:\Python312` carries setuptools) → `rentguard-0.1.0-py3-none-any.whl`, **85,921 bytes**,
+         sha256 `ac4116b2…`, about 20 s, exit 0. (The wheel is larger than the 76,824 B measured at
+         `e53f544` because `session.py` is in it now.)
+      2. `<venv>\Scripts\python.exe -m pip install --no-index --no-deps dist\rentguard-0.1.0-py3-none-any.whl`
+         → `Successfully installed rentguard-0.1.0`.
+      3. `<venv>\Scripts\rentguard.exe --version` → `rentguard 0.1.0`.
+      4. `rentguard doctor --json` against a root holding `.rentguard\runs.jsonl` → one JSON document,
+         `findings: []`, exit 0.
+      **What is proven is this route, not `pip install` from an index.** The two flags are host-only and
+      load-bearing here: `--no-build-isolation`, because there is no route to PyPI so an isolated build
+      waits at `Installing build dependencies: started` for a `setuptools>=68` it cannot fetch; and
+      `--no-index --no-deps`, because there is nothing to resolve. One sandbox step sits in the middle and
+      is also host-only: `python -m venv` dies in `ensurepip` here, writing into a mode-0700 temp directory
+      (`PermissionError [Errno 13]`, then `WinError 5`), so the venv is made with `--without-pip` and pip
+      bootstrapped under a `sitecustomize` shim that widens only that mode. Commands and output:
+      [quickstart](quickstart.md#1-install), [VERIFICATION](VERIFICATION.md#install-the-wheel-into-a-clean-venv).
+- [ ] **`python -m pip install .` itself was not run here, and the reason is named.** On a machine with
+      network that is the one command, and **CI runs `python -m pip install -e .` plus
+      `rentguard --version` on every push**: green on 3.11 and 3.12 at `7f52cc3`, and the 3.13 job's
+      Install step also succeeds — it stops later, at Coverage.
 
 ## 4. The repo is a repo
 
