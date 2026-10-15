@@ -5,7 +5,7 @@ about the effect on money: how many machines are billing afterwards, and whether
 would enforce (closed rows plus the open run's accrual) matches the machine's own bill. The
 provider is injected, so no ambient ``RENTGUARD_PROVIDER`` can change what these measure.
 
-Red at `7f52cc3`. Case by case, with the severity call:
+Red at `7f52cc3` and still red at `cdb2fba`. Case by case, with the severity call:
 
 1. ``ALiveMachineNamedByAnOpenRowIsNotSuperseded`` — with the state file lost (a shape the code
    says out loud it survives), a live machine the *ledger* names is not reused and not refused:
@@ -16,15 +16,16 @@ Red at `7f52cc3`. Case by case, with the severity call:
    first bills. SEVERE: the same unrecorded, unguarded bill.
 3. ``AClosedRowOnALiveMachineIsNotRePriced`` — a row closed while its machine is still RUNNING is
    priced a second time from the machine's whole uptime, so ``guard.decide`` stops a live machine
-   whose real spend is under the cap. The same root cause as defect 15; this case is the severe
-   half (a stop on a live machine), kept for the post-fix verification.
+   whose real spend is under the cap. The severe half of defect 15; Forge's `cdb2fba` branch is
+   ``status in TERMINAL_STATUSES``, so only a finished machine is covered. The
+   ``PROVISIONING``/``STARTING`` half is in ``tests/test_guard_closed_row_attack.py``.
 4. ``TwoRowsNamingOneInstanceDoNotDoubleCount`` — after a refused stop, ``up`` opens a second row
    for the same machine, backdated to its boot, and the ledger reads $12 for a $6 bill. Same
    family as 3; conservative direction, so NOT severe, but it produces a false stop.
-5. ``AnUnreadableAccrualIsNotPrintedAsAWholeZero`` — an open row whose start is unreadable and
-   whose pod cannot witness it is printed as ``$0.000`` with ``accrual_unknown=False``; the field
-   documented to mark exactly this is never set. NOT severe: ``up`` refuses and ``watch`` keeps
-   watching, so no machine is left unstopped — the reading is the false part.
+
+The unreadable-input cases (a missing rate, a missing uptime, an unreadable start) are one contract
+of their own, pinned in ``tests/test_pricing_unknown.py`` (ruling 2026-10-15: no unreadable input
+may price to zero silently).
 """
 
 from __future__ import annotations
@@ -176,64 +177,6 @@ class TwoRowsNamingOneInstanceDoNotDoubleCount(unittest.TestCase):
             guard.decide(snap),
             f"the guard would stop a machine whose bill is $6 against a $10 cap: "
             f"{guard.decide(snap)!r}")
-
-
-class AnUnreadableAccrualIsNotPrintedAsAWholeZero(unittest.TestCase):
-    def _corrupt_ledger(self, cfg: Config, ledger: Ledger) -> None:
-        ledger.append({"run_id": "20260101T000000Z-aaaaaa", "purpose": "truncated",
-                       "provider": "fake", "instance_id": "pod-A", "gpu_id": "Fake GPU 24GB",
-                       "rate_usd_per_hour": 2.0, "started_at": "the-ledger-was-truncated",
-                       "stopped_at": None, "wall_clock_seconds": None, "wall_clock_hours": None,
-                       "estimated_usd": None, "closed_by": None, "tag": ""})
-
-    def test_the_snapshot_marks_the_accrual_unknown(self) -> None:
-        cfg = cfg_for(15.0, scratch_dir(self))
-        ledger = Ledger(cfg.ledger_path)
-        self._corrupt_ledger(cfg, ledger)
-        pod = {"id": "pod-A", "status": "RUNNING", "cost": 2.0,
-               "runtime": {"uptime": None, "ports": None, "gpus": [{"util": None}]}}
-
-        snap = guard.snapshot(pod, cfg, ledger)
-
-        self.assertTrue(
-            snap.accrual_unknown,
-            f"an unreadable open row was reported as a whole number: "
-            f"run_usd={snap.run_usd} spent_usd={snap.spent_usd} priced_from={snap.priced_from}")
-
-    def test_a_witnessed_unreadable_row_is_still_flagged_unknown(self) -> None:
-        cfg = cfg_for(15.0, scratch_dir(self))
-        ledger = Ledger(cfg.ledger_path)
-        self._corrupt_ledger(cfg, ledger)
-        pod = {"id": "pod-A", "status": "RUNNING", "cost": 2.0,
-               "runtime": {"uptime": 3600, "ports": {"22": "tcp"}, "gpus": [{"util": 0.0}]}}
-
-        snap = guard.snapshot(pod, cfg, ledger)
-
-        self.assertEqual(snap.priced_from, "uptime",
-                         f"the pod's own clock did not price the row: {snap}")
-        self.assertTrue(
-            snap.accrual_unknown,
-            f"the witness was recorded as a reading: {snap}")
-
-    def test_status_does_not_print_the_false_zero_bare(self) -> None:
-        cfg = cfg_for(15.0, scratch_dir(self))
-        provider = FakeProvider(rate_usd_per_hour=2.0)
-        provider.add("pod-A", uptime_seconds=0, status="RUNNING")
-        ledger = Ledger(cfg.ledger_path)
-        self._corrupt_ledger(cfg, ledger)
-        pod = {"id": "pod-A", "status": "RUNNING", "cost": 2.0,
-               "runtime": {"uptime": None, "ports": None, "gpus": [{"util": None}]}}
-        args = cli.build_parser().parse_args(["status"])
-        out = io.StringIO()
-        with mock.patch.object(cli, "_config", lambda: cfg), \
-                mock.patch.object(cli, "_provider", lambda c: provider), \
-                mock.patch.object(cli, "_pod", lambda p, c: pod), \
-                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            cli.cmd_status(args)
-
-        self.assertIn("UNKNOWN", out.getvalue(),
-                      f"status printed an unreadable accrual as a number without saying so:\n"
-                      f"{out.getvalue()}")
 
 
 if __name__ == "__main__":
