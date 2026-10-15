@@ -179,7 +179,11 @@ class DriverStdin:
         begin = line.find(cli.session.BEGIN)
         if begin < 0:
             return
-        command = line[begin + len(cli.session.BEGIN) + 2:].split("; rc=$?")[0]
+        # The driver runs the command in a subshell so that a command ending in `exit` cannot take the
+        # sentinel with it, so the command is the text between `( ` and ` ); rc=$?`.
+        after = line[begin + len(cli.session.BEGIN):]
+        inner = after.split("); rc=$?")[0].split("( ", 1)
+        command = (inner[1] if len(inner) > 1 else after).strip()
         self.transport.executed.append(command)
         self.transport.stdout.feed(
             ("Welcome to the proxy\r\n" + line.replace("\n", "\r\n") + "\r\n"

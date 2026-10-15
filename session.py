@@ -68,10 +68,17 @@ class SessionResult:
 def driver_command(command: str) -> str:
     """The one line written into the session's stdin.
 
-    ``rc=$?`` and ``exit $rc`` matter: without them the session would close with the shell's status
-    (always 0 after a ``printf``), and a failed command would read as a successful one.
+    The command runs in a **subshell** (`( … )`), which is what makes the sentinel reachable: a
+    command that ends in `exit 7` — or `exec`, or `set -e` failing — ends the *shell* it runs in, and
+    without the subshell it takes the driver's own `printf` and `exit` with it, so the transcript
+    carries no status at all. Measured on the 2026-10-15 window pod: a `cd … && echo x && exit 7`
+    came back with the begin marker, the output, and no sentinel, and the driver reported -1 for a
+    command whose status was known to the machine.
+
+    ``rc=$?`` and ``exit $rc`` then matter: without them the session would close with the shell's
+    status (always 0 after a ``printf``), and a failed command would read as a successful one.
     """
-    return (f"printf '%s\\n' {BEGIN}; {command}; rc=$?; "
+    return (f"printf '%s\\n' {BEGIN}; ( {command} ); rc=$?; "
             f"printf '\\n%s %d\\n' {EXIT_SENTINEL} $rc; exit $rc")
 
 
@@ -132,6 +139,12 @@ class TranscriptFilter:
         if self.done:
             return ""
         if line.strip().startswith(EXIT_SENTINEL + " "):
+            # The driver prints a blank line before the sentinel so that a command whose output does
+            # not end with a newline cannot glue the sentinel onto its last line. That blank line is
+            # the driver's, not the command's, so it is dropped here — measured on the window pod:
+            # `echo driver-ok` came back as `'driver-ok\n\n'`.
+            if self._chunks and self._chunks[-1] == "\n":
+                self._chunks.pop()
             code = line.strip()[len(EXIT_SENTINEL) + 1:].strip()
             try:
                 self.exit_code = int(code)

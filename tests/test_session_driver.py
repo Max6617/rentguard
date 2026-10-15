@@ -46,7 +46,7 @@ BANNER = ("Welcome to the RunPod community cloud.\r\n"
 
 def transcript(*, output: str = "epoch 1 loss 0.5\n", code: int = 0, banner: str = BANNER,
                echo: bool = True, marker: bool = True, sentinel: bool = True,
-               crlf: bool = True) -> bytes:
+               crlf: bool = True, blank_before_sentinel: bool = False) -> bytes:
     """A transcript shaped the way the real route returns one: banner, echo, output, sentinel."""
     body = banner
     if echo:
@@ -54,6 +54,8 @@ def transcript(*, output: str = "epoch 1 loss 0.5\n", code: int = 0, banner: str
     if marker:
         body += BEGIN + "\r\n" + output
     if sentinel:
+        if blank_before_sentinel:
+            body += "\r\n"
         body += f"{EXIT_SENTINEL} {code}\r\n"
     return body.encode("utf-8") if crlf else body.replace("\r\n", "\n").encode("utf-8")
 
@@ -67,6 +69,24 @@ class TheDriverLineCarriesTheStatus(unittest.TestCase):
         self.assertIn("rc=$?", line, f"the remote status is not captured: {line!r}")
         self.assertIn(EXIT_SENTINEL, line, f"no exit sentinel: {line!r}")
         self.assertIn("exit $rc", line, f"the session does not end with the command's status: {line!r}")
+
+    def test_the_command_runs_in_a_subshell_so_a_status_still_comes_back(self) -> None:
+        """A command that ends in `exit 7` would otherwise end the shell before the sentinel, and the
+        driver would report -1 for a status the machine knew (measured on the window pod)."""
+        line = session.driver_command("cd /workspace && echo x && exit 7")
+
+        self.assertIn("( cd /workspace && echo x && exit 7 )", line,
+                      f"the command is not isolated in a subshell: {line!r}")
+
+    def test_the_drivers_own_blank_line_is_not_the_commands_output(self) -> None:
+        """The sentinel is printed after a blank line so it cannot glue onto a command whose output
+        lacks a final newline; that blank line must not reach the caller as output."""
+        code, output = session.parse_transcript(
+            transcript(output="driver-ok\n", sentinel=True, blank_before_sentinel=True))
+
+        self.assertEqual(code, 0, "the sentinel was not parsed")
+        self.assertEqual(output, "driver-ok\n",
+                         f"the driver's own blank line reads as the command's output: {output!r}")
 
 
 class ATranscriptIsParsedByItsMarkers(unittest.TestCase):
