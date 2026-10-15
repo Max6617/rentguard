@@ -4,25 +4,34 @@ What has to be true before rentguard goes public, and what the user's own publis
 This page performs no publish and prescribes no push: publishing is the user's decision alone, and it
 is the only question that goes back to them.
 
-## The two revisions this page describes
+## The revisions this page describes
 
 They are not the same revision, so every number below says which one it was read at.
 
-- **`7f52cc3` is published.** It is the tip of `origin/master` on the public repository
-  (<https://github.com/Max6617/rentguard>) — what a stranger clones today.
-- **`be4e7c7` is the revision this pass describes, and the one being pushed.** It is the last commit of
-  the product and test work, **17 of the commits ahead of `7f52cc3`**; this page's own docs commits ride
-  on top of it, so they travel in the same push. Everything below was measured there in a clean worktree
-  with the package path verified inside it, and Gilbert re-measured the same revision independently with
-  CI's own environment (`RENTGUARD_PROVIDER=fake` for the Test and the Coverage step) and got the same
-  figures. Nothing after `042fd21` touches a measured module — the two commits since are this page's own
-  docs and `be4e7c7` (tests only), so the coverage figures transfer.
+- **`9216075` is published.** It is the tip of `origin/master` on the public repository
+  (<https://github.com/Max6617/rentguard>), pushed 2026-10-15, and it is **docs-only over `be4e7c7`**
+  (`git diff --stat be4e7c7 9216075` = seven files under `docs/`, no code), so the code a stranger
+  clones is `be4e7c7`'s and the measurements below transfer to what is published. **The CI run for this
+  tip is in flight** (`38810501770`, started 21:31 UTC); the last completed verdict is `7f52cc3`'s.
+- **`be4e7c7` is the revision the numbers below were measured at** — the last commit of the product and
+  test work. It was measured here in a clean worktree with the package path verified inside it, and
+  Gilbert re-measured it independently with CI's own environment (`RENTGUARD_PROVIDER=fake` for the Test
+  and the Coverage step) and got identical figures.
+- **`7f52cc3` was the previous published tip**, and it is the left-hand column because it is the last
+  revision CI has finished judging.
 
-| Measurement | Published tip `7f52cc3` | `be4e7c7` |
+**Why the pin names the revision that was measured, not the tip that carries the page.** A commit cannot
+name its own hash: the commit that carries this line does not exist while the line is being written. So
+a docs pass can only pin the revision it *measured* — `be4e7c7` here, `042fd21` before it — and the
+published tip sits one or more docs-only commits above that. What makes the pin usable is the diff:
+`git diff --stat <pinned> <tip>` must touch only `docs/` for the numbers to transfer, and that is the
+check to run before trusting any figure on this page. Nobody should "fix" the pin upward.
+
+| Measurement | `7f52cc3` (previous tip) | `be4e7c7` (code now published as `9216075`) |
 | --- | --- | --- |
 | Suite | **418 passed, 0 failed, 54 subtests** | **490 passed, 0 failed, 54 subtests** |
 | Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **3,037 / 3,080 = 98.6%**, floor 98.0%, exit **0** |
-| CI, on push | 3.11 **green**, 3.12 **green**, 3.13 **RED** at the Coverage step | not run — nothing is pushed |
+| CI | 3.11 **green**, 3.12 **green**, 3.13 **RED** at the Coverage step | **in flight** — the run for `9216075` |
 
 The suite figures are identical with and without `RENTGUARD_PROVIDER=fake` at both revisions. The
 coverage floor is `0.98` in `tools/coverage.py`, and it was not lowered to make any number look better.
@@ -56,13 +65,15 @@ pass** (`ddd79c9` → `a9cffa0` → `042fd21` → `be4e7c7`, the last two both a
 numbers above are pinned to the revision named beside them; any commit after `be4e7c7` that touches one
 of these modules makes them stale.
 
-## 1. The published revision's CI is red; the fix for it is in the unpushed tree
+## 1. The last completed CI verdict is red on 3.13; the fix for it is now published and in flight
 
-**A checklist that does not mention a red badge is not a checklist.** At the published tip the CI run
-`38721243756` fails: `test (3.11)` and `test (3.12)` pass every step, and `test (3.13)` passes Install
-and Test and then **fails at the Coverage step**; the step after it ("Check the entry point exists")
-never runs, so on 3.13 the entry point is untested by CI. The published revision is unchanged, so that
-badge stays red until the fixes below are pushed.
+**A checklist that does not mention a red badge is not a checklist.** The last completed run is
+`38721243756`, for the previous tip `7f52cc3`, and it fails: `test (3.11)` and `test (3.12)` pass every
+step, and `test (3.13)` passes Install and Test and then **fails at the Coverage step**; the step after
+it ("Check the entry point exists") never runs, so on 3.13 the entry point went untested. The run for the
+current tip `9216075` is `38810501770`, started 21:31 UTC and **in flight** as this page was written —
+so the honest reading of the badge today is "the last verdict is red; the revision that carries the fix
+has not been judged yet".
 
 The number behind that is carried by
 [`tests/_artefacts/linenos_312_vs_313_2026-10-15.txt`](../tests/_artefacts/linenos_312_vs_313_2026-10-15.txt),
@@ -73,8 +84,8 @@ denominator grows by one per measured module (8 in total) while the numerator is
 files, **zero integer line numbers differ between the interpreters**, so there is no statement to cover
 and none to delete.
 
-The fix landed in the local tree at `f832596` and is **not published**, so the red badge above stands
-until the push:
+The fix landed at `f832596` and is **in the pushed tip** (`9216075` carries `be4e7c7` plus docs), so the
+next completed CI verdict is the one that judges it:
 
 ```python
 return {n for n in _find_executable_linenos(str(path)) if isinstance(n, int) and n > 0}
@@ -188,21 +199,21 @@ exit 0.
 
 ## 7. Publication state
 
-- **The repository is public and part of its history is pushed.** `github.com/Max6617/rentguard`
-  exists, public, MIT, with `origin` wired to it in the local clone. The pushed tip is **`7f52cc3`**.
-- **`be4e7c7` is the 17th commit ahead of the published tip**, and this page's own docs commits sit on
-  top of it — so `git rev-list --count origin/master..master` reads higher than 17 by exactly the
-  number of docs commits in this pass. The 17 are: the defect-15 fix and its attack, the
-  pricing-unknown contract, the money-direction fixes, the 3.13 line-number artefact, the `session.py`
-  session driver, the coverage-tool fix, and the fixes for defects 16, 17 and 19. The published
-  repository is behind this tree and does not contain the fixes listed in §2.
+- **The repository is public and the pass is pushed.** `github.com/Max6617/rentguard` exists, public,
+  MIT, with `origin` wired to it in the local clone. The pushed tip is **`9216075`** — verified by
+  reading the remote rather than the push's own output: `git ls-remote --heads origin master` answers
+  `9216075…`, and `git rev-list --count origin/master..master` was **0** at that moment.
+- **`be4e7c7` is the last product commit that push carried**, the 17th commit ahead of the previous tip
+  `7f52cc3`; the commits above it in the push are docs only. So the difference a stranger gets by cloning
+  today is the whole night's work plus this page, and nothing is left unpushed but this page's later
+  docs commits.
 - **The local gates are green.** Coverage at `be4e7c7` is 3,037 / 3,080 = 98.6%, exit 0, and the suite
   is 490 passed / 0 failed — the same figures Gilbert measured at the same revision with CI's own
-  environment. The 3.13 tracer artefact that reddens the published badge is fixed in the tree by
-  `f832596` (§1), and what remains for a green badge is the push itself. This host cannot run 3.13, so
-  "CI will be green" is not claimed here — only that the reason it failed is gone.
-- **The user's publish action would**: push those commits (`git push origin master`) — and, separately,
-  publish version `0.1.0` to PyPI if they choose to. Nothing else is outstanding on the local side.
+  environment. The 3.13 tracer artefact that reddens the last CI verdict is fixed by `f832596` (§1).
+  This host cannot run 3.13, so "CI will be green" is not claimed here — only that the reason it failed
+  is gone, and that the run which decides it (`38810501770`) was in flight when this line was written.
+- **Still the user's call**: publishing version `0.1.0` to PyPI, which is a separate action from the
+  push and has not been taken. Nothing else is outstanding on the local side.
 - **What becomes irreversible**: the repository is already public, so its history is already out;
   pushing more commits adds to a record that cannot be withdrawn. A published PyPI version cannot be
   unpublished, only yanked.

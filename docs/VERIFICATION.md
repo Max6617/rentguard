@@ -11,7 +11,7 @@ Date: 2026-10-14, between 14:47 and 15:25 local.
 
 **This log is a history, not a snapshot.** The record in this section and the ones under "Exercised at
 `af1ba5a`" was written at `af1ba5a` (2026-10-14) and is kept as it was measured then. The revisions and
-numbers that are current — through the published tip `7f52cc3` and the local HEAD `042fd21` — are in
+numbers that are current — the published tip `9216075`, whose code is `be4e7c7`'s — are in
 [After `eef6bdb`](#after-eef6bdb-measured-2026-10-15) and
 [Install](#install-the-wheel-into-a-clean-venv).
 
@@ -490,7 +490,7 @@ verified inside it:
 | `ddd79c9` | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
 | `a9cffa0` | 485 passed, 0 failed, 54 subtests | 3,013 / 3,054 = 98.7%, exit 0 |
 | `042fd21` | 490 passed, 0 failed, 54 subtests | 3,037 / 3,080 = 98.6%, exit 0 |
-| `be4e7c7` — **local HEAD, and the revision being pushed** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
+| `be4e7c7` — **the revision the published tip `9216075` carries** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
 
 `be4e7c7` is tests-only on top of `042fd21` (defect 19's fix to the flaky spend assertion), so it
 changes no measured module and the figures carry over; the suite was re-run there, and Gilbert measured
@@ -526,13 +526,14 @@ line table are **2,716 / 2,775 = 97.9%** against the 98.0% floor. CPython 3.13 y
 (one per measured module) while the numerator does not move. Zero integer line numbers differ between
 the two interpreters over 65 files, so there is nothing to cover and nothing to delete.
 
-**The filter landed at `f832596`, in the unpushed tree.** `tools/coverage.py` now reads
+**The filter landed at `f832596`, and it is in the pushed tip.** `tools/coverage.py` now reads
 `{n for n in _find_executable_linenos(str(path)) if isinstance(n, int) and n > 0}`, and the same commit
 adds `threading.settrace` so lines that ran on a worker thread are counted too; `tests/test_coverage_tool.py`
-pins both halves. The published badge is still red because the published revision does not have it, and
-it will stay red until the push. Whether the 3.13 job then passes cannot be checked on this host — there
+pins both halves. The last completed CI verdict (`38721243756`, for the previous tip `7f52cc3`) is red
+because that revision does not have it; the run that judges `9216075` was in flight when this was
+written. Whether the 3.13 job then passes cannot be checked on this host — there
 is no pytest for 3.13 here — so the claim recorded is the narrow one: the divisor it failed on is fixed,
-and the 3.12 measurement at `042fd21` is 3,037 / 3,080 = 98.6%, exit 0.
+and the 3.12 measurement at `be4e7c7` is 3,037 / 3,080 = 98.6%, exit 0.
 
 Notes, all measured:
 
