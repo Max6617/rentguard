@@ -136,6 +136,16 @@ class LockTest(LedgerCase):
         self.assertTrue(Ledger._break_lock_if_stale(lock, 60))
         self.assertFalse(lock.exists())
 
+    def test_a_fresh_lock_directory_is_broken_regardless_of_age(self) -> None:
+        # The lock this code takes is always a file, so a directory is never a live lock: it is a
+        # leftover, and waiting for it to age out would block every write for `stale_after`. On
+        # Windows `os.open` on a directory raised PermissionError and the write proceeded unlocked,
+        # which hid this; on POSIX it raised FileExistsError and the write waited out the timeout.
+        lock = self.ledger._lock_path()
+        lock.mkdir(parents=True, exist_ok=True)
+        self.assertTrue(Ledger._break_lock_if_stale(lock, 600))
+        self.assertFalse(lock.exists())
+
     def test_a_fresh_lock_is_not_broken(self) -> None:
         lock = self.ledger._lock_path()
         lock.parent.mkdir(parents=True, exist_ok=True)

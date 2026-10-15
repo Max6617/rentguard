@@ -53,8 +53,12 @@ _real_rmtree = shutil.rmtree
 _real_mkdtemp = tempfile.mkdtemp
 
 
-def _tolerant_rmtree(path, ignore_errors=False, onerror=None, *, onexc=None):
-    return _real_rmtree(path, ignore_errors=True, onerror=onerror, onexc=onexc)
+def _tolerant_rmtree(path, ignore_errors=False, onerror=None, **kwargs):
+    # `onexc` only exists from Python 3.12, so it is forwarded only when a caller passed it: naming
+    # it at all, even as None, is a TypeError on 3.11 and failed every test's cleanup there.
+    if onerror is not None:
+        kwargs["onerror"] = onerror
+    return _real_rmtree(path, ignore_errors=True, **kwargs)
 
 
 def _writable_mkdtemp(suffix=None, prefix=None, dir=None):
