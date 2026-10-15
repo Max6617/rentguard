@@ -239,7 +239,7 @@ class Ledger:
         left behind by a process that was killed mid-open would block every later run, so a lock
         older than ``stale_after`` is broken. Two shapes are accepted when breaking one: a file
         (this implementation) and a directory (an older implementation, whose leftovers must not be
-        able to stop the ledger being written).
+        able to stop the ledger being written, so a directory is broken at any age).
 
         The lock is a **safety net, not a correctness requirement**: ``Ledger.open`` still refuses a
         second open row on its own. So if the environment will not let a lock be created at all, the
@@ -276,6 +276,11 @@ class Ledger:
 
     @staticmethod
     def _break_lock_if_stale(lock_file: Path, stale_after: float) -> bool:
+        # A directory is never a live lock: `_lock` only ever creates a file. So a directory is a
+        # leftover whatever its age, and waiting `stale_after` for it would block every write.
+        if lock_file.is_dir():
+            shutil.rmtree(lock_file, ignore_errors=True)
+            return not lock_file.exists()
         try:
             age = time.time() - lock_file.stat().st_mtime
         except OSError:
@@ -283,10 +288,7 @@ class Ledger:
         if age <= stale_after:
             return False
         try:
-            if lock_file.is_dir():
-                shutil.rmtree(lock_file, ignore_errors=True)
-            else:
-                lock_file.unlink()
+            lock_file.unlink()
             return True
         except OSError:
             return False
