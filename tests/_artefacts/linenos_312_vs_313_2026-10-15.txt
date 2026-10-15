@@ -1,0 +1,100 @@
+linenos: Python 3.12.6 vs Python 3.13.15 over the same checkout (worktree at 3287a4f)
+
+Method (source-only; no imports of the product, nothing executed):
+    python <interp> tests/_artefacts/probe_linenos_diff.py <root> <out.json>
+    python compare_linenos.py a312.json b313.json <root> [--only=<comma list>]
+Interpreter A = C:\Python312\python.exe (3.12.6)
+Interpreter B = %APPDATA%\uv\python\cpython-3.13.15-windows-x86_64-none\python.exe (3.13.15)
+
+================================================================================
+THE EIGHT MODULES tools/coverage.py MEASURES (REPO.glob("*.py"), no __init__)
+================================================================================
+A(3.12): int lines=2767   raw keys=2767   None keys=0
+B(3.13): int lines=2767   raw keys=2775   None keys=8
+files differing in integer line numbers: 0   lines only in A: 0   lines only in B: 0
+  -> there is no source text to print for the difference: the difference is not a line.
+
+================================================================================
+EVERY .py IN THE CHECKOUT (65 files, excluding build/, dist/, __pycache__, .git)
+================================================================================
+A(3.12): int lines=9742   raw keys=9742   None keys=0
+B(3.13): int lines=9742   raw keys=9802   None keys=60
+files differing in integer line numbers: 0   lines only in A: 0   lines only in B: 0
+files with a read/parse error on either side: 0
+files present in one dump only: 0
+files where only 3.13 has a None key (60): the 8 measured modules plus
+    tests/*.py (51 of them) and tools/coverage.py
+
+Working-tree cross-check (labelled: not a commit, Forge editing): 68 files,
+10044 int lines on 3.13, 61 files with a None key -> the "62-line delta" reported
+by Forge is the count of None keys (one per file), not 62 statements.
+
+================================================================================
+MECHANISM (verbatim from the two interpreters)
+================================================================================
+3.12 dis.findlinestarts:
+    lastline = None
+    for start, end, line in code.co_lines():
+        if line is not None and line != lastline:
+            lastline = line
+            yield start, line
+
+3.13 dis.findlinestarts:
+    """... lineno will be an integer or None the offset does not have a source line."""
+    lastline = False # None is a valid line number
+    for start, end, line in code.co_lines():
+        if line is not lastline:
+            lastline = line
+            yield start, line
+
+trace._find_lines_from_code is byte-for-byte the same on both:
+    for _, lineno in dis.findlinestarts(code):
+        if lineno not in strs:
+            linenos[lineno] = 1
+So 3.13 puts a None KEY in the dict for every distinct None line start (collapsing to
+one per file); 3.12 never does.
+
+tools/coverage.py:
+    executable = set(_find_executable_linenos(str(path)))      # contains None on 3.13
+    hit = len(executable & executed.get(str(path), set()))     # executed holds int f_lineno
+    result[path.name] = (hit, len(executable))                 # denominator counts None
+=> denominator +1 per file, numerator unchanged, on an identical executed set.
+
+================================================================================
+EFFECT ON THE GATE (real 3.12 run, then the same hits on 3.13's denominator)
+================================================================================
+python C:\Python312\python.exe tools/coverage.py --min 0.0     (worktree at 3287a4f)
+
+module                  lines    hit    cover
+cli.py                   1384   1357    98.0%
+config.py                 103    102    99.0%
+fake.py                   266    265    99.6%
+guard.py                  254    252    99.2%
+ledger.py                 254    239    94.1%
+mcp_server.py             234    231    98.7%
+provider.py               121    120    99.2%
+runpod.py                 151    150    99.3%
+---------------------------------------------
+TOTAL                    2767   2716    98.2%
+
+Same hits, 3.13 denominator (one None per module):
+  TOTAL 2716 / 2775 = 97.9%   vs floor 98.0%   -> RED by 0.1 points
+  (the drop is 0.33 points on an unchanged hit count; the floor is not the cause of
+   the red, the extra 8 denominator entries are)
+
+================================================================================
+CALL
+================================================================================
+Tracer artefact, not real statements. Zero integer line numbers differ over 65 files,
+so there is nothing to cover and nothing to delete: no 3.12-folded statement exists.
+No file disagrees about anything other than this synthetic line number (0 errors,
+0 files present in only one dump).
+
+The per-interpreter-floor option would enshrine the artifact: the 3.13 denominator
+keeps a line that can never be hit, so its number stays 0.33 points low for good. The
+one-line alternative, in tools/coverage.py (Forge's file, not touched here):
+
+    executable = {n for n in _find_executable_linenos(str(path)) if isinstance(n, int)}
+
+which makes both interpreters measure the same 2767 lines and keeps a single floor.
+That is a recommendation, not a change: the script and the floor are untouched.
