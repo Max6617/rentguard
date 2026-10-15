@@ -109,24 +109,24 @@ it the ledger proceeds unlocked rather than refusing to write; in that case the 
 ## Prove the decision without spending
 
 The guard is a pure decision (`rentguard.guard.decide`) fed by a snapshot, and the money paths run
-against an in-memory provider with no network and no spend. At commit `af1ba5a`, `python -m pytest
-tests -q` from the checkout:
+against an in-memory provider with no network and no spend. At `ddd79c9`, `python -m pytest tests -q`
+from the checkout collects **471 tests, 0 failures** (54 subtests); these are the files this page leans
+on:
 
 | Suite | Tests | What it covers |
 | --- | --- | --- |
-| `test_money_paths.py` | 33 | the cap, the per-run cap, idle, drift, artefacts, provider refusals |
+| `test_money_paths.py` | 40 | the cap, the per-run cap, idle, drift, artefacts, provider refusals |
 | `test_rentguard.py` | 16 | ledger arithmetic and guard decisions |
 | `test_artefacts_mcp_guards.py` | 5 | artefacts, the MCP tool surface, guard locks |
 | `test_init_config.py` | 4 | the generated config is valid TOML and the keys are the ones read |
 | `test_known_failures.py` | 4 | the drift defect, as a regression guard |
 | `test_mcp_structured.py` | 4 | every tool returns `structuredContent` alongside its text |
-| `test_down_keep_running.py` | 3 | the failed-pull rule, and the `--keep-running` opt-in |
+| `test_down_keep_running.py` | 4 | the failed-pull rule, and the `--keep-running` opt-in |
 | `test_drift.py` | 3 | ledger and account drift |
 | `test_fake_span.py` | 2 | the fake's account persisting across processes |
 
-74 tests, 0 failures, no network, no spend. What the suite proves is the fake's copy of a provider, not
-RunPod's real behaviour — that is what M2 is for. The `--dry-run` defect above is not covered by any of
-these tests.
+What the suite proves is the fake's copy of a provider, not RunPod's real behaviour — that is what M2 is
+for. The `--dry-run` defect above is not covered by any of these tests.
 
 Open defects are listed with reproductions in [KNOWN-FAILURES.md](KNOWN-FAILURES.md); a defect leaves
 that file when a test covers it and passes.

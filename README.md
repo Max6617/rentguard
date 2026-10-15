@@ -6,19 +6,26 @@ Rent a GPU with a hard spend cap, a per-run cost ledger, and artefact pull.
 machine on RunPod, opens a ledger row before it rents, runs commands over ssh, pulls the
 results back, and stops the machine when the money or the idle time runs out.
 
-Version 0.1. RunPod only, Python 3.11+, standard library only. Not published yet — install from the
-checkout, below.
+Version 0.1. RunPod only, Python 3.11+, standard library only. No PyPI package yet — the repository is
+public at <https://github.com/Max6617/rentguard>, and the install path below was run against a wheel
+built from `e53f544` (2026-10-15).
 
 ## Install
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Max6617/rentguard
 cd rentguard
 python -m pip install .
 rentguard --version
 ```
 
-Until the first release there is no PyPI package, so a checkout plus `PYTHONPATH` works too:
+That is the one command on a machine with network. It is what CI runs on every push (`python -m pip
+install -e .`, then `rentguard --version`); it could not be run on the machine this page was written on,
+which has no route to PyPI, so the wheel was built and installed into a fresh virtual environment
+instead — see [the quickstart](docs/quickstart.md#1-install), which carries the commands and their real
+output.
+
+A checkout plus `PYTHONPATH` works as well, if you would rather not install anything:
 
 ```bash
 set PYTHONPATH=C:\path\to\the\checkout      # Windows

@@ -1,6 +1,11 @@
 # Known failures
 
-Open defects, with a reproduction. A defect leaves this file when a test covers it and the test passes.
+Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
+evidence that the test which closes it is testing something real, and the fix commit is named. Entries
+say where they stand at the revision this file describes, **`ddd79c9`** (2026-10-15).
+
+Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
+`ddd79c9` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -226,3 +231,52 @@ AFTER: []
 and now cannot be on this account — with the only volume deleted there is nothing left to attach.
 Recorded as **dropped for lack of a volume, not untested**: the transport seam is unit-covered
 (`da51005`), and `CHARTER.md` W3 says the same.
+
+## Defect 15 — a closed row was priced a second time from the machine's own uptime (fixed)
+
+**Found** by Cadence's guard log (`guard-watch-batchA-2.log`). On the sample *after* the batch-A row had
+closed — the machine already `EXITED`, stopped by the driver's own `down` — the guard printed
+
+```text
+run $5.941 (unrecorded) total $15.581/$15.00
+```
+
+a transient total **above** a cap that was never reached. The row had been closed, so its money was
+already in the ledger; the guard read the instance as unrecorded and added a fresh accrued estimate on
+top of it. Nothing was live, so no stop ran. On a live machine, that total is exactly what the stop
+decision runs on.
+
+**Fixed in two steps.** `cdb2fba` made a closed row the ledger's figure for a machine in a terminal
+status, and no reading may exceed the ledger's own closed + accruing (`tests/test_guard_closed_row.py`).
+`13d7dc7` closed the half that was still open: the fix keyed on `status in TERMINAL_STATUSES`, so a
+*live* status with a closed row for that instance fell through to the unrecorded branch and was priced
+from the machine's whole uptime. The attack that pinned it —
+`tests/test_guard_closed_row_attack.py`, a `PROVISIONING` machine reading $14.00 for an $8.00 bill — is
+green at `ddd79c9`. The rule it leaves behind: a closed row anchors the remainder, so a live machine is
+never priced twice.
+
+## Defect 16 — `up` rents a second machine while a live one is already billing (fixed)
+
+Two shapes, both red-first at `7f52cc3` in `tests/test_money_direction_shapes.py`, both severe because
+the first machine keeps billing with no open row and no guard — a bill the cap cannot see:
+
+1. **A live machine named by the *open* row is superseded.** With `state.json` lost (a shape the code
+   says out loud it survives), `up` closed that machine's row and rented a second one, then reported
+   success.
+2. **A live machine named only by a *closed* row is exempt.** It appears in no open row, so `up`'s
+   untracked-instance refusal did not fire and a second machine was rented while the first billed.
+
+**Fixed at `3287a4f`**: a live machine the ledger names is reused, and a closed row does not account for
+it. The related shapes that came with it are fixed at `946ba28` — a price nobody read is never printed
+as a number, and a reused row starts where the last one ended (`tests/test_pricing_unknown.py`, `tests/
+test_up_reuse_after_close.py`, `tests/test_state_lost_ledger_fallback.py`).
+
+### The flaky one that came with them
+
+`tests/test_doctor_spend_edges.py::VoidedAndFutureRows::test_a_voided_row_contributes_to_neither_number`
+asserts that the total `doctor` *prints* and the total it *enforces* agree to four decimal places. The
+two figures are computed from the wall clock at different instants, so a slow run can widen the gap
+past the tolerance: in a traced coverage run at `7f52cc3` it failed ($4.001065 vs $4.001132), while two
+untraced suite runs at the same revision passed. Red when the machine is busy, green when it is not —
+recorded here rather than called a fix, because a wall-clock-dependent assertion can fail for a
+stranger too.

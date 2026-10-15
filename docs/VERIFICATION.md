@@ -9,6 +9,12 @@ Date: 2026-10-14, between 14:47 and 15:25 local.
 
 ## Revision
 
+**This log is a history, not a snapshot.** The record in this section and the ones under "Exercised at
+`af1ba5a`" was written at `af1ba5a` (2026-10-14) and is kept as it was measured then. The revisions and
+numbers that are current — through the published tip `7f52cc3` and the local HEAD `ddd79c9` — are in
+[After `eef6bdb`](#after-eef6bdb-measured-2026-10-15) and
+[Install](#install-the-wheel-into-a-clean-venv).
+
 The pages were re-run against three revisions, each extracted with `git archive` so that a mid-edit
 working tree could not affect the run:
 
@@ -470,6 +476,48 @@ A note on the figures: the same revision measured elsewhere can differ in the de
 tracer pass over the same files). This log records the run made in a clean worktree at the named sha, with
 `rentguard.mcp_server.__file__` verified inside that worktree.
 
+### After `eef6bdb`, measured 2026-10-15
+
+The tree moved past this log's last pass. Each row was measured in a clean worktree with the package path
+verified inside it:
+
+| Revision | Suite | Coverage (Python 3.12), exit |
+| --- | --- | --- |
+| `eef6bdb` | 398 passed, 0 failed, 54 subtests | 2,589 / 2,625 = 98.6%, exit 0 |
+| `7f52cc3` — **published tip** | 418 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 2,697 / 2,747 = 98.2%, exit 0 |
+| `e53f544` | 425 passed, **9 failed** — the red-first attacks, awaiting the fixes | 2,710 / 2,761 = 98.2%, exit 0 |
+| `1452718` | 456 passed, 0 failed, 54 subtests | 2,809 / 2,863 = 98.1%, exit 0 |
+| `ddd79c9` — **local HEAD** | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
+
+**The coverage gate is red at the local HEAD, and a new module is why.** `ddd79c9` adds `session.py`
+(the session driver for the community-pod route, 155 executable lines) at **83.2%** (129/155), which
+drags the total from 98.1% to 97.3% against the 0.98 floor. `tools/coverage.py` exits 1 on Python 3.12,
+so a push would fail the Coverage step on 3.11 and 3.12 as well as 3.13 — this one is not the tracer
+artefact below. The floor was not lowered; the way out is tests for `session.py`.
+
+The nine reds at `e53f544` are one story, and each names the effect on money: the two `up` shapes that
+rent a second machine while a live one is billing, defect 15's live half (a live machine priced from its
+whole uptime), a doubled row after a refused stop, and an unreadable price printed as zero. They are
+closed by `3287a4f`, `13d7dc7` and `946ba28`, and green at `1452718`; the reproductions stay in
+[KNOWN-FAILURES](KNOWN-FAILURES.md).
+
+One failure is not part of that story. In the **traced** run at `7f52cc3`,
+`tests/test_doctor_spend_edges.py::VoidedAndFutureRows::test_a_voided_row_contributes_to_neither_number`
+failed ($4.001065 vs $4.001132, `places=4`) while two untraced suite runs at the same revision passed.
+The assertion compares two figures computed from the wall clock at different instants, so a slow, busy
+machine can widen the gap past the tolerance. Recorded, not fixed: it can fail for a stranger too.
+
+**CI is red at the published tip, and the culprit is the divisor.** At `7f52cc3` the CI run
+`38721243756` passes `test (3.11)` and `test (3.12)` through every step and fails `test (3.13)` at the
+**Coverage** step; the entry-point check after it never runs. The measurement is in
+`tests/_artefacts/linenos_312_vs_313_2026-10-15.txt` (taken at `3287a4f`): the same hits over 3.13's
+line table are **2,716 / 2,775 = 97.9%** against the 98.0% floor. CPython 3.13 yields a `None` line from
+`dis.findlinestarts`, `trace._find_executable_linenos` keeps it as a key, and the denominator grows by 8
+(one per measured module) while the numerator does not move. Zero integer line numbers differ between
+the two interpreters over 65 files, so there is nothing to cover and nothing to delete — the recommended
+one-line filter in `tools/coverage.py` is recorded in the artefact and in
+[PUBLISH-CHECKLIST](PUBLISH-CHECKLIST.md), and the file is Forge's, not edited here.
+
 Notes, all measured:
 
 - **The coverage ratchet caught a regression and then closed it.** At `f158396`, with the floor at 0.98
@@ -542,15 +590,89 @@ network volumes: 1  ($10.50/month, billed while nothing runs)
 Endpoint: `GET /v2/network-volumes` on `api.runpod.io`, response key `networkVolumes`, region field
 `dataCenter`; `rest.runpod.io/v1/networkvolumes` is 404.
 
+## Install: the wheel, into a clean venv
+
+Run at `e53f544` (2026-10-15), on Python 3.12.6. The claim this backs is the one a stranger cares
+about: the checkout builds, installs, and its console script runs.
+
+**`python -m pip install .` was not run here, and the step it stops at is named.** With no route to
+PyPI, pip's isolated build never gets past fetching `setuptools>=68` for the build environment:
+
+```text
+Processing c:\...\rentguard
+  Installing build dependencies: started
+[still there after 7 minutes; killed]
+```
+
+`https://pypi.org/simple/setuptools/` from this host closes the connection. On a machine with network
+this is the one command, and CI runs `python -m pip install -e .` on every push (green on 3.11 and
+3.12 at `7f52cc3`).
+
+**A plain `python -m venv` also fails here, for a different and named reason** — the sandbox refuses a
+mode-0700 directory, and `ensurepip` writes inside one it just created:
+
+```console
+$ python -m venv <dir>
+Error: Command '['<dir>\Scripts\python.exe', '-m', 'ensurepip', '--upgrade', '--default-pip']' returned non-zero exit status 1.
+
+$ <dir>\Scripts\python.exe -m ensurepip --upgrade --default-pip
+...
+  File "C:\Python312\Lib\ensurepip\__init__.py", line 184, in _bootstrap
+    with open(filename, "wb") as fp:
+PermissionError: [Errno 13] Permission denied: '...\tmp\tmpgshq35og\pip-24.2-py3-none-any.whl'
+During handling of the above exception ... PermissionError: [WinError 5] Zugriff verweigert
+```
+
+That is the environment, not the packaging, and it was measured directly: a direct write into
+`tempfile.mkdtemp()` fails with `Errno 13`, and the `os.chmod` that would widen it fails with
+`WinError 5`, while a sibling directory created with `os.mkdir(path)` (no explicit mode) is writable.
+`python -m venv --without-pip` followed by `ensurepip` under a `sitecustomize` shim that widens only
+that one mode works, and everything after it is ordinary:
+
+```console
+$ python -m pip wheel . --no-deps --no-build-isolation -w dist
+Processing c:\...\rentguard
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: rentguard
+  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=76824 sha256=cf160ad361a83df1b4b93e23e551a80637722592f1540aff692eba84fffdf26f
+Successfully built rentguard
+[20 s, exit 0]
+
+$ <venv>\Scripts\python.exe -m pip install --no-index --no-deps dist/rentguard-0.1.0-py3-none-any.whl
+Successfully installed rentguard-0.1.0
+
+$ <venv>\Scripts\rentguard.exe --version
+rentguard 0.1.0
+
+$ <venv>\Scripts\rentguard.exe doctor --json      # in a root that has a ledger, provider fake
+{
+  "command": "doctor",
+  "version": "0.1.0",
+  ...
+  "open_run": {"run_id": "20261015T202238Z-cf2d06", "purpose": "install check", ...
+  "spend": {"recorded_usd": 0.0, "accruing_usd": 8.6e-05, "total_usd": 8.6e-05, ...},
+  "findings": []
+}
+[exit 0]
+```
+
+The same path was run for **keelcheck** at its `c5168d0`: `pip wheel` produced
+`keelcheck-0.0.1-py3-none-any.whl` (55,005 bytes, sha256 `c05efef8…`) in 27 s, it installed into its own
+clean venv, `keelcheck --version` printed `keelcheck 0.0.1`, and `keelcheck gate hash keelcheck/cli.py`
+in the keel checkout printed `sha256:79885adac75a12d83afa49f5cea59f65e159f0332a0e929935d30dc4340df2c0`
+(exit 0). The evidence is also written into keel's own README.
+
+The free rehearsal in [quickstart](quickstart.md) was re-run from the installed console script at
+`e53f544`, and every transcript there is that revision's real output.
+
 ## Not verified
 
 - **The paid path by this pass.** `up` against RunPod, `run` over ssh, a real `pull` and a real `down`
   were not run *for this log*: they spend money. They were run as milestone M2 — twice on 2026-10-14,
   $0.017 in total, the second pass green with the artefact pulled from the right machine and the ledger
   reconciled by hand: [M2 — the real rental](M2-REAL-RENTAL.md).
-- **`pip install .` by this pass.** Attempted again at `af1ba5a` with
-  `python -m pip install --no-deps --target <dir> .`; it still fails on this sandbox because the DSH
-  temp directory is not writable for a child process (the `pip-build-tracker-*` cleanup fails), not
-  because of the packaging. The publish checklist records the install blocker as fixed and the console
-  script running (commit `4abfcc8`); this log did not reproduce that, so it stays open here.
+- **`pip install .` itself, on this host.** Still not reproducible, and now for a named reason: there is
+  no route to PyPI, so the isolated build waits at `Installing build dependencies: started` (see
+  "Install" above). The wheel path stands in for it and is green; CI's `pip install -e .` on 3.11 and
+  3.12 at `7f52cc3` is the independent evidence that the packaging installs.
 - **A provider other than RunPod or the fake.** None exists yet.

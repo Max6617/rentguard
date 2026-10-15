@@ -6,21 +6,63 @@ cost, and have the machine stop itself.
 Time: about ten minutes, most of it waiting for the pod to boot. Money: whatever your chosen GPU
 costs per hour, capped by the `cap_usd` you set.
 
-The free commands below were run for this page against commit `2ebe660`; their real output is in
-[VERIFICATION.md](VERIFICATION.md). The paid step was run separately as milestone M2 — see
-[M2 — the real rental](M2-REAL-RENTAL.md) — and this page marks which transcripts are free and which
-are M2's.
+**This page describes `e53f544`** (2026-10-15). The install evidence in §1 and the free rehearsal in
+"Rehearse without paying" were run against the wheel built from that revision. The command transcripts
+are the free fake-provider ones and their real output is in [VERIFICATION.md](VERIFICATION.md). The paid
+step was run separately as milestone M2 — see [M2 — the real rental](M2-REAL-RENTAL.md) — and this page
+marks which transcripts are free and which are M2's.
 
 ## 1. Install
 
+The repository is public — <https://github.com/Max6617/rentguard> — but there is no PyPI package yet, so
+install from a checkout:
+
 ```bash
-git clone <repository-url>
+git clone https://github.com/Max6617/rentguard
 cd rentguard
 python -m pip install .
 rentguard --version
 ```
 
-No PyPI package exists yet. From a checkout, `PYTHONPATH` works as well:
+**What was actually run here, at `e53f544` on Python 3.12.6**, is the wheel below, installed into a fresh
+virtual environment and run from its console script. `python -m pip install .` itself could not be run on
+this machine: there is no route to PyPI, so pip's isolated build waits at
+`Installing build dependencies: started` (measured: still there after 7 minutes, then killed) because it
+cannot fetch `setuptools>=68`. With network, that is the one command you need, and CI runs
+`python -m pip install -e .` plus `rentguard --version` on every push.
+
+```console
+$ python -m pip wheel . --no-deps --no-build-isolation -w dist
+Building wheels for collected packages: rentguard
+  Created wheel for rentguard: filename=rentguard-0.1.0-py3-none-any.whl size=76824 sha256=cf160ad3…
+Successfully built rentguard
+[20 s, exit 0]
+
+$ python -m pip install --no-index --no-deps dist/rentguard-0.1.0-py3-none-any.whl
+Successfully installed rentguard-0.1.0
+
+$ rentguard --version
+rentguard 0.1.0
+```
+
+`--no-build-isolation` uses the `setuptools` already installed instead of fetching one; `--no-index
+--no-deps` installs the wheel with nothing to resolve, which is correct because rentguard has no
+dependencies. Installed that way, `rentguard doctor --json` works against a root that has a ledger:
+
+```console
+$ rentguard doctor --json
+{
+  "command": "doctor",
+  "version": "0.1.0",
+  ...
+  "open_run": {"run_id": "20261015T202238Z-cf2d06", "purpose": "install check", ...},
+  "spend": {"recorded_usd": 0.0, "accruing_usd": 8.6e-05, "total_usd": 8.6e-05, ...},
+  "findings": []
+}
+[exit 0]
+```
+
+No PyPI package exists, so a checkout plus `PYTHONPATH` works as well:
 
 ```bash
 set PYTHONPATH=C:\path\to\the\checkout      # Windows
@@ -89,7 +131,6 @@ config         : C:\work\rentguard.toml
 state dir      : C:\work\.rentguard
 provider       : runpod
 api key        : MISSING ($DSH_SECRET_RUNPOD_API_KEY)
-spend recorded : $0.00 of a $25.00 cap (0 run(s))
 open run       : (none)
 ledger lines   : all readable
 guard heartbeat: (never)  <-- STALE, nothing is watching
@@ -103,15 +144,19 @@ turns problems into `ERROR <code>: <message>` lines and a non-zero exit:
 
 ```console
 account pods   : 1 total, 1 live
-  ea0si2rzoyw8e4  RUNNING      $0.13/h  NVIDIA GeForce RTX 3070        UNTRACKED
+  fake-1  RUNNING      $0.13/h  NVIDIA GeForce RTX 4090      UNTRACKED  name='fake-1'
+spend recorded : $0.00 closed + $0.00 accruing = $0.00 of a $25.00 cap (0 run(s))
+network volumes: 0  ($0.00/month, billed while nothing runs)
 
-  ERROR live-instance-no-ledger-row: 1 live instance(s) with no ledger row: ea0si2rzoyw8e4.
+  ERROR live-instance-no-ledger-row: 1 live instance(s) with no ledger row and no project's name: fake-1.
   Either `rentguard adopt <id> --purpose ...` or stop them.
 ```
 
 That is the failure this tool exists to catch: an instance billing that nothing remembers renting.
 `rentguard adopt <id> --purpose "..."` gives it a row, backdated to the provider's uptime so the money
-already spent is recorded rather than hidden.
+already spent is recorded rather than hidden. A live machine carrying **another project's** name is the
+softer case: `doctor` warns, because that project's ledger owns it, and `down` will not stop a machine
+someone else is paying for.
 
 ## 4. Rent a machine
 
@@ -124,7 +169,16 @@ rentguard up --purpose "baseline" --cap 5
 `--dry-run` is safe again as of `ce69cea`: it decides before any `create` call, so it makes no rental at
 all. It once did — three real create attempts went out against RunPod, and the fake was left holding
 `fake-1` — and that record is in [limitations](limitations.md). The test now asserts on the provider
-call, not on the sentence.
+call, not on the sentence. Run free against the fake at `e53f544`:
+
+```console
+$ rentguard up --purpose dry --dry-run
+dry run: would request NVIDIA GeForce RTX 4090 (then NVIDIA L40S, NVIDIA RTX A6000); nothing was rented and nothing was spent
+[exit 0]
+
+$ rentguard ledger
+no runs recorded
+```
 
 `--cap` sets the project ceiling for this and later runs; `--purpose` is what the ledger row will say.
 `up` writes the ledger row **before** it rents, marked provisional, so an interruption between the two
@@ -242,22 +296,22 @@ lost. Output from the free rehearsal in §9:
 $ rentguard down
 pulling artefacts from fake-1 before stopping it
 pulled 0 file(s) into C:\work\artefacts
-stopping fake-1
-run closed     : 20261014T131911Z-2ff393  0.001 h  $0.000144
-total spend    : $0.00 of $5.00
+stopping fake-1: stopped
+run closed     : 20261015T202609Z-5b3160  0.0916 h  $0.011917
+total spend    : $0.01 of $25.00
 ```
 
 Then:
 
 ```console
 $ rentguard ledger
-
 run                    gpu                          hours      usd  closed by          purpose
 ----------------------------------------------------------------------------------------------------------------------
-20261014T131911Z-2ff39 Fake GPU 24GB                 0.00   0.0001  down               doc rehearsal
+20261015T202609Z-5b316 NVIDIA GeForce RTX 4090       0.09   0.0119  down               doc rehearsal
 ----------------------------------------------------------------------------------------------------------------------
-total                                                0.00   0.0001
-cap: $5.00   remaining: $5.00
+total                                                0.09   0.0119
+cap: $25.00   remaining: $24.99
+storage: NOT included above — network volumes bill monthly while nothing runs; `rentguard doctor` lists them with their cost
 ```
 
 The arithmetic is `rate × wall clock`, recomputed from the row's own start and stop times when the row
@@ -305,28 +359,31 @@ With the provider reachable and nothing rented, `status`, `down` and `ledger` ex
 
 `RENTGUARD_PROVIDER=fake` swaps the provider for an in-memory one: no network, no key, no money. It
 writes its account to `.rentguard/fake-state.json`, so a command in one shell sees what the previous
-one rented — the sequence below spans several processes. Add `gpu_preference = ["Fake GPU 24GB"]` to
-`[runpod]` so the fake has something to rent.
+one rented — the sequence below spans several processes. The fake's catalogue answers to the same GPU
+names as RunPod's, so nothing needs adding to the config.
+
+This is the real output at `e53f544`, run from the console script installed in §1:
 
 ```console
 $ rentguard doctor
 provider       : fake  (in-memory: no network, no spend)
-api key        : MISSING ($DSH_SECRET_RUNPOD_API_KEY)  (not needed for the fake)
+api key        : present  (not needed for the fake)
 ...
 account pods   : 0 total, 0 live
   (nothing is billing)
+spend recorded : $0.00 closed + $0.00 accruing = $0.00 of a $25.00 cap (0 run(s))
+network volumes: 0  ($0.00/month, billed while nothing runs)
+[exit 0]
 ```
-
-`doctor` exits 0 on a clean root.
 
 ```console
 $ rentguard up --purpose "doc rehearsal"
-ledger row     : 20261014T131911Z-2ff393  (provisional: opened before the machine exists)
-requesting Fake GPU 24GB
+ledger row     : 20261015T202609Z-5b3160  (provisional: opened before the machine exists)
+requesting NVIDIA GeForce RTX 4090
 instance       : fake-1  $0.13/h
 ssh            : ssh fake@127.0.0.1
 
-cap            : $5.00 total, $2.00 per run, 6.0 h max
+cap            : $25.00 total, $5.00 per run, 6.0 h max
 next           : `rentguard watch` in another terminal, or start it with nohup. Until something is watching, only you are.
 
 $ rentguard up --purpose "second attempt"
@@ -335,21 +392,29 @@ ssh            : ssh fake@127.0.0.1
 
 $ rentguard status
 instance       : fake-1  RUNNING
-gpu            : Fake GPU 24GB  $0.13/h
+gpu            : NVIDIA GeForce RTX 4090  $0.13/h
 uptime         : 0.00 h   gpu util 0.0%
-this run       : $0.000 of $2.00
-all runs       : $0.000 of $5.00  (~2307.6 min to the cap at this rate)
-guard          : NO HEARTBEAT — nothing is watching this instance
+this run       : $0.000 of $5.00
+all runs       : $0.000 of $25.00  (~11538.4 min to the cap at this rate)
+guard          : NO GUARD — nothing is watching this instance, so it will bill until someone stops it
 
 $ rentguard down
 pulling artefacts from fake-1 before stopping it
 pulled 0 file(s) into C:\work\artefacts
-stopping fake-1
-run closed     : 20261014T131911Z-2ff393  0.001 h  $0.000144
-total spend    : $0.00 of $5.00
+stopping fake-1: stopped
+run closed     : 20261015T202609Z-5b3160  0.0916 h  $0.011917
+total spend    : $0.01 of $25.00
+
+$ rentguard watch                                # nothing left to guard
+watching fake-1 — stop at $5.00 this run, $25.00 total, 6.0 h, or 10 min idle
+  2026-10-15T20:31:41+00:00  EXITED     up  0.09h  run $0.000  total $0.012/$25.00  gpu 0.0%  idle 1m
+guard finished: already stopped
+the guard stopped the machine: already stopped
+[exit 0]
 ```
 
 The second `up` is the point: the account persisted between processes, and the tool reused `fake-1`
-instead of renting a second machine. For the fake's failure modes — a machine that vanishes, a crash
-loop, utilisation that drops to zero while the meter runs — see
+instead of renting a second machine. `watch` on a stopped instance takes one reading, writes the
+heartbeat, and returns. For the fake's failure modes — a machine that vanishes, a crash loop,
+utilisation that drops to zero while the meter runs — see
 [Test the cap without spending](fake.md).
