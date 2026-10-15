@@ -81,7 +81,12 @@ TOOLS: list[dict[str, Any]] = [
             "it finishes. Returns the command's exit code and, in the structured result, its stdout "
             "and stderr (`stdout`, `stderr`, `stdout_bytes`, `stderr_bytes`, `truncated`). Requires "
             "an instance that is genuinely usable: a machine reporting RUNNING with zero uptime and "
-            "null ports is a crash loop and is refused."),
+            "null ports is a crash loop and is refused. `pulled` says whether the pull delivered "
+            "anything, and `pull_reason` why not. A pull that matched nothing does **not** fail the "
+            "run (a command that only reads, stages or validates produces no artefacts); a pull that "
+            "broke — `ssh-timeout`, `frame-invalid`, `stream-not-an-archive` — fails it, because the "
+            "files may exist and be lost. To require artefacts, call `rentguard pull` and read its "
+            "result rather than relying on `run`."),
         "inputSchema": {
             "type": "object",
             "properties": {

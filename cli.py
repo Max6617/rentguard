@@ -1870,7 +1870,6 @@ def cmd_run(args) -> int:
             "seconds": round((finished - started).total_seconds(), 1),
         })
 
-        pulled = None
         artefacts_lost = False
         pull_exit = None
         # As each run finishes is the only safe time to pull: an instance with no volume is a
@@ -1892,19 +1891,35 @@ def cmd_run(args) -> int:
         # Whether the pull actually worked, not merely whether it was configured: claiming artefacts
         # were kept while the line above says "pull failed" is how a lost result reads as a kept one.
         pulled_ok = bool(cfg.artefacts.pull) and not artefacts_lost and pull_exit == 0
+        summary = _LAST_PULL or {}
+        # A pull that *matched nothing* is not evidence that a result was lost: it is evidence that
+        # there was nothing to deliver, which is the normal outcome for a command that only reads,
+        # stages or validates. Cadence's `stage()` aborted on exactly that (defect 17, 2026-10-15).
+        # A pull that *broke* — a timed-out session, an unreadable frame, a stream that is not an
+        # archive — is the class where the files may exist and be lost, so it keeps failing the run.
+        # The two are told apart by the reason the pull named, never by the exit code alone.
+        nothing_matched = summary.get("reason") == "patterns-matched-nothing"
+        strict = bool(getattr(args, "require_artefacts", False))
+        pull_blocks = (pull_exit not in (None, 0)) and not (nothing_matched and not strict)
         if code < 0 and pty:
             note(f"no exit status came back from the session; artefacts "
                  f"{'pulled' if pulled_ok else 'NOT pulled'}")
-        elif code != 0 or (pull_exit not in (None, 0)) or artefacts_lost:
+        elif pull_blocks or artefacts_lost:
             note(f"command exited {code}; artefacts "
                  f"{'pulled' if pulled_ok else 'NOT pulled'}")
+        elif nothing_matched:
+            note(f"command exited {code}; artefacts NOT pulled — the configured patterns matched "
+                 f"nothing ({', '.join(cfg.artefacts.pull)}), which is not a failed run. Pass "
+                 f"--require-artefacts to make an empty delivery fail.")
         emit(ran=True, command=remote, exit_code=code,
-             seconds=round((finished - started).total_seconds(), 1), pulled=pulled,
+             seconds=round((finished - started).total_seconds(), 1), pulled=pulled_ok,
              artefacts_lost=artefacts_lost, pull_exit_code=pull_exit,
+             pull_reason=summary.get("reason"), patterns_matched_nothing=nothing_matched,
+             require_artefacts=strict,
              stdout=shown_out, stderr=shown_err,
              stdout_bytes=len(run_out.encode()), stderr_bytes=len(run_err.encode()),
              truncated=bool(out_dropped or err_dropped))
-    if artefacts_lost or (pull_exit not in (None, 0)):
+    if artefacts_lost or pull_blocks:
         return 1
     # `-1` is the session driver's "no exit status came back" — the command may still be running on
     # the machine, so it must never read as a clean status to a script or a Bot.
@@ -2105,10 +2120,13 @@ def cmd_pull(args) -> int:
              local_dir=str(Path(cfg.artefacts.local_dir)))
         if pod is None:
             note("error: nothing is rented")
+            _pull_summary(pulled=False, reason="nothing-rented", files=[], unmatched_patterns=[])
             emit(pulled=False, reason="nothing-rented", files=[])
             return 1
         if not patterns:
             note("nothing configured to pull ([artefacts].pull is empty)")
+            _pull_summary(pulled=False, reason="nothing-configured", files=[],
+                          unmatched_patterns=[])
             emit(pulled=False, reason="nothing-configured", files=[])
             return 0
         _require_alive(provider, pod)
@@ -2126,6 +2144,18 @@ def cmd_pull(args) -> int:
                 note(f"  {name}")
             if len(written) > 20:
                 note(f"  ... and {len(written) - 20} more")
+            if not written:
+                # A provider that handed over no member is the same fact the tar path names — the
+                # patterns matched nothing. Kept as a *successful* pull of zero files for now,
+                # because `down`'s ruled behaviour keys its non-zero exit on the pull's exit code and
+                # two committed tests pin a clean stop through this seam; reported rather than
+                # silently changed (see the note in `test_run_pull_nothing.py`).
+                note(f"pulled 0 file(s) into {dest} — the configured patterns matched nothing "
+                     f"({', '.join(patterns)})")
+                _pull_summary(pulled=True, reason=None, files=[], unmatched_patterns=list(patterns))
+                emit(pulled=True, files=written, unmatched_patterns=list(patterns))
+                return 0
+            _pull_summary(pulled=True, reason=None, files=written, unmatched_patterns=[])
             emit(pulled=True, files=written)
             return 0
 
@@ -2142,6 +2172,8 @@ def cmd_pull(args) -> int:
                 note(f"pull failed: ssh did not return within {timeout:.0f}s "
                      f"([artefacts] pull_timeout_s), so the pull was killed — a pull must never be "
                      f"able to hold a billing machine open")
+                _pull_summary(pulled=False, reason="ssh-timeout", files=[],
+                              unmatched_patterns=list(patterns))
                 emit(pulled=False, reason="ssh-timeout", exit_code=None, files=[],
                      timeout_s=timeout)
                 return 1
@@ -2171,6 +2203,8 @@ def cmd_pull(args) -> int:
                     # case where there is genuinely nothing to deliver.
                     note(f"pull failed: tar exited {code} and no member was archived — the configured "
                          f"patterns matched nothing ({', '.join(patterns)})")
+                    _pull_summary(pulled=False, reason="patterns-matched-nothing", files=[],
+                                  unmatched_patterns=list(patterns))
                     emit(pulled=False, reason="patterns-matched-nothing", exit_code=code, files=[],
                          unmatched_patterns=list(patterns))
                     return 1
@@ -2181,6 +2215,8 @@ def cmd_pull(args) -> int:
                 head = archive.read_bytes()[:80]
                 note(f"pull failed: the stream from {pod.get('id')} is not an archive "
                      f"({size} bytes, starting {head!r}): {exc}")
+                _pull_summary(pulled=False, reason="stream-not-an-archive", files=[],
+                              unmatched_patterns=list(patterns))
                 emit(pulled=False, reason="stream-not-an-archive", exit_code=1, files=[],
                      bytes=size, head=head.decode("utf-8", "replace"))
                 return 1
@@ -2286,6 +2322,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("run", help="run a command on the instance, then pull artefacts")
     sp.add_argument("--workdir", default=None)
+    sp.add_argument("--require-artefacts", action="store_true",
+                    help="fail the run unless the pull delivered something. By default a pull that "
+                         "matched nothing does not fail a command that succeeded — staging produces "
+                         "no artefacts — while a pull that broke still does")
     structured(sp)
     sp.add_argument("command", nargs=argparse.REMAINDER)
     sp.set_defaults(func=cmd_run)
