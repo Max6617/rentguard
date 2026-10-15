@@ -23,7 +23,7 @@ import shutil
 import tempfile
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -37,6 +37,31 @@ def now_utc() -> datetime:
 
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def closed_run_end(row: dict) -> datetime | None:
+    """When a closed row's paid-for window ended, or ``None`` when that cannot be established.
+
+    ``stopped_at`` is the fact, and it is the instant the row's cost is computed up to. A row whose
+    ``stopped_at`` will not parse still carries the same instant a second time — ``started_at`` plus
+    ``wall_clock_seconds``, which is how ``close`` derived the stop — so a reader that gave up on the
+    first field would call the end unknown while the row still said it.
+
+    ``None`` means the end is genuinely unreadable, and it is a refusal to invent one: whoever prices
+    the machine's remaining minutes from a guessed end either double-counts the closed window or
+    launders the minutes after it. Both callers — the guard's remainder and ``up``'s start for a
+    reused machine — must treat ``None`` as unknown rather than as zero.
+    """
+    try:
+        return datetime.fromisoformat(str(row["stopped_at"]))
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        start = datetime.fromisoformat(str(row["started_at"]))
+        seconds = float(row["wall_clock_seconds"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return start + timedelta(seconds=max(0.0, seconds))
 
 
 class Ledger:
@@ -106,11 +131,17 @@ class Ledger:
         The ledger is authoritative for a machine whose rental is over: its cost is that row's figure
         and must never be re-derived from a stale uptime. A reader that cannot find the row prices the
         machine again from the provider's clock and counts the same minutes twice (2026-10-15).
+
+        A **voided** row is skipped: it records an attempt whose instance never existed or vanished
+        without an end, contributed nothing to the total, and therefore paid for none of the machine's
+        minutes. Treating it as the anchor for a remainder would price the machine from an end nobody
+        was ever charged for.
         """
         if not instance_id:
             return None
         for row in reversed(self.entries()):
-            if row.get("instance_id") == instance_id and row.get("stopped_at"):
+            if (row.get("instance_id") == instance_id and row.get("stopped_at")
+                    and not row.get("voided")):
                 return row
         return None
 

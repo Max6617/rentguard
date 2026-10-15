@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config
-from .ledger import Ledger, iso, now_utc
+from .ledger import Ledger, closed_run_end, iso, now_utc
 from .provider import Instance, Provider, ProviderError
 
 #: Statuses that mean "this machine can still be billing". A recorded instance that is not in this
@@ -76,10 +76,14 @@ class Snapshot:
     idle_since_start_minutes: float = 0.0   # idle observed by the caller since it started
     idle_for_minutes: float = 0.0
     max_idle_minutes: float | None = None   # from the provider's own reading, when reported
-    #: The open row's ``started_at`` is unreadable: the accrual below is a witness, not a reading.
+    #: The accrual below is **not a reading from the ledger row**: either the row's ``started_at`` is
+    #: unreadable and the number is a witness (see ``priced_from``), or a closed row cannot say when
+    #: its paid-for window ended and no remainder could be established at all. Either way the number
+    #: is not the row's own, and it must not be read as though it were.
     accrual_unknown: bool = False
-    #: Where that witness came from — ``"uptime"`` when the pod's own clock priced it. The finding
-    #: is named beside this number, never instead of it.
+    #: Where that witness came from — ``"uptime"`` when the pod's own clock priced it, or
+    #: ``"since-close"`` when a closed row anchored the remainder. The finding is named beside this
+    #: number, never instead of it.
     priced_from: str | None = None
 
     @property
@@ -132,30 +136,60 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     uptime_hours = round((uptime_seconds or 0.0) / 3600.0, 4)
 
     unreadable = ledger.unreadable_open_rows() if open_run is not None else []
+    terminal = str(pod.get("status") or "").upper() in TERMINAL_STATUSES
+    # Only a machine with no row open *here* can have had an earlier part of its life recorded and
+    # closed. When a row is open it is the whole record of the run in progress.
+    closed = None if open_run is not None else ledger.closed_run_for(pod.get("id"))
     priced_from: str | None = None
     recorded = open_run is not None
+    accrual_unknown = False
     if open_run is not None:
         rate = float(open_run.get("rate_usd_per_hour") or 0.0)
         if unreadable and uptime_seconds is not None:
             # The row's own start cannot be read, so price it from the pod's clock: uptime is an
             # independent witness, bounded by the machine's own end by construction, so the cap can
             # still fire on the one run whose accrual is unknown. Unknown must never read as zero —
-            # and the row stays quarantined and named beside this number, not instead of it.
+            # and the row stays quarantined and named beside this number, not instead of it. The
+            # price is derived, not unknown: `priced_from` says so.
             run_usd = round(rate * uptime_hours, 6)
             priced_from = "uptime"
+            accrual_unknown = True
         else:
             run_usd = ledger.live_usd(at)
-    elif str(pod.get("status") or "").upper() in TERMINAL_STATUSES:
-        # The rental is over and its row is closed: the ledger's figure is the whole truth, and it is
-        # already inside `total_usd()`. Re-pricing the machine from a stale uptime invents money that
-        # was recorded once — measured 2026-10-15, a sample after the batch-A row closed read
-        # `$15.581/$15.00` against a cap that was never reached, because the closed row was taken for
-        # an unrecorded machine and priced again from its uptime. The row exists, so `recorded` is
-        # true: a finished machine is finished business, not unrecorded.
-        closed = ledger.closed_run_for(pod.get("id"))
-        rate = float((closed or {}).get("rate_usd_per_hour") or pod.get("cost") or 0.0)
+    elif closed is not None:
+        # A row for this machine has already closed, and the machine is still here. The closed row
+        # paid for the part of this machine's life it covered, and `total_usd()` already contains it;
+        # pricing the machine from its **whole** uptime on top of that bills those same minutes
+        # twice. What is left is the time since that row closed — measured from the row's own end,
+        # never from "now minus uptime" — so the reading can never exceed what the machine has
+        # billed. Gating this on the machine's status (`TERMINAL_STATUSES`) was not enough: a row
+        # closed while the machine was still RUNNING was re-priced from its whole uptime, and the
+        # stop decision ran on a total the machine had not reached (2026-10-15, $14.00 read for an
+        # $8.00 bill).
+        rate = float(closed.get("rate_usd_per_hour") or pod.get("cost") or 0.0)
+        recorded = True
+        end = closed_run_end(closed)
+        if terminal:
+            # The rental is over and `total_usd()` is the whole truth about what it cost. Re-pricing
+            # the machine from a stale uptime invents money that was recorded once — measured
+            # 2026-10-15: a sample after the batch-A row closed read `$15.581/$15.00` against a cap
+            # that was never reached. A finished machine is finished business, not unrecorded.
+            run_usd = 0.0
+        elif end is None:
+            # The row cannot say when its paid-for window ended, so the remainder cannot be computed:
+            # it is unknown, which is never zero. `accrual_unknown` carries that rather than a
+            # number nobody read.
+            run_usd = 0.0
+            accrual_unknown = True
+        else:
+            run_usd = round(rate * max(0.0, (at - end).total_seconds()) / 3600.0, 6)
+            priced_from = "since-close"
+    elif terminal:
+        # No row at all for a machine whose rental is over: it cannot bill again without a new start,
+        # so nothing is being spent and nothing needs to be invented.
+        rate = float(pod.get("cost") or 0.0)
         run_usd = 0.0
-        recorded = closed is not None
+        recorded = False
     else:
         # No row and still billing: the money is being spent and nothing records it. Price it from
         # the provider's uptime — the row that would have costed this run never existed, so uptime is
@@ -194,6 +228,8 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
         max_hours=cfg.budget.max_hours_per_run,
         idle_minutes=cfg.budget.idle_minutes,
         idle_for_minutes=round(idle_for_minutes, 1),
+        accrual_unknown=accrual_unknown,
+        priced_from=priced_from,
     )
 
 
@@ -410,8 +446,12 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
             reason = None
         else:
             reason = decide(snap)
-        log(f"  {snap.at}  {snap.status:<10} up {snap.uptime_hours:5.2f}h  "
-            f"run ${snap.run_usd:.3f}{'' if snap.recorded else ' (unrecorded)'}  "
+        log(f"  {snap.at}  {snap.status:<10} up "
+            f"{f'{snap.uptime_hours:5.2f}h' if runtime.get('uptime') is not None else '   ?  h'}  "
+            f"run ${snap.run_usd:.3f}"
+            f"{'' if snap.recorded else ' (unrecorded)'}"
+            f"{' (since the row closed)' if snap.priced_from == 'since-close' else ''}"
+            f"{' (UNKNOWN: not read)' if snap.accrual_unknown else ''}  "
             f"total ${snap.spent_usd:.3f}/${snap.cap_usd:.2f}  "
             f"gpu {snap.gpu_util}%  idle {snap.effective_idle_minutes:.0f}m")
         if reason:
