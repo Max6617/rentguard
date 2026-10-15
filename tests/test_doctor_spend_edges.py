@@ -92,11 +92,23 @@ class DoctorCase(unittest.TestCase):
         return round(float(spend.get("total_usd") or 0.0), 6)
 
     def assert_readings_agree(self, document: dict, text: str) -> None:
+        """The printed total and the enforced total are two samples of a *live* quantity.
+
+        `printed` comes from the `doctor` call that just ran; `enforced` is recomputed here, so the two
+        differ by whatever accrued in between. At the $2/h rate these cases use, accrual is $0.000556 per
+        second, which makes `places=4` a demand that both samples were taken within about 0.09 s of each
+        other — a wall-clock race, not a property of the code. It surfaced three times: in the traced run
+        at `7f52cc3`, untraced twice at the same revision, and again under the tracer in a clean worktree
+        at `a9cffa0` (defect 19, 2026-10-15). One cent is ~18 s of accrual at that rate, so this tolerance
+        cannot mask what these cases are about: every one of them hunts for a whole $2.00 row that was
+        counted, mispriced or invented, two hundred times the tolerance below.
+        """
         enforced = self.enforced()
         printed = self.printed(document)
         self.assertAlmostEqual(
-            printed, enforced, places=4,
-            msg=f"the printed total ${printed} and the enforced total ${enforced} disagree."
+            printed, enforced, places=2,
+            msg=f"the printed total ${printed} and the enforced total ${enforced} disagree by more than a "
+                f"cent — more than 18 s of accrual at these rates, so this is not the sampling interval."
                 f"\nspend={document.get('spend')}\noutput:\n{text}")
 
 
