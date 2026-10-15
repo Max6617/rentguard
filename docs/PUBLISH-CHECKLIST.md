@@ -221,7 +221,12 @@ exit 0.
   host cannot run 3.13, so "the published tip is green" is not claimed here; the verdict lives at the
   run list linked in §1.
 - **Still the user's call**: publishing version `0.1.0` to PyPI, which is a separate action from the
-  push and has not been taken. Nothing else is outstanding on the local side.
+  push and has not been taken.
+- **One unpushed commit now touches a measured module.** `e9709cb` (`session.py`, the command in a
+  subshell) sits above the published tip. Nothing on this page changes, because every figure above is
+  pinned to `be4e7c7` — the code `1ba1198` publishes — and not to local HEAD. It does mean the coverage
+  numbers would have to be re-measured, not carried, before they could be quoted for the tree that
+  contains it.
 - **What becomes irreversible**: the repository is already public, so its history is already out;
   pushing more commits adds to a record that cannot be withdrawn. A published PyPI version cannot be
   unpublished, only yanked.
