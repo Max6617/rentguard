@@ -918,15 +918,29 @@ def cmd_up(args) -> int:
         # unknown cap is the laundering direction — as good as treating the unknown accrual as
         # spent-nothing — so `up` refuses and names the row instead of guessing (2026-10-14).
         accruing_usd, unknown_rows = ledger.accrual()
+        priced_from: str | None = None
         if unknown_rows:
+            # An unreadable start is not automatically an unpreiceable run: the provider's own reading
+            # of the machine — uptime in seconds x the row's rate — is an independent witness, and the
+            # reading and the enforcement must agree. `doctor` prices the same row exactly this way.
+            # Where no witness can be had, nothing rents: an unknown cap is not a zero one.
             row = unknown_rows[0]
-            note(f"error: the open ledger row {row['run_id']} has an unreadable {row['field']} "
-                 f"({row['reason']}), so what this project has spent cannot be computed. Renting "
-                 f"against an unknown cap is refused; repair the ledger row first "
-                 f"(`rentguard ledger` shows the file).")
-            emit(action="refused", reason="open-run-accrual-unknown", run_id=row.get("run_id"),
-                 field=row.get("field"), detail=row.get("reason"))
-            return 2
+            row_pod = provider.get(row.get("instance_id")) if row.get("instance_id") else None
+            uptime = ((row_pod or {}).get("runtime") or {}).get("uptime")
+            if uptime is None:
+                note(f"error: the open ledger row {row['run_id']} has an unreadable {row['field']} "
+                     f"({row['reason']}) and the provider cannot witness it either, so what this "
+                     f"project has spent cannot be computed. Renting against an unknown cap is "
+                     f"refused; repair the ledger row first (`rentguard ledger` shows the file).")
+                emit(action="refused", reason="open-run-accrual-unknown", run_id=row.get("run_id"),
+                     field=row.get("field"), detail=row.get("reason"))
+                return 2
+            accruing_usd = round(float(row.get("rate_usd_per_hour") or 0.0) * float(uptime) / 3600.0,
+                                 6)
+            priced_from = "uptime"
+            note(f"note: row {row['run_id']} has an unreadable {row['field']}; its accrual "
+                 f"${accruing_usd:.2f} is priced from the machine's own uptime, and the cap is "
+                 f"checked against that")
         already = round(ledger.total_usd() + accruing_usd, 6)
         if already >= cfg.budget.cap_usd and not args.force:
             note(f"error: ${already:.2f} already recorded (including the open run's accrued cost) "
