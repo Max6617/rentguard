@@ -3,7 +3,7 @@
 What rentguard does not do, and what it cannot promise. Read this before trusting it with money you
 cannot lose.
 
-Describes **`ddd79c9`** (2026-10-15). Where a number or a quote appears, it names the revision it was
+Describes **`a9cffa0`** (2026-10-15). Where a number or a quote appears, it names the revision it was
 read at.
 
 ## Worked example: an open row whose instance is gone
@@ -248,9 +248,11 @@ comes from a live response or the provider's schema, and an invented one says so
 case in point: the first version invented the response key, passed, and hid that the live call returned
 nothing (`f4225ff`). The fake is also a program that can be wrong on its own terms — a helper that never
 saved the machine it added was found and fixed at `458e128` — so "green against the fake" means the
-decisions and the arithmetic are right, never that the provider was understood. At `ddd79c9` the lowest
-measured module is `session.py` at 83.2% — the new session driver, which is also what puts the whole
-project under its own 98.0% coverage floor. Everything else clears the 94% figure.
+decisions and the arithmetic are right, never that the provider was understood. At `a9cffa0` the lowest
+measured module is `ledger.py` at 96.2% and nothing is below the 94% figure — but that number is a
+snapshot: `session.py` was added at `ddd79c9` and measured 83.2% before it had tests, which put the
+whole project under its own 98.0% coverage floor for a night. Coverage moves when code lands, and the
+floor is a ratchet rather than a promise about the next commit.
 
 **The MCP server is stdio-only and has no authentication of its own.** Whoever can call its tools can
 rent a machine. The approval rule — renting needs the Main Bot's approval, and the cap is the backstop

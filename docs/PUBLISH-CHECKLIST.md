@@ -10,53 +10,54 @@ They are not the same revision, so every number below says which one it was read
 
 - **`7f52cc3` is published.** It is the tip of `origin/master` on the public repository
   (<https://github.com/Max6617/rentguard>) — what a stranger clones today.
-- **`ddd79c9` is the local HEAD** measured for this pass: **10 commits ahead** of the published tip, on
+- **`a9cffa0` is the local HEAD** measured for this pass: **14 commits ahead** of the published tip, on
   `master`, not pushed.
 
 Everything in these tables was measured in a clean worktree with the package path verified inside that
 worktree (`rentguard.mcp_server.__file__`), unless the line says otherwise.
 
-| Measurement | Published tip `7f52cc3` | Local HEAD `ddd79c9` |
+| Measurement | Published tip `7f52cc3` | Local HEAD `a9cffa0` |
 | --- | --- | --- |
-| Suite | **418 passed, 0 failed, 54 subtests** | **471 passed, 0 failed, 54 subtests** |
-| Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **2,957 / 3,038 = 97.3%**, floor 98.0%, exit **1 — RED** |
+| Suite | **418 passed, 0 failed, 54 subtests** | **485 passed, 0 failed, 54 subtests** |
+| Coverage (Python 3.12) | **2,697 / 2,747 = 98.2%**, floor 98.0%, exit **0** | **3,013 / 3,054 = 98.7%**, floor 98.0%, exit **0** |
 | CI, on push | 3.11 **green**, 3.12 **green**, 3.13 **RED** at the Coverage step | not run — nothing is pushed |
 
 The suite figures are identical with and without `RENTGUARD_PROVIDER=fake` at both revisions. The
 coverage floor is `0.98` in `tools/coverage.py`, and it was not lowered to make any number look better.
 
-**The local tree would fail the coverage gate on every Python version, and the reason is one new
-module.** `session.py` — the session driver for the community-pod route, added at `ddd79c9`, 155
-executable lines — is measured at **83.2%** (129/155), and it pulls the total from 98.1% to 97.3%. The
-published tip does not contain it. So today's push would turn the badge red on 3.11 and 3.12 as well,
-for a reason that is not the 3.13 tracer artefact. That is the ratchet doing its job for the third time
-in this project: the number went backwards, the floor was not moved, and what closes it is tests for
-`session.py`, not a lower floor. The lowest measured module is now `session.py`; everything else clears
-the 94% figure.
+**The coverage gate is green again at `a9cffa0`, and both halves of that were fixes rather than
+patience.** The red 97.3% at `ddd79c9` had two causes: the new `session.py` was barely reached, and the
+tracer counted a `None` line-table entry per module and missed every line that ran on a thread other
+than the main one. `f832596` fixed the tool (`isinstance(n, int) and n > 0`, plus `threading.settrace`),
+and `session.py` is now **100%** (154 lines); `fake.py`, `provider.py` and `runpod.py` are at 100% too,
+and the lowest measured module is `ledger.py` at 96.2%. Nothing is below the 94% figure, and the total
+clears the floor.
 
-| Module | `7f52cc3` | `ddd79c9` |
+| Module | `7f52cc3` | `a9cffa0` |
 | --- | --- | --- |
-| `fake.py` | 99.6% | 99.6% |
-| `runpod.py` | 99.3% | 99.3% |
-| `provider.py` | 99.2% | 99.2% |
-| `mcp_server.py` | 98.7% | 98.7% |
-| `guard.py` | 99.2% | 98.0% |
-| `cli.py` | 98.0% | 98.1% |
-| `config.py` | 99.0% | 98.1% |
-| `ledger.py` | 94.3% | 94.7% |
-| `session.py` | — (does not exist) | **83.2%** — the lowest, and the reason the gate is red |
+| `fake.py` | 99.6% | **100.0%** |
+| `provider.py` | 99.2% | **100.0%** |
+| `runpod.py` | 99.3% | **100.0%** |
+| `session.py` | — (does not exist) | **100.0%** |
+| `mcp_server.py` | 98.7% | 99.1% |
+| `cli.py` | 98.0% | 98.4% |
+| `guard.py` | 99.2% | 98.3% |
+| `config.py` | 99.0% | 99.0% |
+| `ledger.py` | 94.3% | **96.2%** — the lowest, and well above 94% |
 
 The figures move with the tree, and each was re-measured when a measured module changed rather than
 carried forward: `18b5fc0` 96.1%; `458e128` 97.5%; `cdd7113` 98.4%; `f158396` **97.99%, exit 1**, one
 line short; `7febd07` 98.4%; `310f449` 98.1%; `721436a` 98.1%; `eef6bdb` 98.6%; `7f52cc3` 98.2%;
-`ddd79c9` **97.3%, exit 1** — again not lowered, again waiting on tests.
+`ddd79c9` **97.3%, exit 1**; `a9cffa0` **98.7%, exit 0** after the tool fix and `session.py`'s tests.
+The floor was never lowered on any of the three occasions it went red.
 
-## 1. The CI is red, and it is the 3.13 job
+## 1. The published revision's CI is red; the fix for it is in the unpushed tree
 
 **A checklist that does not mention a red badge is not a checklist.** At the published tip the CI run
 `38721243756` fails: `test (3.11)` and `test (3.12)` pass every step, and `test (3.13)` passes Install
 and Test and then **fails at the Coverage step**; the step after it ("Check the entry point exists")
-never runs, so on 3.13 the entry point is untested by CI.
+never runs, so on 3.13 the entry point is untested by CI. The published revision is unchanged, so that
+badge stays red until the fixes below are pushed.
 
 The number behind that is carried by
 [`tests/_artefacts/linenos_312_vs_313_2026-10-15.txt`](../tests/_artefacts/linenos_312_vs_313_2026-10-15.txt),
@@ -67,27 +68,35 @@ denominator grows by one per measured module (8 in total) while the numerator is
 files, **zero integer line numbers differ between the interpreters**, so there is no statement to cover
 and none to delete.
 
-The fix is a one-line change in `tools/coverage.py` (Forge's file, untouched by this page):
+The fix landed in the local tree at `f832596` and is **not published**, so the red badge above stands
+until the push:
 
 ```python
-executable = {n for n in _find_executable_linenos(str(path)) if isinstance(n, int)}
+return {n for n in _find_executable_linenos(str(path)) if isinstance(n, int) and n > 0}
 ```
 
-That makes both interpreters measure the same 2,767 lines and keeps a single floor. Until it lands, the
-3.13 job is red for an artefact of the tracer and the published badge is red.
+The same commit makes the tracer reach other threads (`threading.settrace`), for the same reason: lines
+that ran on a worker thread were not counted at all. `tests/test_coverage_tool.py` pins both halves, and
+the `None`-entry artefact is gone with them. What this host cannot say is whether the 3.13 job then
+passes end to end: there is no pytest for 3.13 here, so the one thing that can be stated is that the
+divisor it failed on is fixed and the local 3.12 measurement at `a9cffa0` is 3,013 / 3,054 = 98.7%,
+exit 0.
 
 ## 2. The tool is proven
 
 - [x] **M1 — the suite is green with no network and no spend.** 418 passed, 0 failed, 54 subtests at
-      `7f52cc3`; 471 at `ddd79c9`; identical with and without `RENTGUARD_PROVIDER=fake` at both. The
+      `7f52cc3`; 485 at `a9cffa0`, identical with and without `RENTGUARD_PROVIDER=fake` at both. The
       real CLI is driven through the in-memory fake provider.
-- [x] **The coverage ratchet works, and it has caught a regression twice.** The series is the evidence:
+- [x] **The coverage ratchet works, and it has caught a regression three times.** The series is the
+      evidence:
       - at `f158396`: **2,336 / 2,384 = 97.99%**, floor 98.0%, **exit 1** — one line short, because two
         defect fixes added `cli.py` and `runpod.py` lines faster than tests;
       - at `7febd07`: **2,347 / 2,384 = 98.4%**, exit 0, after a test commit covered the new branches;
       - at `310f449`, `721436a`, `eef6bdb`, `7f52cc3` and `1452718` it holds at 98.1–98.6%, exit 0;
-      - at `ddd79c9` it is **2,957 / 3,038 = 97.3%, exit 1** again, because a new module (`session.py`,
-        83.2%) landed before its tests.
+      - at `ddd79c9` it is **2,957 / 3,038 = 97.3%, exit 1** again, because a new module (`session.py`)
+        landed before its tests and the tracer was missing threaded lines;
+      - at `a9cffa0` it is **3,013 / 3,054 = 98.7%, exit 0**, after `f832596` fixed the tracer and
+        `session.py` reached 100%.
       The floor was **not** lowered on any of the three occasions: each was flagged as the open gate and
       the tests closed it.
 - [x] **M2 — real rentals end to end.** Three paid runs on RunPod, **$0.0264** in total ($0.0091 +
@@ -104,8 +113,10 @@ That makes both interpreters measure the same 2,767 lines and keeps a single flo
       recorded instance outvote the config (`c1135e1`); an empty archive is a failure (`5072b0e`); a
       partial pull names its gap (`eef6bdb`, attacked by `fec0305`). 2026-10-15 added the money-direction
       family: defect 15, a closed row priced a second time from the machine's uptime (`cdb2fba` terminal,
-      `13d7dc7` live); `up` renting a second machine while a live one bills (`3287a4f`); and a price that
-      was never read printed as a number (`946ba28`). All are green at `ddd79c9` — and **all of them are
+      `13d7dc7` live); `up` renting a second machine while a live one bills (`3287a4f`); a price that
+      was never read printed as a number (`946ba28`); and defect 16, a guard armed while a stale state
+      file names the previous pod — it watched a dead id, reported itself armed, and left the live
+      machine billing unguarded (`a9cffa0`). All are green at `a9cffa0` — and **all of them are
       unpushed**, so the published tip does not have them.
 - [ ] **R4 — the guard has never run against a rented pod.** The stop decision is exercised in-process
       and through the CLI against the fake, but `watch` has never been armed on a real billing machine,
@@ -170,15 +181,16 @@ That makes both interpreters measure the same 2,767 lines and keeps a single flo
 
 - **The repository is public and part of its history is pushed.** `github.com/Max6617/rentguard`
   exists, public, MIT, with `origin` wired to it in the local clone. The pushed tip is **`7f52cc3`**.
-- **10 commits are unpushed** at `ddd79c9` (`git rev-list --count origin/master..master` = 10): the
+- **14 commits are unpushed** at `a9cffa0` (`git rev-list --count origin/master..master` = 14): the
   defect-15 fix and its attack, the pricing-unknown contract, the money-direction fixes, the 3.13
-  line-number artefact, and the `session.py` session driver. So the published repository is behind this
-  tree, and it does not contain the fixes listed in §2. This page's own commit is docs-only and sits on
-  top of `ddd79c9`, so a push would carry 11.
-- **Two gates have to close before a push is worth making.** The coverage gate is red at `ddd79c9`
-  (§above) and the 3.13 job is red on the tracer artefact (§1). Pushing today would show a red badge on
-  every version.
-- **The user's publish action would**: push those 10 commits (`git push origin master`) — and, separately,
+  line-number artefact, the `session.py` session driver, the coverage-tool fix, and defect 16. So the
+  published repository is behind this tree, and it does not contain the fixes listed in §2. This page's
+  own commits are docs-only and sit on top of `a9cffa0`, so a push would carry 16.
+- **The local gates are green.** Coverage at `a9cffa0` is 3,013 / 3,054 = 98.7%, exit 0, and the suite
+  is 485 passed / 0 failed. The 3.13 tracer artefact that reddens the published badge is fixed in the
+  tree by `f832596` (§1), and what remains for a green badge is the push itself. This host cannot run
+  3.13, so "CI will be green" is not claimed here — only that the reason it failed is gone.
+- **The user's publish action would**: push those commits (`git push origin master`) — and, separately,
   publish version `0.1.0` to PyPI if they choose to. Nothing else is outstanding on the local side.
 - **What becomes irreversible**: the repository is already public, so its history is already out;
   pushing more commits adds to a record that cannot be withdrawn. A published PyPI version cannot be
@@ -204,15 +216,15 @@ That makes both interpreters measure the same 2,767 lines and keeps a single flo
   transcripts** rather than a real community pod, so its tests pass while the route stays unusable.
   Renting a community pod means expecting `run` not to work.
 - **Coverage is not fidelity, and the standard says so.** The 100%-of-features half is what the feature
-  matrix checks; a line number only says code was reached. `fake.py` is 99.6% with nothing real unhit,
-  and it is still the one place a fixture can manufacture a payload that never existed — the rule is
-  recorded in `tests/test_storage.py`. The converse is also true and it is where the gate is now:
-  `session.py` at 83.2% is code that exists and is barely reached, which is a coverage problem that no
-  feature test will fix by itself.
-- **CI is red on 3.13** for a tracer artefact, not a defect (§1), and the **local** tree is red on the
-  coverage floor for a real reason (`session.py`, above). Do not read either badge as "the tool is
-  broken"; do read them as two different open jobs, one in `tools/coverage.py`, one in `session.py`'s
-  tests.
+  matrix checks; a line number only says code was reached. `fake.py` is 100% and still the one place a
+  fixture can manufacture a payload that never existed — the rule is recorded in `tests/test_storage.py`.
+  The converse is what took this page red earlier tonight: `session.py` was added and measured at 83.2%
+  before it had tests, which is code that exists and is barely reached, and no feature test would have
+  fixed it. It is 100% now, and the way there was tests, not a lower floor.
+- **The published badge is red and the local tree is green.** The 3.13 job failed on a tracer artefact
+  (fixed at `f832596`, §1) and the local coverage floor was red while `session.py` was thin (fixed at
+  `a9cffa0`). Neither was a broken tool; both were open jobs, and both are closed in the tree that has
+  not been pushed yet.
 
 ## 9. The ask
 

@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`ddd79c9`** (2026-10-15).
+say where they stand at the revision this file describes, **`a9cffa0`** (2026-10-15).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`ddd79c9` unless the entry says otherwise.
+`a9cffa0` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -252,10 +252,10 @@ status, and no reading may exceed the ledger's own closed + accruing (`tests/tes
 *live* status with a closed row for that instance fell through to the unrecorded branch and was priced
 from the machine's whole uptime. The attack that pinned it —
 `tests/test_guard_closed_row_attack.py`, a `PROVISIONING` machine reading $14.00 for an $8.00 bill — is
-green at `ddd79c9`. The rule it leaves behind: a closed row anchors the remainder, so a live machine is
+green at `a9cffa0`. The rule it leaves behind: a closed row anchors the remainder, so a live machine is
 never priced twice.
 
-## Defect 16 — `up` rents a second machine while a live one is already billing (fixed)
+## The money-direction family — `up` rents a second machine while a live one is already billing (fixed)
 
 Two shapes, both red-first at `7f52cc3` in `tests/test_money_direction_shapes.py`, both severe because
 the first machine keeps billing with no open row and no guard — a bill the cap cannot see:
@@ -276,7 +276,19 @@ test_up_reuse_after_close.py`, `tests/test_state_lost_ledger_fallback.py`).
 `tests/test_doctor_spend_edges.py::VoidedAndFutureRows::test_a_voided_row_contributes_to_neither_number`
 asserts that the total `doctor` *prints* and the total it *enforces* agree to four decimal places. The
 two figures are computed from the wall clock at different instants, so a slow run can widen the gap
-past the tolerance: in a traced coverage run at `7f52cc3` it failed ($4.001065 vs $4.001132), while two
-untraced suite runs at the same revision passed. Red when the machine is busy, green when it is not —
-recorded here rather than called a fix, because a wall-clock-dependent assertion can fail for a
-stranger too.
+past the tolerance: in a traced coverage run at `7f52cc3` it failed ($4.001065 vs $4.001132), and it
+failed again in the traced run at `a9cffa0`, while two untraced suite runs at each revision passed. Red
+when the machine is busy, green when it is not — recorded here rather than called a fix, because a
+wall-clock-dependent assertion can fail for a stranger too. The coverage runs are the slow ones, so this
+is the one test that will be flaky precisely when the gate is being measured.
+
+## Defect 16 — a guard can report itself armed while watching a dead instance (fixed)
+
+**Fixed at `a9cffa0`.** The state file is a cache and the open ledger row is the record that survives it,
+which is also why `_pod` falls back to that row. A guard armed while a stale `state.json` still named the
+previous, already-stopped pod watched that dead id: it returned at once, reported itself armed, and left
+the live machine billing unguarded — the exact state the arming call exists to prevent. `cli.py` now
+resolves the live instance through the ledger's open row first, and `tests/test_watch_arming.py` (132
+lines) is the test that closes it. Note for anyone reading the numbers: `tests/test_pull_pattern_no_match.py`
+also calls its own finding "defect 16", from the earlier unmatched-pattern work — the same number, two
+different defects.
