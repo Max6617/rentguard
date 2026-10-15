@@ -221,21 +221,38 @@ class Ledger:
             try:
                 datetime.fromisoformat(str(row["started_at"]))
             except (KeyError, TypeError, ValueError) as exc:
+                # The fact carries the row's identity and its rate as well as what is broken: a
+                # summary that dropped them left `up` unable to ask the provider for the machine's
+                # own clock, so a row that *could* be priced was refused instead (2026-10-15).
                 out.append({"run_id": row.get("run_id"), "field": "started_at",
+                            "instance_id": row.get("instance_id"),
+                            "rate_usd_per_hour": float(row.get("rate_usd_per_hour") or 0.0),
                             "reason": f"{type(exc).__name__}: {exc}"})
         return out
 
-    def accrual(self, at: datetime | None = None) -> tuple[float, list[dict]]:
+    def accrual(self, at: datetime | None = None, *, witness=None) -> tuple[float, list[dict]]:
         """``(accrued USD from the open run, the rows whose accrual is unknown)``.
 
-        The second list is empty when the number is whole. When it is not, the first value covers the
-        readable rows only and the caller must treat the total as unknown rather than complete — the
-        guard keeps watching, `up` refuses to rent, and `doctor` prints the closed total beside the
-        finding. Returning zero for an unreadable row would be the laundering direction.
+        The second list is empty when the number is whole. When it is not, the first value is priced
+        from ``witness`` if one is given and can answer: ``witness(instance_id)`` returns the
+        machine's own uptime in seconds — an independent reading of how long the run billed, which is
+        exactly what the row's unreadable ``started_at`` would have said. Every caller that prices a
+        quarantined row goes through here, so a reading and an enforcement cannot diverge.
+
+        With no witness, or no answer from it, the amount stays ``0.0`` and the non-empty list is the
+        caller's signal that the total is unknown — never that it is zero.
         """
         unknown = self.unreadable_open_rows()
         row = self.open_run()
-        if not row or unknown:
+        if not row:
+            return 0.0, unknown
+        if unknown:
+            if witness is not None and row.get("instance_id"):
+                uptime = witness(str(row["instance_id"]))
+                if uptime is not None:
+                    seconds = max(0.0, float(uptime))
+                    return (round(float(row.get("rate_usd_per_hour") or 0.0) * seconds / 3600.0, 6),
+                            unknown)
             return 0.0, unknown
         start = datetime.fromisoformat(str(row["started_at"]))
         seconds = max(0.0, ((at or now_utc()) - start).total_seconds())

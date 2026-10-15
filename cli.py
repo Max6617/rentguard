@@ -917,17 +917,22 @@ def cmd_up(args) -> int:
         # An unreadable open row means the project's spend cannot be computed. Renting against an
         # unknown cap is the laundering direction — as good as treating the unknown accrual as
         # spent-nothing — so `up` refuses and names the row instead of guessing (2026-10-14).
-        accruing_usd, unknown_rows = ledger.accrual()
+        def _row_uptime(instance_id: str) -> float | None:
+            """The machine's own uptime, the witness a quarantined row is priced from."""
+            try:
+                pod = provider.get(instance_id)
+            except ProviderError:
+                return None
+            return ((pod or {}).get("runtime") or {}).get("uptime")
+
+        # One shared path for pricing a quarantined row: `Ledger.accrual` with the provider as the
+        # witness. Where a witness answers, the cap is checked against the priced accrual; where none
+        # can be had, nothing rents, because an unknown cap is not a zero one.
+        accruing_usd, unknown_rows = ledger.accrual(witness=_row_uptime)
         priced_from: str | None = None
         if unknown_rows:
-            # An unreadable start is not automatically an unpreiceable run: the provider's own reading
-            # of the machine — uptime in seconds x the row's rate — is an independent witness, and the
-            # reading and the enforcement must agree. `doctor` prices the same row exactly this way.
-            # Where no witness can be had, nothing rents: an unknown cap is not a zero one.
             row = unknown_rows[0]
-            row_pod = provider.get(row.get("instance_id")) if row.get("instance_id") else None
-            uptime = ((row_pod or {}).get("runtime") or {}).get("uptime")
-            if uptime is None:
+            if accruing_usd <= 0.0:
                 note(f"error: the open ledger row {row['run_id']} has an unreadable {row['field']} "
                      f"({row['reason']}) and the provider cannot witness it either, so what this "
                      f"project has spent cannot be computed. Renting against an unknown cap is "
@@ -935,8 +940,6 @@ def cmd_up(args) -> int:
                 emit(action="refused", reason="open-run-accrual-unknown", run_id=row.get("run_id"),
                      field=row.get("field"), detail=row.get("reason"))
                 return 2
-            accruing_usd = round(float(row.get("rate_usd_per_hour") or 0.0) * float(uptime) / 3600.0,
-                                 6)
             priced_from = "uptime"
             note(f"note: row {row['run_id']} has an unreadable {row['field']}; its accrual "
                  f"${accruing_usd:.2f} is priced from the machine's own uptime, and the cap is "
