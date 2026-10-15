@@ -62,7 +62,7 @@ from .guard import (
     state_findings,
     watch as guard_watch,
 )
-from .ledger import JobLog, Ledger, iso, now_utc
+from .ledger import JobLog, Ledger, closed_run_end, iso, now_utc
 from .provider import (
     Provider,
     ProviderError,
@@ -819,7 +819,16 @@ def cmd_status(args) -> int:
         stopped = str(snap.status).upper() in ("EXITED", "TERMINATED")
         note(f"instance       : {pod.get('id')}  {snap.status}")
         note(f"gpu            : {(pod.get('gpu') or {}).get('id')}  ${snap.rate_usd_per_hour}/h")
-        note(f"uptime         : {snap.uptime_hours:.2f} h   gpu util {snap.gpu_util}%")
+        raw_uptime = (pod.get("runtime") or {}).get("uptime")
+        note(f"uptime         : "
+             + (f"{snap.uptime_hours:.2f} h" if raw_uptime is not None
+                else "UNKNOWN (the provider reports no uptime)")
+             + f"   gpu util {snap.gpu_util}%")
+        if snap.pricing_unknown:
+            # The one line that keeps a figure nobody read from looking like a figure: no rate, no
+            # uptime, or a row whose accrual cannot be priced at all. `status` is what a Bot reads to
+            # decide whether anything is billing, so `$0.000` here would be the cap reading low.
+            note(f"pricing        : UNKNOWN — {snap.pricing_unknown_reason}")
         if stopped:
             # The normal end of a rental. "Not usable" would be true but misleading: a stopped
             # machine is finished, not broken, and saying "crash loop" here would make the one
@@ -834,19 +843,27 @@ def cmd_status(args) -> int:
         if not stopped and not snap.recorded:
             # "Nothing recording it" is a claim about the account, and a ledger is local: another
             # root's row for this machine is invisible here. Say what is actually known.
+            unread = ("UNKNOWN has been spent (no price could be established)" if snap.pricing_unknown
+                      else f"${snap.run_usd:.3f} has been spent")
             if instance_claim(cfg, pod) == CLAIM_UNCLAIMED:
-                note(f"ledger         : NO ROW for this instance — ${snap.run_usd:.3f} has been spent "
-                     f"with nothing recording it (`rentguard adopt {pod.get('id')}`)")
+                note(f"ledger         : NO ROW for this instance — {unread} with nothing recording "
+                     f"it (`rentguard adopt {pod.get('id')}`)")
             else:
                 note(f"ledger         : no row in THIS root for this instance; its name "
                      f"{pod.get('name')!r} is a rentguard project name, so the row may be in another "
                      f"root's ledger — check there before adopting (adopting here would record the "
                      f"same machine twice)")
-        note(f"this run       : ${snap.run_usd:.3f} of ${snap.per_run_cap_usd:.2f}")
+        note(f"this run       : "
+             + ("UNKNOWN (no price could be established)" if snap.pricing_unknown
+                else f"${snap.run_usd:.3f} of ${snap.per_run_cap_usd:.2f}"))
         line = f"all runs       : ${snap.spent_usd:.3f} of ${snap.cap_usd:.2f}"
-        # Time-to-cap is only meaningful for a machine that is actually billing.
-        if snap.status == "RUNNING" and snap.minutes_to_cap:
+        # Time-to-cap is only meaningful for a machine that is actually billing, at a price that was
+        # actually read: a rate of zero out of an unreadable payload would print a headroom that does
+        # not exist.
+        if snap.status == "RUNNING" and snap.minutes_to_cap and not snap.pricing_unknown:
             line += f"  (~{snap.minutes_to_cap} min to the cap at this rate)"
+        elif snap.pricing_unknown:
+            line += "  (a lower bound: this machine's own price could not be established)"
         note(line)
         if age is None:
             note("guard          : NO GUARD — nothing is watching this instance, so it will bill "
@@ -858,18 +875,27 @@ def cmd_status(args) -> int:
             note(f"guard          : alive (heartbeat {age:.1f} min ago)")
         emit(instance={"id": pod.get("id"), "status": snap.status,
                        "gpu": (pod.get("gpu") or {}).get("id"),
-                       "uptime_hours": snap.uptime_hours,
+                       "uptime_hours": snap.uptime_hours if raw_uptime is not None else None,
                        "gpu_util": snap.gpu_util,
                        "usable": is_alive(pod),
                        "rate_usd_per_hour": snap.rate_usd_per_hour},
              open_run=_open_run_dict(ledger), drift=False,
              spent={"recorded_usd": ledger.total_usd(),
-                    "accrued_usd": snap.run_usd,
+                    # A number nobody read is not emitted as a number: the flags say why, and the
+                    # total is named as the lower bound it is.
+                    "accrued_usd": None if snap.pricing_unknown else snap.run_usd,
                     "total_usd": snap.spent_usd,
+                    "total_is_lower_bound": snap.pricing_unknown,
+                    "pricing_unknown": snap.pricing_unknown,
+                    "pricing_unknown_reason": snap.pricing_unknown_reason,
+                    "accrual_unknown": snap.accrual_unknown,
+                    "priced_from": snap.priced_from,
                     "cap_usd": snap.cap_usd,
                     "per_run_cap_usd": snap.per_run_cap_usd,
                     "remaining_usd": snap.remaining_usd,
-                    "minutes_to_cap": snap.minutes_to_cap if snap.status == "RUNNING" else None})
+                    "minutes_to_cap": (snap.minutes_to_cap
+                                       if snap.status == "RUNNING" and not snap.pricing_unknown
+                                       else None)})
     return 0
 
 
@@ -980,6 +1006,22 @@ def cmd_up(args) -> int:
         pod = _pod(provider, cfg)
 
         if pod is not None:
+            # A row for this machine has already closed, and its end cannot be read: the new row's
+            # start cannot be placed without either charging the closed window twice (backdating to
+            # the machine's boot) or leaving the hours since it closed unrecorded (starting now).
+            # Neither is a number to guess, so `up` refuses *before* it starts or resumes anything —
+            # the same rule as an open row whose accrual cannot be priced.
+            if open_run is None or open_run.get("instance_id") != pod.get("id"):
+                closed_row = ledger.closed_run_for(pod.get("id"))
+                if closed_row is not None and closed_run_end(closed_row) is None:
+                    note(f"error: the closed row {closed_row.get('run_id')} for {pod['id']} names no "
+                         f"readable end (stopped_at={closed_row.get('stopped_at')!r}), so a new row's "
+                         f"start cannot be placed without either charging the same hours twice or "
+                         f"losing the hours since it closed. Repair the ledger row first "
+                         f"(`rentguard ledger` shows the file).")
+                    emit(action="refused", reason="closed-row-unreadable-stop",
+                         run_id=closed_row.get("run_id"), instance_id=pod.get("id"))
+                    return 2
             state = _read_state(cfg)
             mismatches = _config_mismatch(cfg, pod, state)
             status = pod.get("status")
@@ -1209,6 +1251,25 @@ def _open_if_needed(cfg: Config, ledger: Ledger, pod: dict, purpose: str | None,
         _release_open_run(ledger)
     uptime_seconds = float((pod.get("runtime") or {}).get("uptime") or 0.0)
     started = now_utc() - timedelta(seconds=uptime_seconds)
+    # A closed row for this machine already paid for the part of its life it covered, so backdating
+    # the new row to the machine's boot charges those hours twice: a refused stop followed by a reuse
+    # read $12.00 for a $6.00 bill (2026-10-15). The new row starts where that window ended, so the
+    # accrual picks up exactly where the ledger left off.
+    closed = ledger.closed_run_for(pod_id)
+    if closed is not None:
+        end = closed_run_end(closed)
+        if end is None:
+            # `cmd_up` refuses this shape before it gets here, so this is the defensive path for a
+            # direct caller. Starting now is the lesser evil: the minutes between an end nobody can
+            # read and now are recorded nowhere, which is why the command refuses instead.
+            note(f"warning: the closed row {closed.get('run_id')} names no readable end, so the new "
+                 f"row starts now rather than at the machine's boot")
+            started = now_utc()
+        elif end > started:
+            note(f"row {closed.get('run_id')} already recorded ${closed.get('estimated_usd')} for "
+                 f"this machine up to {closed.get('stopped_at')}; the new row starts there so those "
+                 f"hours are not charged twice")
+            started = end
     run = ledger.open(
         purpose=purpose or "(unstated)",
         provider=provider.name if provider is not None else provider_name(cfg),

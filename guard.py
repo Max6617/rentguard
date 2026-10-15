@@ -85,6 +85,13 @@ class Snapshot:
     #: ``"since-close"`` when a closed row anchored the remainder. The finding is named beside this
     #: number, never instead of it.
     priced_from: str | None = None
+    #: **No price could be established** for this machine, and ``pricing_unknown_reason`` says which
+    #: input was missing or unreadable. Distinct from ``priced_from``: a price derived from the pod's
+    #: own clock is derived, not unknown, and keeping the two apart is what stops `up` refusing where
+    #: a witness exists. A decision that would hang on the price treats this as unknown, never as
+    #: zero — a cap cannot fire on a number nobody read, and ``$0.000`` here means only that.
+    pricing_unknown: bool = False
+    pricing_unknown_reason: str | None = None
 
     @property
     def remaining_usd(self) -> float:
@@ -143,6 +150,10 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     priced_from: str | None = None
     recorded = open_run is not None
     accrual_unknown = False
+    #: Why no price could be established at all, if that is the case — the state the reading must
+    #: never dress up as a number. `priced_from` answers a different question ("where did this price
+    #: come from"); this one answers "is there a price at all".
+    unknown_reason: str | None = None
     if open_run is not None:
         rate = float(open_run.get("rate_usd_per_hour") or 0.0)
         if unreadable and uptime_seconds is not None:
@@ -154,6 +165,22 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
             run_usd = round(rate * uptime_hours, 6)
             priced_from = "uptime"
             accrual_unknown = True
+        elif unreadable:
+            # No start and no clock to stand in for it: nothing can price this run, and a `$0.000`
+            # here is the cap reading low on the one run whose accrual nobody can compute.
+            run_usd = 0.0
+            accrual_unknown = True
+            unknown_reason = (f"the open run {open_run.get('run_id')} has an unreadable "
+                              f"{unreadable[0].get('field')} ({unreadable[0].get('reason')}) and the "
+                              f"provider reports no uptime to price it from")
+        elif rate <= 0.0:
+            # A recorded run whose rate is missing or zero accrues at nothing forever: the same
+            # silent zero, one field over.
+            run_usd = 0.0
+            accrual_unknown = True
+            unknown_reason = (f"the open run {open_run.get('run_id')} carries no rate "
+                              f"(rate_usd_per_hour={open_run.get('rate_usd_per_hour')!r}), so its "
+                              f"accrual cannot be priced")
         else:
             run_usd = ledger.live_usd(at)
     elif closed is not None:
@@ -181,6 +208,9 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
             # number nobody read.
             run_usd = 0.0
             accrual_unknown = True
+            unknown_reason = (f"the closed row {closed.get('run_id')} names no readable end "
+                              f"(stopped_at={closed.get('stopped_at')!r}), so the time this machine "
+                              f"has billed since it closed cannot be priced")
         else:
             run_usd = round(rate * max(0.0, (at - end).total_seconds()) / 3600.0, 6)
             priced_from = "since-close"
@@ -193,9 +223,22 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
     else:
         # No row and still billing: the money is being spent and nothing records it. Price it from
         # the provider's uptime — the row that would have costed this run never existed, so uptime is
-        # the only witness.
+        # the only witness. Both halves of the price have to *be* there for that: a machine the
+        # provider describes without a rate or without an uptime is one nothing can price, and
+        # `$0.000` would be the cap reading low on a machine that is billing (2026-10-15).
         rate = float(pod.get("cost") or 0.0)
-        run_usd = round(rate * uptime_hours, 6)
+        if "cost" not in pod or rate <= 0.0:
+            run_usd = 0.0
+            accrual_unknown = True
+            unknown_reason = (f"the provider reports no rate (cost={pod.get('cost')!r}) for {pod.get('id')!r}, "
+                              f"and no ledger row records it, so its spend cannot be priced")
+        elif uptime_seconds is None:
+            run_usd = 0.0
+            accrual_unknown = True
+            unknown_reason = (f"the provider reports no uptime for {pod.get('id')!r}, and no ledger "
+                              f"row records it, so how long it has billed cannot be priced")
+        else:
+            run_usd = round(rate * uptime_hours, 6)
     spent = round(ledger.total_usd() + run_usd, 6)
 
     provider_idle = _idle_minutes_since_boot(runtime.get("gpus"), uptime_seconds)
@@ -230,6 +273,8 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
         idle_for_minutes=round(idle_for_minutes, 1),
         accrual_unknown=accrual_unknown,
         priced_from=priced_from,
+        pricing_unknown=unknown_reason is not None,
+        pricing_unknown_reason=unknown_reason,
     )
 
 
@@ -251,12 +296,20 @@ def _idle_minutes_since_boot(gpus, uptime_seconds: float | None) -> float | None
 
 
 def decide(snap: Snapshot) -> str | None:
-    """Return the reason to stop, or None to keep going. Pure, and ordered by severity."""
+    """Return the reason to stop, or None to keep going. Pure, and ordered by severity.
+
+    A price nobody could establish is treated as unknown, not as zero: the per-run cap hangs on the
+    run's own price, so it does not fire on one that was never read. The **total** check still does,
+    because it compares the cap against money already recorded — a lower bound, and one that a stop
+    may act on. The clock (`max_hours`) is independent of the price as well and keeps bounding a
+    machine that is billing, which is the last thing standing between a pod the provider describes
+    oddly and an unbounded bill.
+    """
     if snap.status in ("EXITED", "TERMINATED"):
         return "already stopped"
     if snap.remaining_usd <= 0:
         return f"total cap reached (${snap.spent_usd:.2f} of ${snap.cap_usd:.2f})"
-    if snap.run_remaining_usd <= 0:
+    if not snap.pricing_unknown and snap.run_remaining_usd <= 0:
         return f"per-run cap reached (${snap.run_usd:.2f} of ${snap.per_run_cap_usd:.2f})"
     if snap.uptime_hours >= snap.max_hours:
         return f"max hours reached ({snap.uptime_hours:.2f} h of {snap.max_hours:.2f} h)"
@@ -446,6 +499,11 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
             reason = None
         else:
             reason = decide(snap)
+        if snap.pricing_unknown:
+            # Never a silent zero: the log names what could not be read, so a person reads
+            # "no price" rather than "$0.000", and the heartbeat carries the same flag.
+            log(f"  pricing UNKNOWN: {snap.pricing_unknown_reason} — the guard keeps watching, and "
+                f"the money figure below is a lower bound")
         log(f"  {snap.at}  {snap.status:<10} up "
             f"{f'{snap.uptime_hours:5.2f}h' if runtime.get('uptime') is not None else '   ?  h'}  "
             f"run ${snap.run_usd:.3f}"
