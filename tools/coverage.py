@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 from trace import _find_executable_linenos
 
@@ -29,6 +30,25 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_FLOOR = 0.98  # measured 98.4% on 2026-10-14 after the MCP-protocol tests; ratchet only upwards
 TARGET = 0.94
+
+
+def _executable_lines(path: Path) -> set[int]:
+    """The lines this interpreter considers executable, without the entries that are not lines.
+
+    Two artefacts of the line table, both measured on 2026-10-15 rather than assumed:
+
+    - 3.13's ``dis.findlinestarts`` yields a ``None`` for an offset with no source line, which 3.12
+      skips. One per file, denominator only: zero integer line numbers differ between the two
+      versions, and on an unchanged hit count the rate moves 98.2% → 97.9% against the floor. A
+      ``None`` can never be hit (``frame.f_lineno`` is an int), so counting it is a version-dependent
+      penalty on every module, not a coverage result.
+    - a ``0``, which neither interpreter can execute either: there is no line 0 of a Python file.
+
+    Both are dropped here, with the reason beside the number they change, rather than folded into a
+    lower floor. `tools/executable_lines.py` in the experiment's record printed the per-file diff
+    that names them.
+    """
+    return {n for n in _find_executable_linenos(str(path)) if isinstance(n, int) and n > 0}
 
 
 def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
@@ -51,15 +71,20 @@ def measure(argv: list[str]) -> tuple[dict[str, tuple[int, int]], set[str]]:
         return tracer
 
     sys.settrace(tracer)
+    # `sys.settrace` only reaches the calling thread. The guard's stop, `run`'s session reader and
+    # the stop-bound worker all do their work on threads, and without this the lines they execute
+    # count as uncovered — the measurement would be of the main thread, not of the program.
+    threading.settrace(tracer)
     try:
         pytest.main(argv)
     finally:
+        threading.settrace(None)
         sys.settrace(None)
 
     result: dict[str, tuple[int, int]] = {}
     for path in sorted(p for p in REPO.glob("*.py") if p.name != "__init__.py"):
         try:
-            executable = set(_find_executable_linenos(str(path)))
+            executable = _executable_lines(path)
         except Exception:  # noqa: BLE001 - an unreadable module must not hide the others
             continue
         hit = len(executable & executed.get(str(path), set()))

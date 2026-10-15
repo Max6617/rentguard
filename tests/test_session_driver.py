@@ -114,6 +114,24 @@ class ATranscriptIsParsedByItsMarkers(unittest.TestCase):
         self.assertEqual(text, "café \n", f"a split character or the CRLF was mangled: {text!r}")
         self.assertEqual(parsed.exit_code, 0)
 
+    def test_a_prompt_after_the_sentinel_is_not_output(self) -> None:
+        """A real session ends with the sentinel and then the shell's prompt. Everything after the
+        sentinel is the session's, not the command's."""
+        code, output = session.parse_transcript(
+            transcript(output="done\n") + b"root@pod:/workspace# \r\n")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(output, "done\n", f"the shell prompt leaked into the output: {output!r}")
+
+    def test_a_long_transcript_is_truncated_with_the_count(self) -> None:
+        """A failed session's excerpt is bounded, and says how much it dropped: an unbounded buffer is
+        how a runaway session exhausts the caller's memory while reporting a failure."""
+        text = session.session_excerpt(b"x" * (session.TRANSCRIPT_LIMIT * 3))
+
+        self.assertIn("characters dropped", text, f"the truncation is not named: {text[-200:]}")
+        self.assertLess(len(text), session.TRANSCRIPT_LIMIT * 2,
+                        "the excerpt was not bounded")
+
 
 class AMissingSentinelIsNamed(unittest.TestCase):
     def test_a_session_that_never_starts_the_command_is_named(self) -> None:
@@ -149,7 +167,12 @@ class AMissingSentinelIsNamed(unittest.TestCase):
 
 
 class _FakeChild:
-    """A child process whose stdout is scripted, and which records whether it was killed."""
+    """A child process whose stdout is scripted, and which records whether it was killed.
+
+    ``stall`` models a session that has said everything it is going to say and never closes — the
+    dropped-exec shape. ``kill`` then unblocks the read, which is what a real kill does when it closes
+    the pipe (modelled, not observed: the kill's effect on the reader is a property of pipes).
+    """
 
     def __init__(self, chunks: list[bytes], *, stall: bool = False) -> None:
         self.stdout = self
@@ -173,12 +196,13 @@ class _FakeChild:
 
     # stdout side
     def read(self, size: int = -1) -> bytes:
+        if self._chunks:
+            return self._chunks.pop(0)
         if self._stall:
-            time.sleep(30.0)
-            return b""
-        if not self._chunks:
-            return b""
-        return self._chunks.pop(0)
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline and not self.killed:
+                time.sleep(0.02)
+        return b""
 
     def kill(self) -> None:
         self.killed = True
@@ -240,6 +264,53 @@ class TheSessionIsBounded(unittest.TestCase):
 
         self.assertEqual(result.exit_code, -1, result)
         self.assertIn("could not be written", result.reason or "", result.reason)
+
+    def test_a_read_that_dies_is_a_named_failure_not_a_traceback(self) -> None:
+        class Broken(_FakeChild):
+            def read(self, size: int = -1) -> bytes:
+                raise OSError("connection reset by peer")
+
+        result = session.run_session(["ssh"], "pod", COMMAND, timeout=5.0,
+                                     popen=lambda *a, **k: Broken([]))
+
+        self.assertEqual(result.exit_code, -1,
+                         f"a dead read produced an exit status: {result}")
+        self.assertIn("begin marker", result.reason or "",
+                      f"the failure does not say the command never started: {result.reason}")
+
+    def test_an_unbounded_session_completes_and_is_not_killed(self) -> None:
+        """`run_timeout_s = 0` is the explicit "this may take as long as it takes": no bound, no
+        kill, and the status still comes from the sentinel."""
+        child = _FakeChild([transcript(output="long job\n", code=0)])
+
+        result = session.run_session(["ssh"], "pod", COMMAND, timeout=0,
+                                     popen=lambda *a, **k: child)
+
+        self.assertFalse(result.bounded, f"an unbounded session was called bounded: {result}")
+        self.assertEqual(result.exit_code, 0, result)
+        self.assertFalse(child.killed, "an unbounded session was killed")
+
+    def test_a_sentinel_that_is_not_a_number_fails_the_session(self) -> None:
+        child = _FakeChild([transcript(sentinel=False) + f"{EXIT_SENTINEL} nope\r\n".encode()])
+
+        result = session.run_session(["ssh"], "pod", COMMAND, timeout=5.0,
+                                     popen=lambda *a, **k: child)
+
+        self.assertEqual(result.exit_code, -1, f"a malformed sentinel read as a status: {result}")
+        self.assertIn("not an exit code", result.reason or "", result.reason)
+
+    def test_the_last_partial_line_of_a_killed_session_is_shown(self) -> None:
+        """The session is killed mid-output: what arrived before the kill is the failure's evidence,
+        including a final line that never got its newline."""
+        child = _FakeChild([BEGIN.encode() + b"\r\nhalf a line"], stall=True)
+        shown: list[str] = []
+
+        result = session.run_session(["ssh"], "pod", COMMAND, timeout=0.3, on_text=shown.append,
+                                     popen=lambda *a, **k: child)
+
+        self.assertTrue(result.bounded, f"the bound did not fire: {result}")
+        self.assertEqual("".join(shown), "half a line\n",
+                         f"the partial line was lost when the session was killed: {shown}")
 
 
 class RunOnAPtyRouteIsBounded(unittest.TestCase):
