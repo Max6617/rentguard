@@ -1527,6 +1527,26 @@ def cmd_down(args) -> int:
     return 0
 
 
+def _live_machine_for_the_record(cfg: Config, provider: Provider, ledger: Ledger,
+                                recorded: dict) -> dict | None:
+    """The live machine this record names, when the state file's own instance is not it.
+
+    The state file is a cache and the **open ledger row** is the record that survives it (the same
+    reason `_pod` falls back to that row). A guard armed while a stale state file names the previous,
+    stopped pod must watch the machine the row says is billing — otherwise it watches a dead id,
+    returns at once, and the live machine bills unguarded (defect 16, 2026-10-15).
+    """
+    row_instance = (ledger.open_run() or {}).get("instance_id")
+    if not row_instance or row_instance == recorded.get("id"):
+        return None
+    pod = provider.get(row_instance)
+    if pod is None:
+        return None
+    if str(pod.get("status") or "").upper() not in LIVE_STATUSES:
+        return None
+    return pod
+
+
 def cmd_watch(args) -> int:
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
@@ -1546,8 +1566,28 @@ def cmd_watch(args) -> int:
         emit(armed_before=armed_before, heartbeat_age_minutes=age_before)
         if pod is None:
             note("no instance recorded; nothing to watch")
+            note("protection : NOT armed — no instance is recorded, so nothing is being watched")
             emit(reason="no-instance", armed=False)
             return 1
+        # A guard exists to stop a machine that is billing. Armed against one that is not, it returns
+        # on its first poll, exits 0, and every line of that reads as protection while a machine that
+        # appears a minute later bills unwatched — measured 2026-10-15, between two windows, and only
+        # a person noticing re-armed it. So: bind to a live machine the record can name, or refuse.
+        status = str(pod.get("status") or "").upper()
+        if status not in LIVE_STATUSES:
+            live = _live_machine_for_the_record(cfg, provider, ledger, pod)
+            if live is None:
+                note(f"error: refusing to arm against {pod.get('id')} — it reports {status}, not a "
+                     f"billing status ({', '.join(LIVE_STATUSES)}), and no live machine is named by "
+                     f"this project's open row. Arming here would report protection that does not "
+                     f"exist; arm the guard once `up` has a live machine.")
+                note("protection : NOT armed — nothing is being watched")
+                emit(reason="no-live-instance", instance_id=pod.get("id"), status=status, armed=False)
+                return 2
+            note(f"the recorded instance {pod.get('id')} reports {status}; the open row names "
+                 f"{live.get('id')}, which is {live.get('status')} — watching that one")
+            pod = live
+            status = str(pod.get("status") or "").upper()
         note(f"watching {pod.get('id')} — stop at ${cfg.budget.per_run_cap_usd:.2f} this run, "
               f"${cfg.budget.cap_usd:.2f} total, {cfg.budget.max_hours_per_run:.1f} h, "
               f"or {cfg.budget.idle_minutes:.0f} min idle")
