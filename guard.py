@@ -32,6 +32,10 @@ from .provider import Instance, Provider, ProviderError
 #: set is finished business, not drift: a clean `down` leaves exactly that.
 LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
 
+#: Statuses that mean the rental is over. A machine in one of these cannot bill again without a new
+#: start, so its ledger row — open or closed — is the whole truth about what it has cost.
+TERMINAL_STATUSES = ("EXITED", "TERMINATED")
+
 #: What an instance's **name** says about whose ledger holds it. The ledger is a local file, so a
 #: machine rented by one project root is invisible in another's; the name is the only cross-root
 #: signal on the account, and it is what the default name's root tag encodes.
@@ -129,6 +133,7 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
 
     unreadable = ledger.unreadable_open_rows() if open_run is not None else []
     priced_from: str | None = None
+    recorded = open_run is not None
     if open_run is not None:
         rate = float(open_run.get("rate_usd_per_hour") or 0.0)
         if unreadable and uptime_seconds is not None:
@@ -140,9 +145,21 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
             priced_from = "uptime"
         else:
             run_usd = ledger.live_usd(at)
+    elif str(pod.get("status") or "").upper() in TERMINAL_STATUSES:
+        # The rental is over and its row is closed: the ledger's figure is the whole truth, and it is
+        # already inside `total_usd()`. Re-pricing the machine from a stale uptime invents money that
+        # was recorded once — measured 2026-10-15, a sample after the batch-A row closed read
+        # `$15.581/$15.00` against a cap that was never reached, because the closed row was taken for
+        # an unrecorded machine and priced again from its uptime. The row exists, so `recorded` is
+        # true: a finished machine is finished business, not unrecorded.
+        closed = ledger.closed_run_for(pod.get("id"))
+        rate = float((closed or {}).get("rate_usd_per_hour") or pod.get("cost") or 0.0)
+        run_usd = 0.0
+        recorded = closed is not None
     else:
-        # No row: the money is still being spent. Price it from the provider's uptime — the row
-        # that would have costed this run never existed, so uptime is the only witness.
+        # No row and still billing: the money is being spent and nothing records it. Price it from
+        # the provider's uptime — the row that would have costed this run never existed, so uptime is
+        # the only witness.
         rate = float(pod.get("cost") or 0.0)
         run_usd = round(rate * uptime_hours, 6)
     spent = round(ledger.total_usd() + run_usd, 6)
@@ -167,7 +184,7 @@ def snapshot(pod: Instance, cfg: Config, ledger: Ledger, *,
         mem_util=mem_util,
         rate_usd_per_hour=rate,
         open_run_id=(open_run or {}).get("run_id"),
-        recorded=open_run is not None,
+        recorded=recorded,
         idle_since_start_minutes=round(idle_since_start_minutes, 1),
         max_idle_minutes=provider_idle,
         run_usd=run_usd,

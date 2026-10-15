@@ -100,6 +100,20 @@ class Ledger:
                 return float(row.get("estimated_usd") or 0.0)
         return 0.0
 
+    def closed_run_for(self, instance_id: str | None) -> dict | None:
+        """The most recent *closed* row naming this instance, if any.
+
+        The ledger is authoritative for a machine whose rental is over: its cost is that row's figure
+        and must never be re-derived from a stale uptime. A reader that cannot find the row prices the
+        machine again from the provider's clock and counts the same minutes twice (2026-10-15).
+        """
+        if not instance_id:
+            return None
+        for row in reversed(self.entries()):
+            if row.get("instance_id") == instance_id and row.get("stopped_at"):
+                return row
+        return None
+
     # ---------------------------------------------------------------- writing
 
     def append(self, entry: dict) -> dict:
