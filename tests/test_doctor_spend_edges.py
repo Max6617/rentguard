@@ -50,11 +50,18 @@ class DoctorCase(unittest.TestCase):
 
     def closed_run(self, *, hours: float, rate: float = 2.0, purpose: str = "closed",
                    void: bool = False) -> dict:
+        """A closed row of a known length.
+
+        One `now_utc()` for both ends. Taking the time twice made the closed hour carry the drift
+        between the two calls, and this suite produced a `$2.000556` that was briefly read as a
+        witness when it was a second of test time.
+        """
+        now = now_utc()
         run = self.ledger.open(purpose=purpose, provider="fake", instance_id="pod-old",
                                gpu_id="Fake GPU 24GB", rate_usd_per_hour=rate,
-                               started_at=now_utc() - timedelta(hours=hours + 1))
+                               started_at=now - timedelta(hours=hours + 1))
         return self.ledger.close(note="void" if void else "down",
-                                 stopped_at=now_utc() - timedelta(hours=1), void=void)
+                                 stopped_at=now - timedelta(hours=1), void=void)
 
     def open_run(self, *, hours_ago: float, rate: float = 2.0,
                  instance_id: str = "pod-A") -> dict:
@@ -190,24 +197,103 @@ class TheStoppedMachineStopsAccruing(DoctorCase):
             f"printed total grows past the truth.\nspend={document.get('spend')}\n{text}")
 
 
-class ACorruptStart(DoctorCase):
-    def test_an_unparseable_start_leaves_a_number_to_read(self):
-        """Sequence: the open row's `started_at` is corrupt (an interrupted write). Effect required:
-        the human still gets a number, and it is the same number the enforcement uses — the reading
-        and the enforcement are one computation.
+class CorruptStartCase(DoctorCase):
+    """A corrupt `started_at` on the open row, with and without the one witness that can price it.
 
-        If this fails by raising, the reading is unavailable: the one line a person uses to decide
-        whether to stop a machine cannot be printed at all.
-        """
-        self.closed_run(hours=1.0)
-        self.open_run(hours_ago=1.0)
+    The distinction is the whole question at `doctor`'s call site: if the row's start cannot be read
+    and the pod's own clock is available, the accrual is the uptime-priced value; if the pod is not
+    there either, there is no witness at all and the honest reading is a named unknown — not a
+    number, and not zero dressed as a number.
+    """
+
+    def corrupt_open_row(self, *, hours_ago: float = 1.0) -> None:
+        self.open_run(hours_ago=hours_ago)
         rows = self.ledger.entries()
         rows[-1]["started_at"] = "the-ledger-was-truncated"
         self.ledger._rewrite(rows)
 
-        code, text, document = self.doctor()
+    def up_dry_run(self) -> tuple[int, dict]:
+        """`up`'s own cap decision on this ledger, without creating anything."""
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: self.fake), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.cmd_up(cli_args("up", "--purpose", "probe", "--dry-run", "--json"))
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        stdout = out.getvalue().strip()
+        document = json.loads(stdout[stdout.index("{"):]) if "{" in stdout else {}
+        return code, document
 
-        self.assert_readings_agree(document, text)
+
+class ACorruptStartWithNoWitness(CorruptStartCase):
+    def test_with_no_witness_the_total_is_unknown_and_the_cap_refuses(self):
+        """Sequence: the open row's `started_at` is corrupt **and** the instance is not on the
+        account at all, so there is no pod clock to fall back on. `doctor`, then `up --dry-run`.
+
+        Effect required: the reading declares the total unknown (`spend.total_usd` is None, the
+        accrual flagged unknown, the row and field named) and the enforcement refuses rather than
+        computing a number — `up` exits 2 with `open-run-accrual-unknown`. Agreement here means both
+        sides decline to invent the number, not that two figures match.
+
+        The witness for this expectation is *absence*: `provider.get('pod-A')` returns None, which
+        the run's own finding records as `open-run-instance-missing`.
+        """
+        self.closed_run(hours=1.0)
+        self.corrupt_open_row(hours_ago=1.0)
+
+        code, text, document = self.doctor()
+        spend = document.get("spend") or {}
+        codes = [finding.get("code") for finding in document.get("findings") or []]
+
+        self.assertIsNone(spend.get("total_usd"),
+                          f"a total was printed with no start and no uptime to price it from: "
+                          f"spend={spend}\n{text}")
+        self.assertTrue(spend.get("accrual_unknown"), f"the unknown accrual is not flagged: {spend}")
+        self.assertIn("ledger-row-unreadable-start", codes, f"the corrupt row is not named: {codes}")
+        self.assertIn("open-run-instance-missing", codes,
+                      f"the fixture is supposed to have no pod; the finding is absent: {codes}")
+
+        up_code, up_document = self.up_dry_run()
+        self.assertEqual(up_code, 2,
+                         f"up did not refuse on an accrual nobody can compute: {up_document}")
+        self.assertEqual(up_document.get("reason"), "open-run-accrual-unknown", up_document)
+
+
+class ACorruptStartWithThePodClock(CorruptStartCase):
+    def test_with_the_pod_clock_the_accrual_is_priced_from_uptime(self):
+        """Sequence: the same corrupt `started_at`, but the pod is readable and reports one hour of
+        uptime at $2/h. `doctor`, then `up --dry-run`.
+
+        Effect required: the accrual is the uptime-priced **$2.00**, the total is the closed $2.00
+        plus it = **$4.00**, the row is still named as unreadable alongside the number, and the cap
+        decision proceeds — this is the run whose row is corrupt and whose cap can still fire.
+
+        The witness is the provider's own reading: `provider.get('pod-A')['runtime']['uptime']`.
+        """
+        self.closed_run(hours=1.0)
+        self.corrupt_open_row(hours_ago=1.0)
+        self.fake.add("pod-A", status="EXITED", uptime_seconds=3600, rate_usd_per_hour=2.0)
+
+        code, text, document = self.doctor()
+        spend = document.get("spend") or {}
+        codes = [finding.get("code") for finding in document.get("findings") or []]
+
+        self.assertAlmostEqual(float(spend.get("accruing_usd") or 0.0), 2.0, delta=0.05,
+                               msg=f"the accrual was not priced from the pod's hour of uptime: "
+                                   f"spend={spend}\n{text}")
+        self.assertAlmostEqual(float(spend.get("total_usd") or 0.0), 4.0, delta=0.05,
+                               msg=f"the printed total is not the closed total plus the uptime-priced "
+                                   f"accrual: spend={spend}\n{text}")
+        self.assertIn("ledger-row-unreadable-start", codes,
+                      f"the row was priced but no longer named as unreadable: {codes}")
+
+        up_code, up_document = self.up_dry_run()
+        self.assertNotEqual(up_document.get("reason"), "open-run-accrual-unknown",
+                            f"up still calls the accrual unknown although the pod clock priced it: "
+                            f"{up_document}")
+        self.assertEqual(up_code, 0, f"the cap decision did not proceed: {up_document}")
 
 
 if __name__ == "__main__":
