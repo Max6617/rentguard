@@ -124,7 +124,12 @@ class PricingUnknownIsInTheSnapshot(unittest.TestCase):
 
         Red at `cdb2fba` for the second half: `priced_from` is assigned at `guard.py:145` and never
         passed to the `Snapshot(...)` constructor at `guard.py:179`, so every snapshot reports
-        `priced_from=None` and a witness-priced number reads as if it came from the row."""
+        `priced_from=None` and a witness-priced number reads as if it came from the row.
+
+        The witness flag is carried beside the provenance: `accrual_unknown` is true because the
+        number is not a reading *from the row*, while `pricing_unknown` stays false because a price
+        was established. Nothing else pinned that pairing — the older test that did was folded into
+        this file and the assertion was dropped with it."""
         cfg = cfg_for(10.0, scratch_dir(self))
         ledger = Ledger(cfg.ledger_path)
         corrupt_start_row(ledger)
@@ -133,6 +138,9 @@ class PricingUnknownIsInTheSnapshot(unittest.TestCase):
 
         self.assertFalse(getattr(snap, "pricing_unknown", False),
                          f"a price established from a witness was called unknown: {snap}")
+        self.assertTrue(snap.accrual_unknown,
+                        f"the witnessed number is not marked as a witness rather than a reading: "
+                        f"{snap}")
         self.assertEqual(snap.priced_from, "uptime",
                          f"the pod's own clock priced the row and the snapshot dropped the "
                          f"provenance: run_usd={snap.run_usd} priced_from={snap.priced_from!r}")
