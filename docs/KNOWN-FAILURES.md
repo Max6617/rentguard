@@ -648,3 +648,33 @@ seam so the test means the same on both platforms.
 
 The revision of record is `0e43da0`: 680 passed / 8 skipped / 123 subtests in both provider modes, gate
 3,489 / 3,430 statements = 98.3%, exit 0.
+
+### Re-attacked and clean (verified at `aed798f`)
+
+Assay re-attacked the three fixes at `34d73a8` (`aed798f` carries the tests and the verdict
+`tests/_artefacts/heartbeat_reattack_2026-10-16.txt`): **65 passed, 31 subtests, 0 failed** across its
+attack file and `tests/test_heartbeat_liveness.py`, and no new hole found in the ordering, the pruning,
+the freshness bound or the ownership rules.
+
+- The integer rule is verified **seam-free**, which its own earlier seam test could not see: the reader's
+  own pid reads alive; `1.5`, `2.0`, `0.5`, `"42"`, `b"42"`, `True` and `False` all read gone; and a
+  heartbeat carrying a JSON **float pid** reads as *no pid*, so it is not protection rather than a
+  truncated pid 1. The CI red taught the shape of the test as much as the code: a case that uses a seam to
+  simulate another platform must be paired with a seam-free case, or it passes on one host and fails on
+  the other.
+- One boundary, read from the code rather than measured, kept deliberately: `heartbeat_files` skips a
+  candidate on **any** `OSError`, so a heartbeat whose `stat` is refused for a reason other than "gone" (a
+  permission or ACL refusal) is dropped with the pruned ones and the tool reads *NO GUARD* while a guard
+  writes. That is the safe direction — under-reporting protection rather than inventing it — and a tool
+  cannot report what it cannot stat.
+- **Open, for a ruling rather than a fix:** the number of guards is not exposed. With a crashed guard's
+  file and a live guard's file both present, the line and the `facts` name only the live guard, so a
+  caller cannot tell one guard from three and a guard that died while another worked is invisible.
+  Assay's recommendation is that the reported reading stay single (it answers "is anything watching?") and
+  the **set** sit beside it: `guard.guards: N` with `guard.others: [{pid, ended, age_minutes, stale}]`,
+  plus a `doctor` warn when any reading is a crashed guard (unmarked, dead pid), which is where an
+  operator looks for exactly that. Not implemented before the ruling.
+
+The revision of record is `aed798f`: 681 passed / 8 skipped / 130 subtests in both provider modes, gate
+3,489 / 3,430 statements = 98.3%, exit 0 — with the one unreproduced red gate run of that batch recorded
+in [VERIFICATION](VERIFICATION.md) beside the row rather than rounded off.

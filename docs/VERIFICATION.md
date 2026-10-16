@@ -502,6 +502,19 @@ verified inside it:
 | `a45c26e` — the heartbeat as a process fact (2026-10-16) | **649 passed**, 0 failed, 8 skipped, 104 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.02 s / 38.99 s) | 3,376 / 3,432 = **98.4%, exit 0** — `cli.py` 98.1%, `guard.py` 97.7%, floor 98.0 |
 | `1014ade` — the heartbeat set, one file per guard (2026-10-16) | **671 passed**, 0 failed, 8 skipped, 114 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.05 s / 40.08 s) | 3,427 / 3,487 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.0%, floor 98.0 |
 | `0e43da0` — the pid probe's integer rule, the prune/read race and the ordering's dead tier (2026-10-16) | **680 passed**, 0 failed, 8 skipped, 123 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.92 s / 39.61 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, `session.py` 167/167, floor 98.0 |
+| `aed798f` — Assay's clean re-attack of the heartbeat fixes (2026-10-16) | **681 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.07 s / 39.70 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
+
+**One caveat on the `aed798f` row, measured rather than tidied away.** The first gate run of that batch —
+taken right after a plain suite run in the same command — had a **red internal suite** and exited 1 while
+printing `cli.py 1708` and `TOTAL 3432 = 98.4%`; the gate's own rule ([`tools/coverage.py:149`](../tools/coverage.py#L149),
+defect 21) is why it printed no `target met`, and my own output filter discarded the failing test's name.
+Every gate run since is green: **fifteen plain runs at the same revision, six of them in that same
+suite-then-gate sequence** (each `cli.py 1706`, `TOTAL 3430 = 98.3%, exit 0`), plus two fake-mode runs, and
+the guard-related files re-run eight times under the tracer. The number in the row is that stable
+measurement; the one red run is an unreproduced flake, so no test was changed on a guess. Two
+fingerprints are worth keeping rather than hiding: the red run hit **two more `cli.py` lines** than the
+green ones, and the same suite under a scratch tracer of mine reports `cli.py 1707` where the gate reports
+`1706` — the hit count is harness-sensitive by a line even when the suite is green.
 
 The two failures at `0d01d57` are Assay's attacks on the reuse-path fix —
 `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`: a machine that vanishes between the two
