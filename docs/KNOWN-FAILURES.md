@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`86a260a`** (2026-10-16).
+say where they stand at the revision this file describes, **`d8accac`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`86a260a` unless the entry says otherwise.
+`d8accac` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -459,3 +459,38 @@ reports `EXITED`.
 `STOPPING` and `ERROR` with the `--force` escape, the two-call sequence, the reuse of a stopping machine
 named only by the open row, doctor's count and finding, the drift finding for both statuses with
 `EXITED`/`TERMINATED` as controls, and `is_billing` itself.
+
+## `up`'s reuse path reported a crash loop as a rental (fixed)
+
+**Found** by Assay (`eedb07b`, verdict `tests/_artefacts/b19_inverted_ruling_verdict_2026-10-16.txt`,
+finding 12), 2026-10-16 — on the one `up` path the B19 work had not reached, reported by Forge one
+message earlier and then attacked rather than trusted.
+
+The **create** path requires two consecutive alive readings, stops a machine that is not usable, and
+arms a wait guard while `wait_running` runs (defect 2). The **reuse** branch — taken when the state
+file or the open row already names a machine — did none of that: it noted the status, kept or opened
+the row, printed ssh access and emitted `action: "reused"`, exit 0. Measured at `5277ed8`, with a pod
+reporting `RUNNING`, `uptime=0`, `ports=None` (the crash loop `run` and `pull` refuse to touch):
+
+```console
+$ rentguard up --purpose again
+instance pod-A is already RUNNING
+ssh            : ssh fake@127.0.0.1
+[action "reused", exit 0]
+```
+
+So a machine that was billing with nothing watching it, and that `run` would refuse seconds later, was
+reported as a rental. Reachable from a pod that gets stuck after a successful `up`, or from the
+defect-10 window (killed between `_write_state` and the second alive read) followed by `up` again.
+
+**Fixed at `d8accac`.** The reuse branch now does what the create path does: one more `provider.get`
+and `is_alive` on it, the unusable path when it fails (stop the machine, close the row, exit 1, and a
+sentence saying the machine is not usable), and a wait guard armed around a resume's `wait_running` and
+released on every way out — including an interrupt. `up`'s contract is now one rule on both paths: a
+machine that is not usable is not a rental, and a window that bills while `up` waits is watched.
+
+**The tests that close it.** `tests/test_up_reuse_usability.py` (4 tests): reuse of a crash loop is not
+reported, stopped and closed; a resume that never becomes usable is watched (a heartbeat exists and the
+guard's stop is in `provider.actions`) and reported as `unusable`; no wait-guard thread survives a
+reuse; and the control — reuse of a **usable** machine still succeeds with `action: "reused"` and no
+second rental.
