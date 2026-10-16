@@ -544,7 +544,7 @@ def cmd_doctor(args) -> int:
     name = provider_name(cfg)
     open_run = ledger.open_run()
     readings = heartbeat_readings(cfg.heartbeat_path)
-    guard_line, guard_facts = _guard_report(readings[0] if readings else None, readings)
+    guard_line, guard_facts = _guard_report(readings[0] if readings else None)
     findings: list[Finding] = []
     # A crashed guard beside a live one is a protection **redundancy** loss: something was watching and
     # now nothing is, while the verdict line — correctly — still reports the live guard. It is a warn,
@@ -837,8 +837,7 @@ def cmd_status(args) -> int:
     provider = _provider(cfg)
     open_run = ledger.open_run()
     pod = _pod(provider, cfg)
-    readings = heartbeat_readings(cfg.heartbeat_path)
-    guard_line, guard_facts = _guard_report(readings[0] if readings else None, readings)
+    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
     with json_report(args):
         emit(command="status", provider=provider_name(cfg),
              recorded_instance_id=_read_state(cfg).get("instance_id"),
@@ -1880,20 +1879,7 @@ def cmd_watch(args) -> int:
     return 0
 
 
-def _reading_facts(reading) -> dict:
-    """One heartbeat reading in the structured form a script gates on, ``stale`` included.
-
-    ``stale`` is per reading here, which is the point: the reported reading's own flag cannot describe a
-    second guard, and a caller asking "how many are watching, and is any of them silent" needs both.
-    """
-    if reading is None:
-        return {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
-                "ended": None}
-    return {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
-            "pid": reading.pid, "running": reading.running, "ended": reading.ended}
-
-
-def _guard_report(reading, readings: list | None = None) -> tuple[str, dict]:
+def _guard_report(reading) -> tuple[str, dict]:
     """The guard's line and its structured form, from one reading: the verdict is the **process**.
 
     ``alive`` needs the writer's own mark *and* a running pid (Gilbert's ruling, 2026-10-16); the age
@@ -1901,20 +1887,18 @@ def _guard_report(reading, readings: list | None = None) -> tuple[str, dict]:
     and a heartbeat nobody ever wrote are three sentences, because they are three different facts —
     and the one they used to share, `alive`, was the false one.
 
-    The **set** rides beside the line in the structured form (Gilbert's ruling, 2026-10-16): ``readings``
-    counts the heartbeat files that are readable and ``others`` lists every reading that is not the
-    reported one, each with its own process facts and its own ``stale``. A protection **redundancy** loss
-    — a crashed guard beside a live one — is then visible to a script as well as to an operator, without
-    the verdict line having to become two sentences. The line stays the single reading, because that is
-    what answers "is anything watching?".
+    The **set** is deliberately not part of this form. It was built here and then reverted
+    (2026-10-16) when Gilbert stepped back from his own "the set goes beside it in `facts`" wording: the
+    diagnostic need is met by `doctor`'s one set line and by the **warn** its findings list carries for a
+    crashed guard, and a schema change for a diagnostic is not worth the surface it adds. `guard` in
+    JSON stays the one reported reading — the reading `armed` and the cap are computed from.
     """
-    readings = list(readings) if readings else ([reading] if reading is not None else [])
-    facts = _reading_facts(reading)
-    facts["readings"] = len(readings)
-    facts["others"] = [_reading_facts(other) for other in readings[1:]]
     if reading is None:
         return ("NO GUARD — nothing is watching this instance, so it will bill until someone stops it",
-                facts)
+                {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
+                 "ended": None})
+    facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
+             "pid": reading.pid, "running": reading.running, "ended": reading.ended}
     if reading.ended:
         return (f"finished (last heartbeat {reading.age_minutes:.1f} min ago) — nothing is watching "
                 f"this instance, so it will bill until someone stops it", facts)

@@ -456,11 +456,12 @@ class StatusReadsTheVerdict(HeartbeatCase):
         text = out.getvalue()
         return json.loads(text[text.index("{"):])
 
-    def test_the_set_rides_beside_the_reading_in_the_facts(self) -> None:
-        """Gilbert's ruling, 2026-10-16: the verdict line stays single (it answers "is anything
-        watching?") and the **set** goes beside it in `facts` — `readings` and `others`, each with its
-        own process facts and its own `stale`. A protection *redundancy* loss must be visible to a
-        script, not only to an operator reading prose.
+    def test_the_facts_do_not_grow_a_set(self) -> None:
+        """The step-back, pinned (Gilbert, 2026-10-16). The set was added to `facts` as `readings` and
+        `others` and then deliberately reverted: the diagnostic need is met by `doctor`'s one line and
+        the `guard-crashed` warn, and a schema change for a diagnostic is not worth the surface. `guard`
+        in JSON stays the one reading that `armed` and the cap are computed from — so a caller cannot
+        read a second, differently-ranked verdict out of it.
         """
         provider = self.machine()
         snapshot = guard.snapshot_fallback(self.cfg, Ledger(self.cfg.ledger_path))
@@ -469,24 +470,10 @@ class StatusReadsTheVerdict(HeartbeatCase):
 
         facts = self.status_json(provider)["guard"]
 
-        self.assertEqual(facts["readings"], 2, facts)
-        self.assertEqual(len(facts["others"]), 1, f"the crashed guard is not in the set: {facts}")
-        other = facts["others"][0]
-        self.assertEqual(other["pid"], dead_pid(), other)
-        self.assertFalse(other["running"], other)
-        self.assertFalse(other["ended"], f"a crashed guard is not a finished one: {other}")
-        self.assertTrue(other["stale"], f"a crashed guard's reading is not stale: {other}")
-
-    def test_one_heartbeat_is_a_set_of_one(self) -> None:
-        """The schema is stable: one heartbeat says `readings: 1` and no others, rather than no keys."""
-        provider = self.machine()
-        self.heartbeat()
-
-        facts = self.status_json(provider)["guard"]
-
-        self.assertEqual(facts["readings"], 1, facts)
-        self.assertEqual(facts["others"], [], facts)
-        self.assertTrue(facts["running"], facts)
+        for absent in ("readings", "others", "guards"):
+            self.assertNotIn(absent, facts, f"the JSON guard block grew a set key again: {facts}")
+        self.assertEqual(sorted(facts), ["ended", "heartbeat_age_minutes", "pid", "running", "stale"],
+                         f"the structured guard form changed shape: {facts}")
 
     def test_doctor_warns_about_a_crashed_guard_and_not_about_a_finished_one(self) -> None:
         """A crashed guard beside a live one is a protection redundancy loss: something was watching and
