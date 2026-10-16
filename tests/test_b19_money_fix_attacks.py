@@ -705,5 +705,122 @@ class TheReusePathAndTheInvertedRuling(Base):
         self.assertEqual(self.provider.created, [], f"reuse rented a second machine:\n{text}")
 
 
+class TheReuseFixAtD8accac(Base):
+    """`up`'s reuse path now takes a second alive reading, stops what fails it, and arms a wait
+    guard for a resume. These attack each clause, plus the failure path the create path handles and
+    this one does not."""
+
+    def test_a_machine_that_vanishes_between_the_two_readings_is_not_a_reuse(self) -> None:
+        """`confirmed = provider.get(...) or pod` discards the second reading when it says the
+        machine is gone, so the stale first reading is what gets checked and reported."""
+        class Vanishing(FakeProvider):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.calls = 0
+
+            def get(self, instance_id):
+                self.calls += 1
+                if self.calls >= 2:
+                    return None                     # gone between the two readings
+                return super().get(instance_id)
+
+        provider = Vanishing(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.provider = provider
+        self.record_state("pod-A")
+
+        code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "again", "--json"])
+
+        gone = provider.get("pod-A") is None
+        self.assertTrue(gone, "fixture: the machine did not vanish")
+        self.assertNotEqual(
+            code, 0,
+            f"up reported {document.get('action')!r} (exit {code}) for a machine the account no "
+            f"longer shows: the second reading returned nothing and the stale first one was used, "
+            f"so a row is now open against a machine that does not exist\n{text}")
+
+    def test_a_resume_whose_wait_fails_does_not_leave_a_billing_machine_behind(self) -> None:
+        """The create path's `except BaseException` stops the machine and closes the row. The reuse
+        branch has only a `finally` that releases the guard, so a `wait_running` that raises leaves
+        the machine it just started RUNNING with no row and nothing watching it."""
+        class BrokenResume(FakeProvider):
+            def wait_running(self, instance_id, log=None, **kwargs):
+                raise ProviderError("instance did not become usable after 12 min")
+
+        provider = BrokenResume(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="EXITED")
+        self.provider = provider
+        self.record_state("pod-A")                   # no row: the machine is not yet recorded
+
+        raised = None
+        try:
+            code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "resume", "--json"])
+        except ProviderError as exc:
+            raised, code, document, text = exc, None, {}, ""
+
+        status = provider.get("pod-A")
+        status = status.get("status") if status else None
+        recorded = any(r.get("instance_id") == "pod-A" for r in self.ledger.entries())
+        self.assertFalse(
+            status == "RUNNING" and not recorded,
+            f"a failed resume left pod-A {status} with no ledger row and no guard: the restore was "
+            f"started, the wait raised ({raised or 'no exception: exit %s' % code}), and nothing "
+            f"stopped the machine the command had just revived\n{text}")
+
+    def test_the_guard_is_armed_while_a_resume_waits(self) -> None:
+        """The clause: a resume's wait is guarded, not only a create's."""
+        class RecordingResume(FakeProvider):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.guard_during_wait = None
+
+            def wait_running(self, instance_id, log=None, **kwargs):
+                self.guard_during_wait = any(
+                    t.name.startswith("rentguard-wait-guard-") for t in threading.enumerate())
+                time.sleep(0.2)                      # the pilot's first ten minutes, scaled down
+                return super().wait_running(instance_id, log=log)
+
+        provider = RecordingResume(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="EXITED")
+        self.provider = provider
+        self.record_state("pod-A")
+
+        code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "resume", "--json"])
+        time.sleep(0.2)
+
+        self.assertTrue(provider.guard_during_wait,
+                        f"no wait guard was armed while the resume waited:\n{text}")
+        self.assertEqual(code, 0, f"a slow but successful resume failed:\n{text}")
+        self.assertEqual(document.get("action"), "reused", document)
+        self.assertNotIn(("pod-A", "stop"), provider.actions,
+                         f"a resume that became usable was stopped:\n{text}")
+        self.assertEqual(self.guard_threads(), [],
+                         f"a wait guard outlived the resume: {self.guard_threads()}")
+
+    def test_a_machine_that_becomes_usable_between_the_readings_is_not_stopped(self) -> None:
+        """`wait_running` returns one reading that merely looks alive; the second read is the
+        witness. A machine usable on the second read must be reported, not stopped, even though the
+        payload the wait returned does not look alive."""
+        not_yet = {"status": "RUNNING", "cost": 2.0,
+                   "runtime": {"uptime": 0, "ports": None, "gpus": [{"util": 0.0}]}}
+
+        class LateResume(FakeProvider):
+            def wait_running(self, instance_id, log=None, **kwargs):
+                return {**not_yet, "id": instance_id}     # this reading says not usable ...
+            # ... and `get` is the real, usable payload.
+
+        provider = LateResume(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="EXITED")
+        self.provider = provider
+        self.record_state("pod-A")
+
+        code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "resume", "--json"])
+
+        self.assertEqual(code, 0, f"the second reading said usable and the rent failed:\n{text}")
+        self.assertEqual(document.get("action"), "reused", document)
+        self.assertNotIn(("pod-A", "stop"), provider.actions,
+                         f"a machine usable on the second read was stopped:\n{text}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,54 @@
+B19 — THE REUSE-PATH FIX ATTACKED at `bb61c83` (fix `d8accac`)
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental. Single-file run.
+
+FILES
+  tests/test_b19_money_fix_attacks.py    (36 tests + 13 subtests: 2 failed, 34 passed)
+  tests/_artefacts/b19_reuse_fix_verdict_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `bb61c83`, package path printed)
+  python -m pytest tests/test_b19_money_fix_attacks.py -q   -> 2 failed, 34 passed, 13 subtests
+
+WHAT THE FIX GOT RIGHT (attacked, could not break)
+  * The second `is_alive` reading is on the reuse path: a state-named machine reporting RUNNING with
+    uptime 0 and ports None is stopped, its row closed, exit 1, and the reason named ("not usable on
+    a second read") — finding 12 is closed, on the reuse branch itself.
+  * The guard is armed while a resume waits, and does not outlive it: a provider that records
+    `threading.enumerate()` inside its own `wait_running` sees a `rentguard-wait-guard-*` thread, and
+    none survives `up`.
+  * A slow but successful resume is not mistaken for a dead one (0.2 s wait, exit 0,
+    `action: reused`, no stop in `provider.actions`).
+  * A machine that becomes usable between the readings is not stopped after the fact: a wait that
+    returns a not-yet-alive payload with a usable second read gives exit 0, `reused`, no stop.
+  * Controls: reuse of a usable machine succeeds with no second machine created; `--force` still
+    rents beside a STOPPING or ERROR machine (exit 0, one machine created).
+
+FINDING 13 — a machine that vanishes between the two readings is reported as reused.
+  `confirmed = provider.get(pod["id"]) or pod` discards the second reading when it returns nothing,
+  so the stale first reading is what `is_alive` is asked about and what is reported.
+  Measured: pod-A RUNNING and usable, named by the state; the second `get` returns None ->
+      action "reused", exit 0
+      row run_id 20261016T174311Z-9555e2, instance_id "pod-A"
+  `up` reports a rental for a machine the account no longer shows and opens a row against it, so the
+  row accrues for a machine that does not exist and `doctor` then reports an open row naming a
+  missing instance. "Gone" is the one answer the second read cannot express through `or`.
+  Severity: a false success — nothing bills, but the tool says it holds a machine it does not.
+
+FINDING 14 — a resume whose wait fails leaves a billing machine behind.
+  The create path's `except BaseException` stops the machine and closes the row (`_abandon_created`,
+  defect 10's rule). The reuse branch has only a `finally` that releases the guard, and no handler
+  for `wait_running` raising; the exception propagates out of `cmd_up`.
+  Measured: pod-A EXITED, named by the state, no row here; `up` starts it, the wait raises
+  ProviderError("instance did not become usable after 12 min") ->
+      pod-A is RUNNING, no ledger row names it, no guard thread, and `up` exited by exception
+  The command has just revived a machine, and the failure path leaves it billing with nothing
+  recording it and nothing watching it. Reachability: a provider error, an ERROR/TERMINATED
+  transition during the start, or `wait_running`'s own 12-minute timeout — which is exactly the
+  pilot's slow-resume shape this assignment named.
+  Severity: money direction. The machine bills until someone reads `doctor` and runs `down`; the
+  create path exists to make this state impossible, and this is the same state one branch over.
+
+VERDICT
+  Not clean. The clauses Gilbert listed hold — the second reading, the guard during a resume wait,
+  the slow-but-alive resume, and the usable-between-readings case all measure as required — but the
+  fix's own new branch has two failure paths it does not answer: the second reading's "gone" (13)
+  and a `wait_running` that raises (14). Both are in the code `d8accac` added, not pre-existing paths.
