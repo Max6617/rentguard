@@ -569,6 +569,31 @@ class TheGuardSet(unittest.TestCase):
         self.assertEqual(guard.heartbeat_files(self.path), [self.path])
         self.assertTrue(guard.heartbeat_reading(self.path).alive)
 
+    def test_a_heartbeat_pruned_between_the_listing_and_the_stat_is_skipped(self) -> None:
+        """Every write prunes the set, so a reader can list the directory while another guard removes
+        a file from it. The set is built from the files that still answer a stat, so the read reports
+        the survivor instead of raising ``FileNotFoundError`` (Assay's finding, 2026-10-16): a gone
+        file is not a heartbeat, and a crash here would take ``status`` and ``doctor`` with it.
+        """
+        survivor = self.guard_file("survivor")
+        doomed = self.guard_file("doomed")
+        real_glob = Path.glob
+
+        def glob_then_prune(directory, pattern):
+            found = list(real_glob(directory, pattern))
+            for candidate in found:
+                if candidate == doomed:          # the concurrent prune, right here
+                    candidate.unlink()
+            return iter(found)
+
+        with mock.patch.object(Path, "glob", glob_then_prune):
+            files = guard.heartbeat_files(self.path)
+            reading = guard.heartbeat_reading(self.path)
+
+        self.assertEqual(files, [survivor], "a path that no longer answers a stat was still listed")
+        self.assertIsNotNone(reading, "the surviving guard was lost with the pruned file")
+        self.assertTrue(reading.alive, reading)
+
     def test_the_writer_prunes_a_finished_sibling_but_not_a_live_or_crashed_one(self) -> None:
         finished = self.guard_file("finished", ended=True, age_minutes=30.0)
         live = self.guard_file("live")

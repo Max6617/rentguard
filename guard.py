@@ -538,14 +538,30 @@ def guard_heartbeat_path(path: Path, guard_id: str) -> Path:
 
 
 def heartbeat_files(path: Path) -> list[Path]:
-    """Every heartbeat file this project may have written, newest first.
+    """Every heartbeat file this project has **right now**, newest first.
 
     The legacy single file plus one per guard. Sorted by modification time so a caller that only wants
     the latest raw payload (a test, a probe) does not have to parse them all.
+
+    A file that disappears between the listing and the stat is **skipped rather than stat'ed**: every
+    ``write_heartbeat`` prunes the set, so a reader can list the directory while another guard removes a
+    file from it, and the bare ``p.stat()`` sort raised ``FileNotFoundError`` out of the whole read —
+    taking ``status`` and ``doctor`` with it (Assay's finding, 2026-10-16, reproduced with the glob seam
+    in `tests/test_heartbeat_liveness_attack.py`). A gone file is not a heartbeat, so the set is built
+    from the files that still answer a stat; a file that vanishes after this returns is skipped by
+    ``_read_one``, which exists-checks before it reads.
     """
     found = [path] if path.exists() else []
     found.extend(p for p in path.parent.glob("heartbeat-*.json") if p != path)
-    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+    present: list[tuple[float, Path]] = []
+    for candidate in found:
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue  # pruned between the listing and the stat: gone is gone, not a crash
+        present.append((mtime, candidate))
+    present.sort(key=lambda pair: pair[0], reverse=True)
+    return [candidate for _, candidate in present]
 
 
 def heartbeat_readings(path: Path, *, kill=None) -> list[HeartbeatReading]:
