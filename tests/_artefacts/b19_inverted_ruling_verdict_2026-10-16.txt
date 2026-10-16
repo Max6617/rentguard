@@ -1,0 +1,46 @@
+B19 — THE INVERTED RULING VERIFIED, AND `up`'s REUSE PATH ATTACKED at `5277ed8` (code `86a260a`)
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental. Single-file runs.
+
+FILES
+  tests/test_b19_money_fix_attacks.py      (32 tests + 12 subtests: 1 failed, 31 passed)
+  tests/_artefacts/b19_inverted_ruling_verdict_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `5277ed8`, package path printed)
+  python -m pytest tests/test_b19_money_fix_attacks.py tests/test_status_polarity.py -q
+      -> 1 failed, 45 passed, 28 subtests
+  The one failure is finding 12 below. No suite, no gate (single-file runs).
+
+THE RULING IS IMPLEMENTED AND MY FINDINGS 10-11 ARE CLOSED
+  All four tests that were red at `00472bc` pass with `guard.is_billing` in place: `doctor` now names
+  a STOPPING/ERROR machine with no row and exits non-zero, and `up` refuses it (exit 2,
+  `live-untracked-instance`) with the machine named, `stop`/`adopt` offered, and `--force` as the
+  escape. `--force` rents (exit 0, one machine created). An **empty** status also counts as billing,
+  which is the ruling's clause about a missing or unknown status — pinned as a subcase.
+
+FINDING 12 (new, money direction) — `up`'s reuse path reports a crash loop as a rental.
+  The create path requires two alive readings, stops an unusable machine, and arms the wait guard
+  (cli.py:1234). The **reuse** branch (cli.py:1097-1102) checks none of that: it notes the status,
+  opens/keeps the row, prints ssh access and emits `action: "reused"`, exit 0.
+  Measured: state names pod-A, an open row names it, the pod reports RUNNING with `uptime=0` and
+  `ports=None` (the crash loop `run` refuses to upload to) ->
+      instance pod-A is already RUNNING
+      ssh            : ssh fake@127.0.0.1
+      action "reused", exit 0
+  No wait guard is armed on this path, so nothing is watching the machine that is billing; the cap
+  is the guard's to enforce, and `run` then refuses the machine `up` just reported.
+  Reachability: a pod that gets stuck after a successful `up` (a restart that never becomes usable),
+  or the defect-10 window — killed between `_write_state` and the second alive read — followed by
+  `up` again.
+  The same class covers a payload with **no** `status` key: not EXITED/ERROR, so it reaches the same
+  branch (`instance pod-A is already None`) and reports a rental. One predicate fixes both: the reuse
+  path should treat "billing but not usable" exactly as the create path does (is_alive on a second
+  reading; stop it, or fail with the reason).
+  Severity: money direction — a billed machine reported as a rental with nothing watching it, which
+  is the B19 shape on the one path this ruling did not reach. Forge has asked Gilbert for the ruling;
+  this is the artefact.
+
+CONTROLS THAT HOLD
+  Reuse of a **usable** machine still succeeds (exit 0, `action: "reused"`, no second machine), so
+  the report is not asking for reuse to fail generally.
+  The inverted refusal's escape works: `--force` rents beside a STOPPING/ERROR machine.
+  The closure half is unchanged: a STOPPING machine with an open row keeps it open.

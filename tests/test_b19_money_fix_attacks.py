@@ -647,5 +647,63 @@ class TheUnknownStatusBoundary(Base):
         self.assertEqual(code, 1, text)
 
 
+class TheReusePathAndTheInvertedRuling(Base):
+    """Gilbert's ruling inverts the polarity (`guard.is_billing`), so `up` refuses for a status it
+    cannot call finished — loud, and escaped with `--force`. These pin the ruling's own contract,
+    and the one path it did not reach: `up`'s **reuse** branch, which Forge reported rather than
+    changed."""
+
+    def test_the_inverted_refusal_names_the_machine_and_force_is_the_escape(self) -> None:
+        for status in ("STOPPING", "ERROR", ""):
+            with self.subTest(status=status):
+                self.setUp()
+                self.provider.add("pod-block", uptime_seconds=600, status=status)
+                code, document, text = self.run_cmd(cli.cmd_up,
+                                                    ["up", "--purpose", "probe", "--json"])
+                self.assertEqual(code, 2, f"a {status} machine did not block the rent:\n{text}")
+                self.assertEqual(document.get("reason"), "live-untracked-instance", document)
+                self.assertIn("pod-block", text, f"the refusal does not name the machine:\n{text}")
+                self.assertIn("--force", text, f"the refusal does not offer the escape:\n{text}")
+
+                self.setUp()
+                self.provider.add("pod-block", uptime_seconds=600, status=status)
+                code, document, text = self.run_cmd(
+                    cli.cmd_up, ["up", "--purpose", "probe", "--force", "--json"])
+                self.assertEqual(code, 0,
+                                 f"--force did not get past a {status} machine:\n{text}")
+                self.assertEqual(len(self.provider.created), 1, text)
+
+    def test_up_reuse_does_not_report_a_crash_loop_as_a_rental(self) -> None:
+        """The reuse branch checks no usability and arms no wait guard. State names pod-A, a row is
+        open for it, and the machine reports RUNNING with no uptime and no ports — the crash loop
+        `run` refuses to upload to. `up` reports `reused`, exit 0, and prints ssh access."""
+        self.provider.add("pod-A", uptime_seconds=0, ports=None, status="RUNNING")
+        self.record_state("pod-A")
+        self.open_row("pod-A")
+
+        code, document, text = self.run_cmd(cli.cmd_up,
+                                            ["up", "--purpose", "again", "--json"])
+
+        self.assertTrue(
+            code != 0 or "not usable" in text.lower() or "crash" in text.lower(),
+            f"up reported {document.get('action')!r} with exit {code} for a machine it cannot "
+            f"upload to: the reuse branch checks neither `is_alive` nor the second reading the "
+            f"create path requires, and arms no wait guard, so a crash loop is billed with nothing "
+            f"watching it\n{text}")
+
+    def test_up_reuse_of_a_usable_machine_still_succeeds(self) -> None:
+        """The control: the fix must not turn every reuse into a failure."""
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")   # uptime and ports set
+        self.record_state("pod-A")
+        self.open_row("pod-A")
+
+        code, document, text = self.run_cmd(cli.cmd_up,
+                                            ["up", "--purpose", "again", "--json"])
+
+        self.assertEqual(code, 0, f"a usable machine could not be reused:\n{text}")
+        self.assertEqual(document.get("action"), "reused", document)
+        self.assertEqual(self.provider.created, [], f"reuse rented a second machine:\n{text}")
+
+
 if __name__ == "__main__":
     unittest.main()
