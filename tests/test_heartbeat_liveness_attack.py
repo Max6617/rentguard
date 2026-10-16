@@ -1,0 +1,227 @@
+"""Attack the liveness rule at `75d6d37` (code `a45c26e`): liveness is a process fact.
+
+Gilbert's ruling replaced the age as the verdict with the writer's own mark and its pid. These
+attack the three seams the change creates — the pid probe (with its `kill` seam), the structured
+verdict fields, and two guards sharing one heartbeat path — plus the controls that must keep
+passing. Offline: in-memory fake, hand-written heartbeat files, no rental.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import sys
+import time
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from rentguard import cli, guard  # noqa: E402
+from rentguard.config import Budget, Config  # noqa: E402
+from rentguard.fake import FakeProvider  # noqa: E402
+from rentguard.ledger import Ledger, iso, now_utc  # noqa: E402
+from rentguard.tests._scratch import scratch_dir  # noqa: E402
+
+
+def cfg_for(root: Path) -> Config:
+    cfg = Config(budget=Budget(cap_usd=10.0, per_run_cap_usd=5.0, idle_minutes=0.0),
+                 state_dir=root / ".rentguard")
+    cfg.provider = "fake"
+    cfg.runpod = {"gpu_preference": ["Fake GPU 24GB"]}
+    return cfg
+
+
+def write_heartbeat(path: Path, *, pid=None, ended: bool | None = None,
+                    age_minutes: float = 0.0, at: str | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = at or iso(now_utc() - timedelta(minutes=age_minutes))
+    payload = {"at": stamp, "note": "fixture"}
+    if pid is not None or pid is False:
+        payload["pid"] = pid
+    if ended is not None:
+        payload["ended"] = ended
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class PidProbeSeams(unittest.TestCase):
+    """`pid_running`'s three answers, and the fourth a probe can produce."""
+
+    @staticmethod
+    def raising(exc):
+        def kill(pid, sig):
+            raise exc
+        return kill
+
+    def test_permission_error_is_alive(self) -> None:
+        self.assertIs(guard.pid_running(4321, kill=self.raising(PermissionError())), True,
+                      "a live process we may not signal was called gone")
+
+    def test_process_lookup_is_gone(self) -> None:
+        self.assertIs(guard.pid_running(4321, kill=self.raising(ProcessLookupError())), False)
+
+    def test_a_plain_oserror_is_gone(self) -> None:
+        self.assertIs(guard.pid_running(4321, kill=self.raising(OSError(22, "EINVAL"))), False)
+
+    def test_a_probe_that_raises_another_error_is_gone_not_a_traceback(self) -> None:
+        """POSIX `os.kill` raises **OverflowError**, not OSError, for a pid that does not fit a C
+        int: a heartbeat carrying such a pid (hand-edited, truncated, or a foreign writer) crashes
+        `status` and `doctor` on Linux if the probe lets it through."""
+        def kill(pid, sig):
+            raise OverflowError("signed integer is greater than maximum")
+        try:
+            answer = guard.pid_running(2 ** 40, kill=kill)
+        except OverflowError as exc:
+            self.fail(f"a pid the probe cannot signal crashed the read with {type(exc).__name__}: "
+                      f"{exc}; every failure that is not PermissionError must read as gone")
+        self.assertIs(answer, False)
+
+    def test_things_that_are_not_pids_are_gone(self) -> None:
+        for value in (None, "", "abc", 0, -1, 1.5):
+            with self.subTest(pid=value):
+                self.assertIs(guard.pid_running(value), False)
+
+
+class TheStructuredStaleFlag(unittest.TestCase):
+    """The prose verdict handles age; the machine-readable `stale` field must too, because that is
+    what a script or an agent gates on."""
+
+    def setUp(self) -> None:
+        self.root = scratch_dir(self)
+        self.cfg = cfg_for(self.root)
+
+    def test_a_wedged_guard_is_not_reported_as_not_stale(self) -> None:
+        write_heartbeat(self.cfg.heartbeat_path, pid=os.getpid(), ended=False, age_minutes=60.0)
+
+        reading = guard.heartbeat_reading(self.cfg.heartbeat_path)
+        line, facts = cli._guard_report(reading)
+
+        self.assertIn("wedged", line, f"a silent guard was not called wedged: {line!r}")
+        self.assertIs(facts["stale"], True,
+                      f"the structured verdict says a guard silent for 60 min is not stale: {facts}")
+
+    def test_status_json_does_not_call_a_wedged_guard_not_stale(self) -> None:
+        write_heartbeat(self.cfg.heartbeat_path, pid=os.getpid(), ended=False, age_minutes=60.0)
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        args = cli.build_parser().parse_args(["status", "--json"])
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda c: provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.cmd_status(args)
+        text = out.getvalue()
+        document = json.loads(text[text.index("{"):]) if "{" in text else {}
+        self.assertIs(document.get("guard", {}).get("stale"), True,
+                      f"status told a script the wedged guard is not stale: {document.get('guard')}")
+
+
+class TwoGuardsShareOnePath(unittest.TestCase):
+    def test_releasing_one_guard_does_not_mark_a_live_other_finished(self) -> None:
+        """Two guards in one process share the pid, so `end_heartbeat`'s pid check cannot tell them
+        apart: the one that finishes marks the file for both."""
+        cfg = cfg_for(scratch_dir(self))
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        ledger = Ledger(cfg.ledger_path)
+
+        first = cli._start_wait_guard(cfg, provider, ledger, "pod-A",
+                                      log=lambda *_: None, interval=0.05)
+        second = cli._start_wait_guard(cfg, provider, ledger, "pod-A",
+                                       log=lambda *_: None, interval=5.0)
+        time.sleep(0.4)                        # both have written a heartbeat
+        cli._release_wait_guard(first)         # marks the file ended, same pid
+        time.sleep(0.05)
+        reading = guard.heartbeat_reading(cfg.heartbeat_path)
+        second_alive = second[0].is_alive()
+        cli._release_wait_guard(second)
+
+        self.assertTrue(second_alive, "fixture: the second guard was not running")
+        self.assertTrue(
+            reading is not None and reading.alive,
+            f"the still-running second guard reads as finished: ended={reading and reading.ended}, "
+            f"pid={reading and reading.pid} — releasing one guard marked the shared file for both")
+
+
+class ControlsThatMustKeepPassing(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = scratch_dir(self)
+        self.cfg = cfg_for(self.root)
+
+    def test_a_payload_with_no_pid_is_not_protection(self) -> None:
+        write_heartbeat(self.cfg.heartbeat_path, pid=False, age_minutes=0.0)   # no pid key at all
+
+        reading = guard.heartbeat_reading(self.cfg.heartbeat_path)
+        line, facts = cli._guard_report(reading)
+
+        self.assertIs(reading.running, False)
+        self.assertIs(reading.alive, False)
+        self.assertIn("not running", line, f"a pid-less reading was not called not-running: {line!r}")
+
+    def test_end_heartbeat_leaves_another_writers_file_alone_and_a_missing_file_missing(self) -> None:
+        path = self.cfg.heartbeat_path
+        write_heartbeat(path, pid=os.getpid() + 1 if os.getpid() != 12345 else 12345, ended=False)
+
+        self.assertFalse(guard.end_heartbeat(path), "another pid's file was marked")
+        self.assertIs(guard.heartbeat_reading(path).ended, False, "another pid's file was marked")
+
+        missing = self.root / "nope.json"
+        self.assertFalse(guard.end_heartbeat(missing), "a missing file was marked")
+        self.assertFalse(missing.exists(), "a marker was invented for a file nobody wrote")
+
+    def test_armed_before_needs_the_mark_the_pid_and_the_age(self) -> None:
+        cases = [
+            (dict(pid=os.getpid(), ended=False, age_minutes=0.0), True, "unmarked, live, fresh"),
+            (dict(pid=os.getpid(), ended=False, age_minutes=60.0), False, "live but silent"),
+            (dict(pid=os.getpid(), ended=True, age_minutes=0.0), False, "marked finished"),
+            (dict(pid=None, ended=False, age_minutes=0.0), False, "no pid"),
+        ]
+        for kwargs, expected, label in cases:
+            with self.subTest(label=label):
+                self.setUp()
+                provider = FakeProvider(rate_usd_per_hour=2.0)
+                provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+                self.cfg.state_path.parent.mkdir(parents=True, exist_ok=True)
+                self.cfg.state_path.write_text(json.dumps({"instance_id": "pod-A"}), encoding="utf-8")
+                Ledger(self.cfg.ledger_path).open(purpose="probe", provider="fake",
+                                                  instance_id="pod-A", gpu_id="g",
+                                                  rate_usd_per_hour=2.0)
+                write_heartbeat(self.cfg.heartbeat_path, **kwargs)
+                args = cli.build_parser().parse_args(["watch", "--once", "--interval", "60",
+                                                      "--json"])
+                out = io.StringIO()
+                with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                        mock.patch.object(cli, "_provider", lambda c: provider), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                    cli.cmd_watch(args)
+                text = out.getvalue()
+                document = json.loads(text[text.index("{"):]) if "{" in text else {}
+                self.assertIs(document.get("armed_before"), expected,
+                              f"{label}: armed_before={document.get('armed_before')!r} guessed wrong")
+
+
+    def test_the_disclosed_handle_caveat_reads_alive_only_while_the_file_is_fresh(self) -> None:
+        """Forge's disclosed limit: on Windows an exited process whose handle is held elsewhere can
+        be probed successfully, so a killed guard can read as running. This pins the shape and the
+        bound that covers the *armed* claim: freshness. It asserts the caveat, not a requirement."""
+        path = self.cfg.heartbeat_path
+        write_heartbeat(path, pid=999999, ended=False, age_minutes=0.0)
+        with mock.patch.object(guard, "pid_running", lambda pid, **k: True):
+            fresh = guard.heartbeat_reading(path)
+            line, facts = cli._guard_report(fresh)
+        self.assertIn("alive", line, f"the caveat did not read alive: {line!r}")
+        self.assertIs(facts["stale"], False, facts)
+
+        write_heartbeat(path, pid=999999, ended=False, age_minutes=60.0)
+        with mock.patch.object(guard, "pid_running", lambda pid, **k: True):
+            stale = guard.heartbeat_reading(path)
+            line, _ = cli._guard_report(stale)
+        self.assertIn("wedged", line,
+                      f"the freshness clause did not cover the caveat: {line!r}")
+
+
+if __name__ == "__main__":
+    unittest.main()

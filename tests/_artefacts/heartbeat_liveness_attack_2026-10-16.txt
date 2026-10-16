@@ -1,0 +1,64 @@
+LIVENESS AS A PROCESS FACT — ATTACKED at `75d6d37` (code `a45c26e`)
+Verifier: Assay. 2026-10-16. Offline: in-memory fake, hand-written heartbeat files, no rental.
+
+FILES
+  tests/test_heartbeat_liveness_attack.py    (12 tests + 10 subtests: 4 failed, 8 passed)
+  tests/_artefacts/heartbeat_liveness_attack_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `75d6d37`, package path printed)
+  python -m pytest tests/test_heartbeat_liveness_attack.py -q   -> 4 failed, 8 passed, 10 subtests
+  python -m pytest tests/test_heartbeat_liveness.py -q          -> 33 passed, 5 subtests (Forge's set)
+The four failures are the findings below.
+
+FINDING 15 — a probe failure that is not an OSError crashes the read.
+  `pid_running` catches `ProcessLookupError`, `PermissionError` and `OSError`. On POSIX, `os.kill`
+  raises **OverflowError** for a pid that does not fit a C int, so a heartbeat carrying such a pid —
+  hand-edited, truncated, or from a foreign writer — propagates out of `heartbeat_reading` and takes
+  `status` and `doctor` with it, where the honest answer is "not running".
+  Measured through the `kill` seam (the seam exists for exactly this): `pid_running(2 ** 40, kill=...)
+  -> OverflowError`. On this Windows host the real call gives OSError, which is why the seam is the
+  only way to see it; on the POSIX CI runners the real call is the same shape.
+  Severity: robustness — the read path for every money report. A corrupt pid must read as no proof
+  of life, never as a traceback.
+
+FINDING 16 — the structured `stale` field contradicts the prose for a wedged guard.
+  `facts["stale"] = not reading.alive`, and `alive = running and not ended` ignores the age. A
+  heartbeat written by a live process 60 minutes ago, unmarked, gives:
+      prose: "running (pid P) but silent for 60.0 min — probably wedged"
+      facts: stale = False
+  The prose is right. The machine-readable field is the one a script or a Bot gates on, and it says
+  there is nothing to worry about. The old meaning of the field was "age beyond the window"; the
+  ruling replaced the *verdict* with the process, and the field moved with it when it should have
+  kept the age.
+  Severity: money direction in effect — an agent that checks `stale` before relying on protection is
+  told a wedged guard is fine, which is the state where a machine bills with nothing watching. The
+  fix is one line: `stale = not reading.alive or reading.age_minutes > <window>` (the prose's 5 min).
+
+FINDING 17 — releasing one guard marks a live second guard finished.
+  Two guards in one process share the pid, so `end_heartbeat`'s pid check cannot tell them apart.
+  Measured with two real wait guards on one heartbeat path: release the first, and the second — still
+  running, its own thread alive — reads `ended=True`, so the shared file says `finished` until its
+  next write.
+  Severity: under-reports protection (the conservative direction: the operator may re-arm
+  unnecessarily) and it contradicts "two guards can share one path" as written. The fix needs an
+  identity the two guards do not share — the instance id in the mark, or a heartbeat path per
+  instance.
+
+CONTROLS THAT HOLD (attacked, not broken)
+  * the three answers: PermissionError -> alive; ProcessLookupError -> gone; a plain OSError (the
+    Windows EINVAL) -> gone; and None/""/"abc"/0/-1/1.5 -> gone.
+  * a payload with **no pid** is not protection: `running` false, `alive` false, "not running" prose.
+  * `end_heartbeat` ownership: another pid's file is left alone, and a missing file stays missing
+    (no marker invented for a file nobody wrote).
+  * `armed_before` needs all three: unmarked + live + fresh is true; each of "silent 60 min",
+    "marked finished" and "no pid" is false (4 subcases).
+  * the disclosed Windows handle caveat: a probe that reports a dead pid as running reads `alive`
+    only while the file is fresh; at 60 min the prose is "wedged". Pinned as the caveat, not as a
+    requirement.
+
+VERDICT
+  The rule's core is right and the prose verdict is honest, but three seams leak: a probe error that
+  is not an OSError crashes the read (15), the structured `stale` flag tells a script a wedged guard
+  is fine (16, the one that matters for money), and a shared heartbeat path lets one guard's exit
+  mark another's live one finished (17). Nothing else broke: the pid answers, the ownership rule,
+  the armed_before triple and the freshness bound all measure as required.
