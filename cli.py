@@ -59,6 +59,7 @@ from .guard import (
     CLAIM_THIS_ROOT,
     CLAIM_UNCLAIMED,
     Finding,
+    ReleaseGate,
     heartbeat_age_minutes,
     snapshot,
     state_findings,
@@ -1472,10 +1473,43 @@ def cmd_down(args) -> int:
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
     provider = _provider(cfg)
-    pod = _pod(provider, cfg)
     with json_report(args):
         emit(command="down", action="noop", stopped=False)
+        # Read before the account is asked: this bound gates every closure below.
+        bound = float(getattr(cfg.budget, "stop_confirm_s", 30.0) or 0.0)
+        try:
+            pod = _pod(provider, cfg)
+        except ProviderError as exc:
+            # `_pod` asks the account. An account nobody can read is *not* an account that says the
+            # machine is gone, so nothing is concluded and the row is left exactly as it is. This
+            # call used to traceback out of `down` (re-attack finding 3, 2026-10-16).
+            note(f"error: the account could not be read ({exc}); nothing is concluded and the "
+                 f"ledger row is left as it is — a machine that cannot be asked about cannot be "
+                 f"confirmed stopped")
+            emit(action="unreadable-account", stopped=False, detail=str(exc),
+                 open_run=_open_run_dict(ledger),
+                 total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
+            return 1
         if pod is None:
+            # Nothing the state file names, and no live machine the open row's instance resolves to.
+            # The row is still closed only against the account's own listing: `_pod`'s fallback reads
+            # the single-instance endpoint, and a `get` that says "gone" while the listing still shows
+            # the machine RUNNING is the disagreement that closes a row over a billing machine
+            # (re-attack finding 1, 2026-10-16).
+            row_run = ledger.open_run() or {}
+            row_instance = str(row_run.get("instance_id") or "")
+            if row_instance:
+                closable, detail = _may_close_the_row(provider, [row_instance], bound=bound,
+                                                     polled=set())
+                if not closable:
+                    note(f"NOT closed     : {detail}. The ledger row is left OPEN so the cost keeps "
+                         f"being recorded and the cap keeps seeing it.")
+                    note(f"open run       : {row_run.get('run_id')}  accruing")
+                    emit(action="still-billing", stopped=False, still_billing=True,
+                         instance={"id": row_instance, "status": None}, detail=detail,
+                         open_run=_open_run_dict(ledger),
+                         total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
+                    return 1
             row = ledger.close(note="down-no-instance")
             note(f"no instance recorded; closed row {row['run_id']}" if row else "nothing to do")
             if row:
@@ -1485,13 +1519,19 @@ def cmd_down(args) -> int:
                 emit(total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
             return 0
         status = pod.get("status")
-        live = status not in ("EXITED", "TERMINATED") and is_alive(pod)
+        # Two different questions, and they used to be one. `usable` is "can I pull from it", and
+        # `is_alive` is the same answer `run` and `pull` refuse on. `billing` is "can it charge me":
+        # a pod that reports RUNNING with no uptime and no ports is not usable and **is** billing
+        # (the crash loop the guard refuses to arm against), so it is stopped and confirmed here
+        # rather than skipped and its row closed under it.
+        billing = str(status or "").upper() not in ("EXITED", "TERMINATED")
+        usable = billing and is_alive(pod)
         pull_exit = None
         # Pull before the machine stops: an instance without a network volume is a container, and
         # once it is stopped its results are gone. A failed pull does not cancel the stop — leaving
         # a broken machine billing is the worse outcome — but it must be visible and the exit code
         # non-zero, so a script cannot read a lost pull as a clean stop.
-        if cfg.artefacts.pull and live:
+        if cfg.artefacts.pull and usable:
             note(f"pulling artefacts from {pod.get('id')} before stopping it")
             pull_exit = _try_pull(cfg, args)
             if pull_exit != 0:
@@ -1523,10 +1563,24 @@ def cmd_down(args) -> int:
                 note("--keep-running would leave the machine up to retry; stopping is "
                      "the default because a machine that keeps billing is the worse loss.")
 
+        # Every machine this closure must answer for: the one the state file names (and stops), and —
+        # when the open row names a different one — that machine too. The row is the local record
+        # that survives a lost state file, so closing it is a claim about *its* machine, and a stop
+        # of A that closes B's row leaves B billing with nothing recording it (re-attack finding 2,
+        # 2026-10-16). B is not stopped here — this command stops what its own state names — but the
+        # row may not close until the account says B has stopped too.
+        row_instance = str((ledger.open_run() or {}).get("instance_id") or "")
+        answer_for = [str(pod.get("id"))]
+        if row_instance and row_instance != answer_for[0]:
+            note(f"note           : the open row names {row_instance}, not the machine the state "
+                 f"file records ({answer_for[0]}); this command stops {answer_for[0]} and may only "
+                 f"close the row when the account also says {row_instance} has stopped")
+            answer_for.append(row_instance)
+
         stop_failed = False
         still_billing = False
         confirm_detail = ""
-        if live:
+        if billing:
             stopped_ok, detail = _stop_machine(cfg, provider, pod)
             if stopped_ok:
                 note(f"stopping {pod['id']}: {detail}")
@@ -1535,21 +1589,22 @@ def cmd_down(args) -> int:
                 # here — the account is asked below.
                 stop_failed = True
                 note(f"could not stop {pod['id']}: {detail}")
-            # A stop call that returns is not a machine that stopped (defect 1, B19): the account's
-            # own listing decides, and until it agrees the machine can bill, so the row stays open
-            # and the spend keeps being recorded.
-            bound = float(getattr(cfg.budget, "stop_confirm_s", 30.0) or 0.0)
-            confirmed, confirm_detail = _confirm_stopped(provider, pod["id"], bound=bound)
-            if confirmed:
-                note(f"confirmed      : {confirm_detail}")
-            else:
-                still_billing = True
-                note(f"NOT closed     : {confirm_detail}. The ledger row is left OPEN so the cost "
-                     f"keeps being recorded and the cap keeps seeing it; stop the machine from the "
-                     f"provider console, or run `rentguard down` again once it stops.")
-                note(f"note           : the bound is [budget] stop_confirm_s "
-                     f"({cfg.budget.stop_confirm_s:g}s); it does not stop the machine, it decides "
-                     f"whether this command may call the window closed")
+        # A stop call that returns is not a machine that stopped (defect 1, B19): the account
+        # decides, on **both** witnesses — the instance's own record and the account's listing — and
+        # until they agree the machine can bill, so the row stays open and the spend keeps being
+        # recorded. A machine this call did not stop (the row's, above) is read once, not polled.
+        closable, confirm_detail = _may_close_the_row(provider, answer_for, bound=bound,
+                                                      polled={answer_for[0]} if billing else set())
+        if closable:
+            note(f"confirmed      : {confirm_detail}")
+        else:
+            still_billing = True
+            note(f"NOT closed     : {confirm_detail}. The ledger row is left OPEN so the cost "
+                 f"keeps being recorded and the cap keeps seeing it; stop the machine from the "
+                 f"provider console, or run `rentguard down` again once it stops.")
+            note(f"note           : the bound is [budget] stop_confirm_s "
+                 f"({cfg.budget.stop_confirm_s:g}s); it does not stop the machine, it decides "
+                 f"whether this command may call the window closed")
         if still_billing:
             note(f"open run       : {(_open_run_dict(ledger) or {}).get('run_id')}  accruing")
             emit(action="still-billing", stopped=False, still_billing=True,
@@ -1568,11 +1623,11 @@ def cmd_down(args) -> int:
         # key no provider returns, so a machine with a network volume was never told it survives.
         if pod.get("volumeId") or pod.get("volume"):
             note("volume survives; the container disk does not.")
-        emit(action="stop-failed" if stop_failed else ("stopped" if live else "already-stopped"),
-             stopped=live and not stop_failed,
+        emit(action="stop-failed" if stop_failed else ("stopped" if billing else "already-stopped"),
+             stopped=billing and not stop_failed,
              instance={"id": pod.get("id"), "status": status},
              run=_closed_dict(row),
-             pulled=(pull_exit == 0) if cfg.artefacts.pull and live else None,
+             pulled=(pull_exit == 0) if cfg.artefacts.pull and usable else None,
              pull_exit_code=pull_exit,
              total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
     if stop_failed or pull_exit not in (None, 0):
@@ -1635,10 +1690,15 @@ def _start_wait_guard(cfg: Config, provider: Provider, ledger: Ledger, instance_
     a guard the caller cannot name is the "protection believed armed" shape this project keeps
     finding. The thread is a daemon as well, so it can never keep the process alive.
 
+    ``release`` is a ``guard.ReleaseGate``, not a bare ``Event``: it is the handle that makes the
+    release and the guard's own heartbeat writes one step, so a release arriving during a slow
+    provider read cannot be followed by a heartbeat (re-attack finding 4, 2026-10-16). The join is
+    what makes the guard's *absence* true; the gate is what makes the silence true.
+
     It is protection for the wait, not a replacement for the operator's own `rentguard watch`: the
     closing lines of `up` still say that until something is watching, only they are.
     """
-    release = threading.Event()
+    release = ReleaseGate()
 
     def run_guard() -> None:
         try:
@@ -1655,12 +1715,23 @@ def _start_wait_guard(cfg: Config, provider: Provider, ledger: Ledger, instance_
 
 
 def _release_wait_guard(guard: tuple[threading.Thread, threading.Event] | None) -> None:
-    """End the wait guard and wait for it, so it is finished before `up` returns."""
+    """End the wait guard and wait for it, so it is **finished** before `up` returns.
+
+    The join has no bound on purpose (re-attack finding 4, 2026-10-16). It used to give up after
+    5 s, which returned with the guard still inside a slow ``provider.get`` — and the guard then
+    wrote its heartbeat *after* `up` had released it, so `status` and `doctor` read a fresh
+    heartbeat as "protection armed" while nothing was watching. A 6 s provider read against a 5 s
+    bound is enough to produce that, which is why the test that pins it uses exactly that shape.
+
+    The guard's blocking call is the provider's own request, which the provider times out, so this
+    is bounded in practice. Correctness does not depend on that: every heartbeat the guard writes
+    goes through the release gate, so even a read that never returned could not land one.
+    """
     if guard is None:
         return
     thread, release = guard
     release.set()
-    thread.join(5.0)
+    thread.join()
 
 
 def cmd_watch(args) -> int:
@@ -1766,6 +1837,20 @@ def cmd_adopt(args) -> int:
     The start time is backdated from the provider's own uptime, so an instance that has been
     billing for hours is recorded at its real cost rather than starting the clock at zero.
     Starting the clock at zero is how a real overspend becomes invisible.
+
+    ``--uptime-hours`` is an **estimate**, for a machine whose report is gone, and it is checked
+    against the life the provider describes the machine as having: ``createdAt`` when the payload
+    carries it, otherwise the machine's own positive uptime. An estimate that reaches further back
+    than a witness allows is refused with the witness named, and no row is opened. Three limits are
+    declared rather than closed, because inventing an answer where the provider gives none is the
+    direction this tool rules against:
+
+    * with **neither** a creation instant nor a positive uptime, any positive estimate is accepted —
+      the check cannot be made, and over-recording is the conservative direction;
+    * the life check runs only for ``--uptime-hours``: a *provider-reported* uptime that contradicts
+      ``createdAt`` is not cross-checked, and the row is backdated from it unexamined;
+    * a ``createdAt`` with no timezone is read as UTC, so the check moves with the host's offset —
+      east of UTC it reads the machine as newer than it is and can refuse a legitimate estimate.
     """
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
@@ -1787,13 +1872,31 @@ def cmd_adopt(args) -> int:
         if args.uptime_hours is not None:
             # For recording an instance after it was stopped, when the provider no
             # longer reports how long it ran. The source of the number is printed.
-            uptime = float(args.uptime_hours) * 3600.0
+            estimate = float(args.uptime_hours)
+            uptime = estimate * 3600.0
             note(f"note           : uptime given as {args.uptime_hours} h, not read from the provider")
+            created_at = _instance_created_at(pod)
+            implied_start = now_utc() - timedelta(seconds=uptime)
+            # A life the check can measure the estimate against, when the provider describes one.
+            age_hint = (f"; this machine is at most {(now_utc() - created_at).total_seconds() / 3600.0:.4f} h "
+                        f"old, and any estimate inside its life is accepted") if created_at else ""
+            # An estimate of zero or less is not a small estimate, it is a broken one: 0 backdates the
+            # row to this instant and a negative value starts it in the **future**, where it can never
+            # accrue — so either records $0.00 for a machine that is billing, and the creation check
+            # below cannot see it (a future instant does not precede creation). Measured 2026-10-16 by
+            # Assay: `--uptime-hours=-2` opened a row two hours ahead (re-attack finding 5).
+            if estimate <= 0:
+                note(f"error: --uptime-hours {args.uptime_hours} is not a length of time, so a row "
+                     f"starting there would record nothing for a machine that is billing: 0 starts "
+                     f"the row now, and a negative value starts it in the future, where it never "
+                     f"accrues. Pass a positive number of hours — the smallest sensible value is "
+                     f"just above 0 (0.01 h is 36 s){age_hint}.")
+                emit(adopted=False, reason="uptime-not-positive", instance_id=pod.get("id"),
+                     status=status, uptime_hours=args.uptime_hours)
+                return 2
             # An estimate must not claim time the machine cannot have had. Measured 2026-10-16: an
             # estimate backdated a start to 15:16:59 for a pod created 15:23:31, over-recording about
             # $0.23 — the ledger then said the machine had billed for time before it existed.
-            created_at = _instance_created_at(pod)
-            implied_start = now_utc() - timedelta(seconds=uptime)
             if (created_at is not None
                     and implied_start < created_at - timedelta(seconds=UPTIME_ESTIMATE_SLACK_S)):
                 note(f"error: --uptime-hours {args.uptime_hours} puts the start at "
@@ -1805,6 +1908,23 @@ def cmd_adopt(args) -> int:
                 emit(adopted=False, reason="uptime-precedes-creation", instance_id=pod.get("id"),
                      status=status, started_at=iso(implied_start), created_at=iso(created_at),
                      uptime_hours=args.uptime_hours)
+                return 2
+            # The second witness, used when the provider gives no creation instant: its own uptime is
+            # how long this machine has been billing, so an estimate reaching further back than that
+            # claims time the machine cannot have had either. Only a *positive* uptime is a witness —
+            # 0 is what a stopped or restarted machine reports, and that is exactly the case
+            # `--uptime-hours` exists for, so it must not refuse (re-attack finding 6, 2026-10-16).
+            provider_uptime = float(((pod.get("runtime") or {}).get("uptime")) or 0.0)
+            if (created_at is None and provider_uptime > 0
+                    and uptime > provider_uptime + UPTIME_ESTIMATE_SLACK_S):
+                note(f"error: --uptime-hours {args.uptime_hours} is longer than the provider's own "
+                     f"clock for this machine, which reports {provider_uptime / 3600.0:.4f} h of "
+                     f"uptime and no creation instant; a row starting there would record time the "
+                     f"machine did not exist for. Pass an estimate inside its life (at most "
+                     f"{(provider_uptime + UPTIME_ESTIMATE_SLACK_S) / 3600.0:.4f} h here).")
+                emit(adopted=False, reason="uptime-exceeds-life", instance_id=pod.get("id"),
+                     status=status, started_at=iso(implied_start), uptime_hours=args.uptime_hours,
+                     provider_uptime_hours=round(provider_uptime / 3600.0, 4))
                 return 2
         elif uptime <= 0 and status in ("EXITED", "TERMINATED"):
             # No silent zero. An instance that has stopped reports uptime 0, so a row opened now
@@ -1886,17 +2006,22 @@ def _ssh_to_file(argv: list[str], target: str, remote: str, *, sink, timeout: fl
 
 def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
                      interval: float = 2.0) -> tuple[bool, str]:
-    """Poll the account until it stops listing this instance as billing: ``(confirmed, detail)``.
+    """Poll **the instance's own record** until it stops calling it billing: ``(confirmed, detail)``.
 
     A stop **call** returning is not a machine that stopped. Measured 2026-10-16: `down` printed
     `run closed …` and exited 0 while the pod stayed RUNNING for minutes, and `doctor` showed a live
     machine with no row against it — the ledger said the window was over and the machine was billing
-    (defect 1, B19). So the account's own listing decides: ``EXITED``, ``TERMINATED`` or gone
-    (``None``) means it can no longer bill, and anything else means it still can.
+    (defect 1, B19). So the account decides: ``EXITED``, ``TERMINATED`` or gone (``None``) means it
+    can no longer bill, and anything else means it still can.
 
-    ``None`` from the provider is "gone" here, not "could not ask": `_pod` has already shown the
-    instance to this root, so absence from the account is an answer, while a provider that raises is
-    reported as unverified (`confirmed=False`) because a stop nobody could check is not a stop.
+    This is **one of two witnesses**, not the verdict: ``_may_close_the_row`` also reads the account's
+    own listing, because this endpoint can disagree with it — a ``get`` that says EXITED while
+    ``list_pods`` still shows the machine RUNNING closed a row over a billing pod (re-attack finding
+    1, 2026-10-16). Here, ``None`` is "gone", not "could not ask": the caller has already shown this
+    root the instance, so absence from this endpoint is an answer, while a provider that raises is
+    reported as unverified — a stop nobody could check is not a stop.
+
+    ``bound`` is patience, not the number of witnesses: ``bound=0`` means one read.
     """
     deadline = time.monotonic() + max(0.0, bound)
     last = "unknown"
@@ -1912,9 +2037,64 @@ def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
             return True, f"{instance_id} is {last}"
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return False, (f"{instance_id} is still {last} after {bound:g}s "
-                           f"([budget] stop_confirm_s)")
+            waited = (f"after {bound:g}s ([budget] stop_confirm_s)" if bound > 0
+                      else "on a single read")
+            return False, f"{instance_id} is still {last} {waited}"
         time.sleep(min(interval, remaining))
+
+
+def _listed_live(provider: Provider) -> tuple[dict[str, str] | None, str]:
+    """The account's own listing of what is still billing: ``({instance_id: status}, detail)``.
+
+    ``None`` means the listing could not be read at all, which is **not** "nothing is live": a
+    closure may not rest on a listing nobody read. Every instance the account still shows in a live
+    status is in the map, whatever this root's own records say about it.
+    """
+    try:
+        rows = provider.list_pods()
+    except Exception as exc:  # noqa: BLE001 - an unreadable listing is not a readable one
+        return None, f"the account listing could not be read ({type(exc).__name__}: {exc})"
+    live: dict[str, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").upper()
+        if status in LIVE_STATUSES:
+            live[str(row.get("id"))] = status
+    return live, ""
+
+
+def _may_close_the_row(provider: Provider, instance_ids: list[str], *, bound: float,
+                       polled: set[str]) -> tuple[bool, str]:
+    """Whether every machine the open row must answer for is confirmed not billing.
+
+    Two witnesses, and the row stays open unless both agree about every id:
+
+    * the instance's own record (``_confirm_stopped``), polled for the machines this call stopped
+      (``polled``) so a stop that has not taken effect has the bound's patience, and read once for
+      the others so a machine this call did not stop cannot hold the command for a minute;
+    * the account's own **listing** (``_listed_live``), which is the witness the fix's own sentence
+      names. A record that says EXITED — or returns nothing — while the listing still shows the
+      machine RUNNING is a disagreement, and a disagreement keeps the row open.
+
+    An unreadable witness is not agreement either. The ordering is deliberate: the listing is read
+    after the poll, so the sentence counts the same way a reader does — first "does the machine's own
+    record still say it is billing", then "does the account still list it as billing".
+    """
+    for instance_id in instance_ids:
+        confirmed, detail = _confirm_stopped(provider, instance_id,
+                                             bound=bound if instance_id in polled else 0.0)
+        if not confirmed:
+            return False, detail
+    listed, detail = _listed_live(provider)
+    if listed is None:
+        return False, detail
+    for instance_id in instance_ids:
+        status = listed.get(instance_id)
+        if status is not None:
+            return False, (f"{instance_id} is still {status} in the account listing — the listing "
+                           f"decides, so the row stays open until it stops showing it")
+    return True, "the account lists none of them as billing"
 
 
 def _stop_machine(cfg: Config, provider: Provider, pod: dict) -> tuple[bool, str]:

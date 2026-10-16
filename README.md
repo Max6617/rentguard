@@ -71,6 +71,14 @@ cost already on the clock: $3.00 — this is spend that happened before the ledg
 names the paths that were lost, and exits non-zero; `down --keep-running` is the deliberate opposite —
 leave the machine up to retry the copy, knowing it keeps billing.
 
+`down` calls a window closed only when the account **agrees** the machine has stopped: it consults both
+the instance's own record and the account's listing, and any disagreement keeps the row open (exit 1,
+`action: "still-billing"`) so the cost keeps accruing and the cap keeps seeing it. The machine the
+**open row** names is confirmed too, even when it is a different one from the machine this call stopped.
+`adopt --uptime-hours` is an **estimate**, for a machine whose report is gone: it must be a positive
+number of hours and must fit inside the machine's life (its creation instant, or its own positive
+uptime), or the row is refused rather than opened at a start that records nothing.
+
 No account yet? Every command also runs against an in-memory provider — real behaviour, no network, no
 key, no money: [test the cap without spending](docs/fake.md).
 

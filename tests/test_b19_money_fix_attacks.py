@@ -330,10 +330,15 @@ class AdoptEstimateCannotRecordNothing(Base):
 
         row = self.ledger.open_run()
         started = datetime.fromisoformat(row["started_at"]) if row else None
+        # The failure message has to survive the *passing* case too: when the refusal works there is
+        # no row, and formatting `started` (None) raised TypeError before the assertion could run.
+        # Forge, 2026-10-16: message repaired, requirement untouched.
+        ahead = (f"{(started - before).total_seconds() / 3600:.2f} h in the future" if started
+                 else "no row was opened at all")
         self.assertNotEqual(
             code, 0,
             f"--uptime-hours=-2 was accepted and opened a row starting {row and row['started_at']} "
-            f"({started and (started - before).total_seconds() / 3600:.2f} h in the future) whose "
+            f"({ahead}) whose "
             f"accrual is ${self.ledger.live_usd():.3f}; the cap and the guard read nothing for a "
             f"machine that is billing\n{text}")
 

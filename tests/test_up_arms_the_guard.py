@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from rentguard import cli  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
+from rentguard.guard import ReleaseGate  # noqa: E402
 from rentguard.ledger import Ledger  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
@@ -87,10 +88,13 @@ class UpCase(unittest.TestCase):
 
 class ACrashLoopIsWatched(UpCase):
     def test_the_cap_is_enforced_while_up_waits_for_a_machine_that_never_works(self) -> None:
-        # $10/s on the clock, against a 1-cent per-run cap: the guard's first poll — milliseconds
-        # after the row names the machine — is already far over it, and nowhere near the $10 total
-        # cap, so which cap fired is deterministic, and nothing here depends on a sleep.
-        provider = NeverUsable(rate_usd_per_hour=36000.0)
+        # $0.50/s on the clock, against a 1-cent per-run cap and a $10 total cap: the per-run cap is
+        # breached 20 ms after the row opens and the total cap only after 20 s, so *which* cap fired
+        # is deterministic for any first poll that happens in the first 20 s. The earlier rate
+        # ($10/s) put the total cap 1 s in, which made the reason a race against the guard thread's
+        # first scheduling — the assertion failed once under load, measuring the machine rather than
+        # the guard. Hardened 2026-10-16 while fixing the B19 re-attack findings.
+        provider = NeverUsable(rate_usd_per_hour=1800.0)
 
         started = time.monotonic()
         code, document, text = self.run_up(provider)
@@ -119,6 +123,73 @@ class ACrashLoopIsWatched(UpCase):
         self.assertEqual(code, 0, f"a healthy rental failed:\n{text}")
         self.assertIsNotNone(Ledger(self.cfg.ledger_path).open_run(),
                              f"the row is not open after a successful `up`:\n{text}")
+
+
+class AReleasedWaitGuardWritesNothing(UpCase):
+    """No heartbeat may be stamped after `_release_wait_guard` returns (re-attack finding 4).
+
+    Assay's case in `tests/test_b19_money_fix_attacks.py` asserts the *thread* is not alive when the
+    release returns; this one asserts the **effect** that liveness is a proxy for — the heartbeat file
+    `status` and `doctor` read must not appear after `up` has released the guard, because a fresh
+    heartbeat there reads as "protection armed" while nothing is watching.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ledger = Ledger(self.cfg.ledger_path)
+
+    class SlowGet(FakeProvider):
+        def __init__(self, *args, delay=0.0, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.delay = delay
+            self.calls = 0
+
+        def get(self, instance_id):
+            self.calls += 1
+            if self.calls == 1:
+                time.sleep(self.delay)
+            return super().get(instance_id)
+
+    def test_a_guard_released_inside_a_slow_read_leaves_no_heartbeat(self) -> None:
+        provider = self.SlowGet(rate_usd_per_hour=0.13, delay=1.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+
+        handle = cli._start_wait_guard(self.cfg, provider, self.ledger, "pod-A",
+                                       log=lambda *_: None, interval=0.05)
+        time.sleep(0.2)                       # the guard is inside its first, slow read
+        cli._release_wait_guard(handle)       # returns only when that read is over
+
+        self.assertFalse(self.cfg.heartbeat_path.exists(),
+                         "a released wait guard stamped a heartbeat after `up` had released it: "
+                         "`status` and `doctor` read a fresh heartbeat as protection armed")
+
+    def test_the_heartbeat_is_written_while_the_guard_is_armed(self) -> None:
+        """The control: the release gate must not silence a guard that is still armed."""
+        provider = FakeProvider(rate_usd_per_hour=0.13)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+
+        handle = cli._start_wait_guard(self.cfg, provider, self.ledger, "pod-A",
+                                       log=lambda *_: None, interval=0.05)
+        deadline = time.monotonic() + 5.0
+        while not self.cfg.heartbeat_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        cli._release_wait_guard(handle)
+
+        self.assertTrue(self.cfg.heartbeat_path.exists(),
+                        "an armed wait guard wrote no heartbeat, so nothing was watching")
+
+
+class TheReleaseGate(unittest.TestCase):
+    def test_a_write_attempted_after_the_release_does_not_run(self) -> None:
+        """The mechanism the wait guard's silence rests on, without a thread in the way."""
+        gate = ReleaseGate()
+        ran: list[str] = []
+
+        self.assertTrue(gate.attempt(lambda: ran.append("armed")))
+        gate.set()
+        self.assertFalse(gate.attempt(lambda: ran.append("after the release")))
+        self.assertEqual(ran, ["armed"])
+        self.assertTrue(gate.is_set(), "the release did not end the loop either")
 
 
 if __name__ == "__main__":

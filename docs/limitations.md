@@ -118,6 +118,20 @@ warning; a name no project claims (including the old fixed `rentguard-workbench`
 the hard error. `adopt` gives a machine a row, backdated from the provider's uptime. If you never run
 either, the cap compares your cap against a total that is missing that machine.
 
+**`down` closes a row only when the account agrees, and `adopt --uptime-hours` is an estimate**
+(added 2026-10-16). Two witnesses are consulted for every machine a closure must answer for — the
+instance's own record and the account's **listing** — and the row stays **open** unless both call the
+machine finished, so a stop call the provider did not honour is never read as a stopped machine (exit 1,
+`action: "still-billing"`, and the accrual keeps counting). The machine the **open row** names is
+confirmed too, even when it is not the one this command stopped; if it is still billing, the row stays
+open until it is stopped, and `down` does not stop that machine for you. `adopt --uptime-hours` carries
+three declared limits: with **neither** a creation instant **nor** a positive uptime, any positive
+estimate is accepted, because refusing there would leave real spend unrecorded and over-recording is the
+conservative direction; a *provider-reported* uptime that contradicts `createdAt` is not cross-checked;
+and a `createdAt` with no timezone is read as UTC, so the check moves with the host's offset — east of
+UTC it can refuse a legitimate estimate. An estimate of zero or less is refused outright: it would
+record nothing for a machine that is billing.
+
 **Recorded totals exclude the open row.** `ledger` and `doctor` sum closed rows only; `ledger` prints
 the open row's accrued cost on its own line under the table, and `status` prints the live estimate
 under `this run` and `all runs`. The worked example above is what that looks like when the row is real

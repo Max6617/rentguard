@@ -20,6 +20,7 @@ own uptime instead of assuming zero. Assuming zero is how a cap fails silently.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -444,6 +445,43 @@ def heartbeat_age_minutes(path: Path) -> float | None:
     return round((now_utc() - then).total_seconds() / 60.0, 1)
 
 
+class ReleaseGate(threading.Event):
+    """A wait guard's release handle, and the lock that makes a released guard write nothing.
+
+    `up`'s wait guard polls the provider while `up` waits, and the heartbeat it writes is the file
+    ``status`` and ``doctor`` read to answer "is anything watching?". A guard the caller has released
+    must therefore write nothing more: a heartbeat stamped after that release reads as protection
+    armed while nothing is watching, which is the shape this project has paid for twice (2026-10-15,
+    and again as re-attack finding 4 on 2026-10-16).
+
+    ``attempt`` and ``set`` share one lock, so "still armed?" and the write are a single step: a
+    release either happens before a write — which then does not happen — or after a write has
+    completed, and that write belongs to the guard while it was still armed. This matters because a
+    bounded ``join`` can return with the thread still inside a slow ``provider.get``; with this gate
+    that read can no longer land a heartbeat, so the join bound is no longer what correctness rests
+    on.
+
+    It *is* an ``Event`` (``is_set``/``wait``), because it is also what ends the loop.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._write_lock = threading.Lock()
+
+    def attempt(self, write) -> bool:
+        """Run ``write`` if this guard is still armed; return whether it ran."""
+        with self._write_lock:
+            if self.is_set():
+                return False
+            write()
+            return True
+
+    def set(self) -> None:
+        """Release the guard: after this returns, no gate of this guard's writes can run."""
+        with self._write_lock:
+            super().set()
+
+
 def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
           interval: float = 60.0, log=print, max_iterations: int | None = None,
           stop_event=None) -> str:
@@ -455,13 +493,33 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
     ``stop_event`` is an optional `threading.Event`-like object (``is_set()`` and ``wait(timeout)``):
     the loop ends when it is set, and waits on it instead of sleeping so the caller can end the loop
     promptly. It exists for `up`'s wait-guard (B19, 2026-10-16): a thread watching the machine while
-    `up` waits for it to become usable must stop — and be **joined** — before `up` returns, because a
-    heartbeat left behind by a guard that dies with the process is exactly the "protection believed
-    armed" shape this project keeps finding. It stops nothing on the way out; the reason says so.
+    `up` waits for it to become usable must stop before `up` returns, because a heartbeat left behind
+    by a guard that dies with the process is exactly the "protection believed armed" shape this
+    project keeps finding. It stops nothing on the way out; the reason says so.
+
+    When the event is a ``ReleaseGate`` — which is what the wait guard passes — every heartbeat is
+    written through it, so a release that arrives while the guard is inside a slow ``provider.get``
+    cannot be followed by a heartbeat, and the guard returns ``wait-guard-released`` instead of
+    reporting a reading taken before the release. A plain ``Event`` or ``None`` keeps the old
+    behaviour: check at the top of each iteration, write as usual.
     """
     idle_from_events = 0.0
     started = now_utc()
     iterations = 0
+
+    def heartbeat(snap: Snapshot, note: str = "") -> bool:
+        """Write the heartbeat, unless the caller has released this guard.
+
+        The check and the write are one step when the release handle carries a gate
+        (``ReleaseGate.attempt``), so a guard released during a slow provider read — the case a
+        bounded join could not close — cannot land a heartbeat afterwards.
+        """
+        gate = getattr(stop_event, "attempt", None)
+        if gate is None:
+            write_heartbeat(cfg.heartbeat_path, snap, note=note)
+            return True
+        return bool(gate(lambda: write_heartbeat(cfg.heartbeat_path, snap, note=note)))
+
     while True:
         if stop_event is not None and stop_event.is_set():
             return "wait-guard-released"
@@ -471,6 +529,11 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
         except ProviderError as exc:
             log(f"provider error: {exc}")
             return f"provider-error: {exc}"
+        if stop_event is not None and stop_event.is_set():
+            # Released while this iteration was reading the provider. Nothing below this line may
+            # happen: a reading taken before the release is not a reason to stop a machine the
+            # caller has taken over, and a heartbeat stamped now would be dated after the release.
+            return "wait-guard-released"
         if pod is None:
             # Gone from the account: close the row so its cost stops being invisible.
             row = ledger.close(note="guard-instance-gone")
@@ -478,9 +541,9 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
                 log(f"instance is gone; closed run {row['run_id']} at ${row['estimated_usd']}")
             else:
                 log("instance no longer exists; guard exits")
-            write_heartbeat(cfg.heartbeat_path, snapshot_fallback(cfg, ledger),
-                            note="instance gone")
-            return "instance gone"
+            if heartbeat(snapshot_fallback(cfg, ledger), note="instance gone"):
+                return "instance gone"
+            return "wait-guard-released"
 
         runtime = pod.get("runtime") or {}
         gpus = runtime.get("gpus") or []
@@ -497,7 +560,8 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
 
         snap = snapshot(pod, cfg, ledger, idle_for_minutes=idle_from_events,
                         idle_since_start_minutes=(now_utc() - started).total_seconds() / 60.0)
-        write_heartbeat(cfg.heartbeat_path, snap)
+        if not heartbeat(snap):
+            return "wait-guard-released"
         # An unreadable ledger row is a reason to keep watching, not to stop: the accrual is unknown,
         # which is never a reason to kill a machine that is billing — a dead guard is worse than a
         # wrong number, and this is the failure the tool exists to prevent (2026-10-14).
@@ -527,7 +591,7 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
                 provider.action(instance_id, "stop")
                 log(f"guard stopped the instance: {reason}")
             ledger.close(note=f"guard:{reason}", instance_status=snap.status)
-            write_heartbeat(cfg.heartbeat_path, snap, note=f"stopped: {reason}")
+            heartbeat(snap, note=f"stopped: {reason}")
             return reason
         if max_iterations is not None and iterations >= max_iterations:
             return "guard-iteration-limit"

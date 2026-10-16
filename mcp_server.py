@@ -113,7 +113,11 @@ TOOLS: list[dict[str, Any]] = [
         "name": "rentguard_stop",
         "description": (
             "Stop the instance and close the ledger row with its real cost. Stopping is the default; "
-            "leaving a machine running costs money per hour whether or not it is working."),
+            "leaving a machine running costs money per hour whether or not it is working. The row is "
+            "closed only when the account's own listing agrees the machine has stopped: a stop call "
+            "the provider did not honour leaves the row OPEN (`action: \"still-billing\"`, exit 1) so "
+            "the cost keeps being recorded and the cap keeps seeing it. A machine the open row names "
+            "is confirmed too, even when it is not the one this call stopped."),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
@@ -128,8 +132,12 @@ TOOLS: list[dict[str, Any]] = [
                 "instance_id": {"type": "string"},
                 "purpose": {"type": "string"},
                 "uptime_hours": {"type": "number",
-                                 "description": "only when the instance is already stopped and the "
-                                                "provider no longer reports uptime"},
+                                 "description": "an ESTIMATE, only when the instance is already "
+                                                "stopped and the provider no longer reports uptime; "
+                                                "must be a positive number of hours, and is refused "
+                                                "when it reaches further back than the machine's "
+                                                "life (its creation instant, or its own positive "
+                                                "uptime) allows"},
             },
             "required": ["instance_id"],
             "additionalProperties": False,
