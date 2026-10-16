@@ -62,11 +62,13 @@ cost_usd = rate_usd_per_hour * (now - started_at) / 3600
 ## What it does not cover
 
 **It only exists while the guard runs.** `watch` must be running for any of the rows above to fire.
-`status` reports the heartbeat as a **process fact**: `alive` only when the pid that wrote it is still
-running and has not marked itself finished; a guard that ended reads `finished (last heartbeat X min
-ago)`, a pid that is gone reads `not running (pid P is gone; …)`, no heartbeat at all reads
-`NO GUARD`, and a writer that is running but quiet for more than five minutes reads `running (pid P) but
-silent for X min — probably wedged`. `doctor` prints the same. Nobody restarts the guard for you.
+`status` reports the heartbeat as a **process fact**: each guard writes its own file in the state dir,
+`alive` needs the pid that wrote it to be running and unmarked, a guard that ended reads `finished (last
+heartbeat X min ago)`, a pid that is gone reads `not running (pid P is gone; …)`, no heartbeat at all
+reads `NO GUARD`, and a writer that is running but quiet for more than five minutes reads `running (pid
+P) but silent for X min — probably wedged`. With more than one guard the readers take the **best** of
+the set, so one guard finishing does not hide another. `doctor` prints the same. Nobody restarts the
+guard for you.
 
 **It overshoots by at least one poll.** The guard checks every `--interval` seconds (60 by default).
 Worst case, a run crosses the cap just after a check and is stopped one interval later: at $2.00/h,

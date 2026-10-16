@@ -30,6 +30,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -122,6 +123,31 @@ class ThePidProbe(unittest.TestCase):
         """A malformed payload must not read as protection either."""
         self.assertFalse(guard.pid_running("not-a-pid"), "a non-numeric pid read as running")
 
+    def test_a_probe_that_raises_something_else_is_gone_not_a_traceback(self) -> None:
+        """POSIX `os.kill` raises **OverflowError** for a pid that does not fit a C int.
+
+        A heartbeat carrying such a pid — hand-edited, truncated, a foreign writer — must read as no
+        proof of life, not propagate out of `heartbeat_reading` and take `status` and `doctor` with it
+        (Assay's finding 15, 2026-10-16). The `kill` seam is how this host sees the POSIX shape.
+        """
+        def overflowing(pid, sig):
+            raise OverflowError("signed integer is greater than maximum")
+        self.assertFalse(guard.pid_running(2 ** 40, kill=overflowing),
+                         "a pid the probe cannot signal was called running")
+
+    def test_a_heartbeat_with_an_unsignallable_pid_reads_as_no_proof_of_life(self) -> None:
+        def overflowing(pid, sig):
+            raise OverflowError("signed integer is greater than maximum")
+        path = Path(scratch_dir(self)) / "heartbeat.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"at": iso(now_utc()), "pid": 2 ** 40, "ended": False}),
+                        encoding="utf-8")
+
+        reading = guard.heartbeat_reading(path, kill=overflowing)     # must not raise
+
+        self.assertFalse(reading.running, reading)
+        self.assertFalse(reading.alive, reading)
+
     def test_the_real_probe_agrees_about_this_process_and_an_impossible_one(self) -> None:
         """No seam: the actual call, on the host the suite is running on."""
         self.assertTrue(guard.pid_running(os.getpid()), "this very process read as not running")
@@ -181,6 +207,23 @@ class TheHeartbeatCarriesItsWriter(unittest.TestCase):
         guard.write_heartbeat(self.path, guard.snapshot_fallback(
             Config(state_dir=self.path.parent), Ledger(self.path.parent / "runs.jsonl")))
         self.assertTrue(guard.end_heartbeat(self.path, pid=os.getpid()))
+        self.assertTrue(json.loads(self.path.read_text(encoding="utf-8")).get("ended"))
+
+    def test_a_guard_id_is_an_identity_a_second_guard_in_this_process_does_not_share(self) -> None:
+        """Two guards in one process share the pid, so the pid cannot tell them apart.
+
+        Releasing one must not mark the other's file finished (Assay's finding 17, 2026-10-16). The
+        guard's own id is the identity they do not share.
+        """
+        guard.write_heartbeat(self.path, guard.snapshot_fallback(
+            Config(state_dir=self.path.parent), Ledger(self.path.parent / "runs.jsonl")),
+            guard_id="second")
+
+        self.assertFalse(guard.end_heartbeat(self.path, guard_id="first"),
+                         "a guard's exit marked another guard's file in the same process")
+        self.assertFalse(json.loads(self.path.read_text(encoding="utf-8")).get("ended"))
+        self.assertTrue(guard.end_heartbeat(self.path, guard_id="second"),
+                        "the guard that wrote the file could not mark its own")
         self.assertTrue(json.loads(self.path.read_text(encoding="utf-8")).get("ended"))
 
 
@@ -308,6 +351,29 @@ class StatusReadsTheVerdict(HeartbeatCase):
         self.assertTrue(any(word in out.lower() for word in ("silent", "stale", "wedged")),
                         f"a 12-minute silence was reported as healthy:\n{out}")
 
+    def test_the_structured_stale_flag_follows_the_prose(self) -> None:
+        """`stale` is the field a script or a Bot gates on, so it must not contradict the sentence.
+
+        A live, unmarked, 60-minute-old heartbeat is `wedged` in prose; `alive` (the process fact) is
+        true, but `stale` must stay the **age** it always was (Assay's finding 16, 2026-10-16).
+        """
+        provider = self.machine()
+        self.heartbeat(at=iso(now_utc() - timedelta(minutes=60)))
+
+        args = cli.build_parser().parse_args(["status", "--json"])
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.cmd_status(args)
+        document = json.loads(out.getvalue()[out.getvalue().index("{"):])
+
+        self.assertTrue(document["guard"]["stale"],
+                        f"a wedged guard reads as not stale in the JSON a script gates on: "
+                        f"{document['guard']}")
+        self.assertTrue(document["guard"]["running"], document["guard"])
+        self.assertFalse(document["guard"]["ended"], document["guard"])
+
     def test_doctor_says_the_same_thing(self) -> None:
         provider = self.machine()
         self.heartbeat(ended=True, ended_at=iso(now_utc()))
@@ -380,7 +446,9 @@ class GuardsMarkThemselvesEnded(HeartbeatCase):
 
         self.run_cmd(cli.cmd_watch, ["watch", "--once"], provider)
 
-        payload = json.loads(self.cfg.heartbeat_path.read_text(encoding="utf-8"))
+        files = guard.heartbeat_files(self.cfg.heartbeat_path)
+        self.assertTrue(files, "a watch that ran wrote no heartbeat file")
+        payload = json.loads(files[0].read_text(encoding="utf-8"))
         self.assertTrue(payload.get("ended"),
                         f"a watch that returned left a heartbeat reading as protection: {payload}")
 
@@ -396,13 +464,109 @@ class GuardsMarkThemselvesEnded(HeartbeatCase):
 
         code, out = self.run_cmd(cli.cmd_up, ["up", "--purpose", "probe"], provider)
         self.assertEqual(code, 0, f"the rent failed:\n{out}")
-        self.assertTrue(self.cfg.heartbeat_path.exists(),
-                        "no wait guard wrote a heartbeat, so this test proves nothing")
+        self.assertTrue(guard.heartbeat_files(self.cfg.heartbeat_path),
+                        "no wait guard wrote a heartbeat file, so this test proves nothing")
 
         code, out = self.status(provider)
         self.assertNotIn("alive", out.lower(),
                          f"`up`'s released wait guard still reads as protection:\n{out}")
         self.assertIn("finished", out.lower(), f"the marker is not reported:\n{out}")
+
+
+    def test_releasing_one_wait_guard_leaves_a_live_second_one_alive(self) -> None:
+        """Two real wait guards, one heartbeat path, one process: the shared-pid case end to end."""
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.write_state({"instance_id": "pod-A"})
+        ledger = Ledger(self.cfg.ledger_path)
+
+        first = cli._start_wait_guard(self.cfg, provider, ledger, "pod-A",
+                                     log=lambda *_: None, interval=0.05)
+        second = cli._start_wait_guard(self.cfg, provider, ledger, "pod-A",
+                                       log=lambda *_: None, interval=5.0)
+        time.sleep(0.4)                       # both have written
+        cli._release_wait_guard(first)
+        time.sleep(0.05)
+        reading = guard.heartbeat_reading(self.cfg.heartbeat_path)
+        second_still_running = second[0].is_alive()
+        cli._release_wait_guard(second)
+
+        self.assertTrue(second_still_running, "fixture: the second guard had already stopped")
+        self.assertTrue(reading is not None and reading.alive,
+                        f"the still-running second guard reads as finished: "
+                        f"ended={reading and reading.ended}, pid={reading and reading.pid}")
+
+
+class TheGuardSet(unittest.TestCase):
+    """One heartbeat file per guard, and the reader takes the best of the set (finding 17).
+
+    Two guards can watch one instance in one process — an operator's `watch` beside `up`'s wait guard,
+    or two wait guards — where the pid and the instance id are both shared. One file let the guard that
+    finished mark the other's reading `finished`; one file per guard is the identity, and a reader that
+    asks "is anything watching?" takes the best of them.
+    """
+
+    def setUp(self) -> None:
+        self.cfg = Config(state_dir=scratch_dir(self))
+        self.path = self.cfg.heartbeat_path
+
+    def guard_file(self, guard_id: str, *, pid=None, ended: bool = False,
+                   age_minutes: float = 0.0) -> Path:
+        target = guard.guard_heartbeat_path(self.path, guard_id)
+        payload = {"at": iso(now_utc() - timedelta(minutes=age_minutes)),
+                   "pid": os.getpid() if pid is None else pid, "ended": ended,
+                   "guard_id": guard_id}
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        return target
+
+    def snapshot(self):
+        return guard.snapshot_fallback(self.cfg, Ledger(self.cfg.ledger_path))
+
+    def test_a_finished_guard_does_not_hide_a_live_one(self) -> None:
+        self.guard_file("first", ended=True)
+        self.guard_file("second")
+
+        reading = guard.heartbeat_reading(self.path)
+
+        self.assertTrue(reading.alive, f"a live guard was hidden by a finished one: {reading}")
+
+    def test_two_live_guards_report_the_fresher(self) -> None:
+        self.guard_file("slow", age_minutes=3.0)
+        self.guard_file("fast", age_minutes=0.1)
+
+        reading = guard.heartbeat_reading(self.path)
+
+        self.assertLess(reading.age_minutes, 1.0, f"the stale guard won: {reading}")
+
+    def test_when_every_guard_has_finished_the_newest_is_reported(self) -> None:
+        self.guard_file("old", ended=True, age_minutes=30.0)
+        self.guard_file("new", ended=True, age_minutes=0.5)
+
+        reading = guard.heartbeat_reading(self.path)
+
+        self.assertTrue(reading.ended, reading)
+        self.assertLess(reading.age_minutes, 1.0, f"the older marker was reported: {reading}")
+
+    def test_a_legacy_single_file_is_still_read(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"at": iso(now_utc()), "pid": os.getpid(),
+                                         "ended": False}), encoding="utf-8")
+
+        self.assertEqual(guard.heartbeat_files(self.path), [self.path])
+        self.assertTrue(guard.heartbeat_reading(self.path).alive)
+
+    def test_the_writer_prunes_a_finished_sibling_but_not_a_live_or_crashed_one(self) -> None:
+        finished = self.guard_file("finished", ended=True, age_minutes=30.0)
+        live = self.guard_file("live")
+        crashed = self.guard_file("crashed", pid=dead_pid())        # unmarked, and gone
+
+        guard.write_heartbeat(guard.guard_heartbeat_path(self.path, "writer"), self.snapshot())
+
+        self.assertFalse(finished.exists(),
+                         "a finished marker older than the window was left to accumulate")
+        self.assertTrue(live.exists(), "a live guard's heartbeat was pruned")
+        self.assertTrue(crashed.exists(),
+                        "a crashed guard's heartbeat was pruned: the pid is evidence worth keeping")
 
 
 if __name__ == "__main__":

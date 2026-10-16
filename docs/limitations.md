@@ -96,14 +96,19 @@ taxes, credits. [What the cap guarantees](cap.md) lists this in full.
 **The cap only fires while `watch` runs.** `watch` is a foreground process on your machine. Close the
 terminal, suspend the laptop, or let it crash, and nothing stops the instance. The heartbeat is how
 `status` and `doctor` tell you which of those happened, and it is read as a **process fact** (Gilbert's
-ruling, 2026-10-16): the file names the pid that wrote it, and `alive` requires that pid to be running
-**and** the writer not to have marked itself finished. `cmd_watch` marks on every exit path, and `up`
-marks its own wait guard before its release returns, so a guard that ended reads `finished (last
-heartbeat X min ago)` rather than `alive`; a pid that is gone reads `not running (pid P is gone; …)`; a
-writer that is running but has gone quiet for more than five minutes reads `running (pid P) but silent
-for X min — probably wedged`; and with no heartbeat at all it reads `NO GUARD`. The age is on the line
-in every one of those, as the secondary signal it is — never the verdict. Nothing restarts the guard
-for you.
+ruling, 2026-10-16): each guard has its **own** heartbeat file in the state dir (`heartbeat-<guard
+id>.json`, plus the legacy `heartbeat.json`), the file names the pid that wrote it, and `alive` requires
+that pid to be running **and** the writer not to have marked itself finished. One file per guard matters
+when more than one is watching — an operator's `watch` beside `up`'s wait guard — because a shared file
+let the guard that finished mark the other's reading `finished`; the readers now take the **best** of
+the set, so a live guard wins over a finished one. `cmd_watch` marks its own file on every exit path,
+and `up` marks its wait guard's file before its release returns, so a guard that ended reads `finished
+(last heartbeat X min ago)` rather than `alive`; a pid that is gone reads `not running (pid P is gone;
+…)`; a writer that is running but has gone quiet for more than five minutes reads `running (pid P) but
+silent for X min — probably wedged`; and with no heartbeat at all it reads `NO GUARD`. The age is on the
+line in every one of those, as the secondary signal it is — never the verdict. (Marked files older than
+the window are pruned by the next guard that writes, so the state dir does not fill with them.) Nothing
+restarts the guard for you.
 
 **One measured limit on the pid check**, on Windows only: an exited process whose handle is still held
 elsewhere can be probed successfully, so a guard that was **killed or crashed** can read as running

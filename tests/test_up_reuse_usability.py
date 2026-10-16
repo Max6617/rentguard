@@ -40,7 +40,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rentguard import cli  # noqa: E402
+from rentguard import cli, guard  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, now_utc  # noqa: E402
@@ -166,7 +166,7 @@ class ACrashLoopIsNotARental(ReuseCase):
 
         code, document, text = self.up(provider)
 
-        self.assertTrue(self.cfg.heartbeat_path.exists(),
+        self.assertTrue(guard.heartbeat_files(self.cfg.heartbeat_path),
                         f"no guard was watching while `up` waited to resume a billing machine:\n{text}")
         self.assertIn(("pod-A", "stop"), provider.actions,
                       f"the guard did not stop a machine that kept billing:\n{text}")

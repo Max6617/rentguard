@@ -49,6 +49,7 @@ import sys
 import tarfile
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -59,10 +60,12 @@ from .guard import (
     CLAIM_ANOTHER_ROOT,
     CLAIM_THIS_ROOT,
     CLAIM_UNCLAIMED,
+    GUARD_STALE_MINUTES,
     Finding,
     ReleaseGate,
     TERMINAL_STATUSES,
     end_heartbeat,
+    guard_heartbeat_path,
     heartbeat_age_minutes,
     heartbeat_reading,
     is_billing,
@@ -1725,20 +1728,25 @@ def _start_wait_guard(cfg: Config, provider: Provider, ledger: Ledger, instance_
     closing lines of `up` still say that until something is watching, only they are.
     """
     release = ReleaseGate()
+    # This guard's own identity **and its own file**: two guards can watch one instance in one process,
+    # where the pid and the instance id are both shared, so a mark needs an id and a path only this
+    # guard holds (finding 17, 2026-10-16). `status` reads the set and takes the best of it.
+    guard_id = f"wait-{instance_id}-{uuid.uuid4().hex[:8]}"
+    heartbeat = guard_heartbeat_path(cfg.heartbeat_path, guard_id)
 
     def run_guard() -> None:
         try:
             guard_watch(cfg, provider, ledger, instance_id=instance_id, interval=interval, log=log,
-                        stop_event=release)
+                        stop_event=release, guard_id=guard_id, heartbeat_path=heartbeat)
         except Exception as exc:  # noqa: BLE001 - a guard that dies must not take `up` with it
             log(f"wait guard  : stopped ({type(exc).__name__}: {exc}); `up` continues — arm "
                 f"`rentguard watch` once the machine is usable")
         finally:
             # Marked here, inside the thread, so the mark is written *before* `up`'s release join
             # returns: a wait guard that has finished must not leave a heartbeat reading as
-            # protection (Gilbert's ruling, 2026-10-16). `end_heartbeat` leaves a file another pid
-            # wrote alone, so an operator's own `watch` is not ended by `up` finishing.
-            end_heartbeat(cfg.heartbeat_path)
+            # protection (Gilbert's ruling, 2026-10-16). Its own file, so a *second* live guard's
+            # reading is untouched (finding 17).
+            end_heartbeat(heartbeat, guard_id=guard_id)
 
     thread = threading.Thread(target=run_guard, name=f"rentguard-wait-guard-{instance_id}",
                               daemon=True)
@@ -1817,15 +1825,20 @@ def cmd_watch(args) -> int:
         note(f"watching {pod.get('id')} — stop at ${cfg.budget.per_run_cap_usd:.2f} this run, "
               f"${cfg.budget.cap_usd:.2f} total, {cfg.budget.max_hours_per_run:.1f} h, "
               f"or {cfg.budget.idle_minutes:.0f} min idle")
-        note(f"liveness : the heartbeat ({cfg.heartbeat_path.name} in the state dir) is the "
-              f"authoritative check — `rentguard status` and `doctor` read it. These lines are the "
-              f"guard's log: history, flushed as they happen, never proof that it is still running")
+        note(f"liveness : the heartbeat files (`heartbeat*.json` in the state dir, one per guard) "
+              f"are the authoritative check — `rentguard status` and `doctor` read them and take the "
+              f"best of the set. These lines are the guard's log: history, flushed as they happen, "
+              f"never proof that it is still running")
+        guard_id = f"watch-{uuid.uuid4().hex[:8]}"
+        heartbeat = guard_heartbeat_path(cfg.heartbeat_path, guard_id)
         reason = guard_watch(cfg, provider, ledger, instance_id=pod["id"], interval=interval,
-                             log=note, max_iterations=max_iterations)
+                             log=note, max_iterations=max_iterations, guard_id=guard_id,
+                             heartbeat_path=heartbeat)
         # This guard is finished and says so: "finished" and "silent" must not be the same reading
         # (Gilbert's ruling, 2026-10-16). Marked after the loop returns, on every path — the cap, an
-        # already-stopped machine, an instance that vanished, an iteration limit, a provider error.
-        end_heartbeat(cfg.heartbeat_path)
+        # already-stopped machine, an instance that vanished, an iteration limit, a provider error —
+        # in its **own** file, so a sibling guard's reading is untouched (finding 17).
+        end_heartbeat(heartbeat, guard_id=guard_id)
         stopped = _guard_stopped_a_machine(reason)
         note(f"guard finished: {reason}")
         if stopped:
@@ -1858,7 +1871,7 @@ def _guard_report(reading) -> tuple[str, dict]:
         return ("NO GUARD — nothing is watching this instance, so it will bill until someone stops it",
                 {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
                  "ended": None})
-    facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": not reading.alive,
+    facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
              "pid": reading.pid, "running": reading.running, "ended": reading.ended}
     if reading.ended:
         return (f"finished (last heartbeat {reading.age_minutes:.1f} min ago) — nothing is watching "
@@ -1867,7 +1880,7 @@ def _guard_report(reading) -> tuple[str, dict]:
         return (f"not running (pid {reading.pid} is gone; last heartbeat "
                 f"{reading.age_minutes:.1f} min ago) — nothing is watching this instance, so it will "
                 f"bill until someone stops it", facts)
-    if reading.age_minutes > 5:
+    if reading.age_minutes > GUARD_STALE_MINUTES:
         return (f"running (pid {reading.pid}) but silent for {reading.age_minutes:.1f} min — probably "
                 f"wedged", facts)
     return f"alive (pid {reading.pid}, heartbeat {reading.age_minutes:.1f} min ago)", facts

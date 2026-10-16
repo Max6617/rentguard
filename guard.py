@@ -449,6 +449,12 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
     return findings
 
 
+#: How long a running guard may go quiet before its heartbeat is *stale* as well as running. The
+#: verdict is the process fact; this is the window the human line calls "probably wedged" and the
+#: window the structured ``stale`` flag has always meant.
+GUARD_STALE_MINUTES = 5.0
+
+
 @dataclass
 class HeartbeatReading:
     """What the heartbeat file says about its writer, and whether that writer is still running.
@@ -457,7 +463,9 @@ class HeartbeatReading:
     them as the secondary signal it has always been (Gilbert's ruling, 2026-10-16: *liveness must be a
     process fact, not a timestamp fact*). ``alive`` needs both facts: a guard that has finished is not
     protection even while its process lives, and a pid that is gone is not protection even when the
-    heartbeat is seconds old.
+    heartbeat is seconds old. ``stale`` is the **age** window, and it stays that: a running guard that
+    has been silent for longer than the window is alive *and* stale, which is what a caller gating on
+    protection needs to see (Assay's finding 16, 2026-10-16).
     """
 
     age_minutes: float
@@ -468,6 +476,10 @@ class HeartbeatReading:
     @property
     def alive(self) -> bool:
         return self.running and not self.ended
+
+    @property
+    def stale(self) -> bool:
+        return self.age_minutes > GUARD_STALE_MINUTES or not self.alive
 
 
 def pid_running(pid: int | None, *, kill=os.kill) -> bool:
@@ -482,6 +494,10 @@ def pid_running(pid: int | None, *, kill=os.kill) -> bool:
     - ``OSError`` — Windows raises ``EINVAL`` (errno 22) for a pid with no process, measured on this
       host on 2026-10-16; ``os.kill(pid, 0)`` was also measured *not* to terminate the target there.
       **Gone**, and any other ``OSError`` reads the same way: a probe that failed is not proof of life.
+    - ``OverflowError`` — POSIX raises it for a pid that does not fit a C int (``2 ** 40``), which a
+      hand-edited, truncated or foreign heartbeat can carry. **Gone** (finding 15, 2026-10-16): a read
+      that a corrupt pid can crash is a read that takes `status` and `doctor` with it, and the honest
+      answer for a pid nobody can signal is that there is no proof of life.
 
     ``kill`` is a seam so both platforms' behaviours are testable on either host; production passes
     ``os.kill``. There is one documented limit, in `docs/limitations.md`: on Windows an exited process
@@ -500,18 +516,74 @@ def pid_running(pid: int | None, *, kill=os.kill) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError):
         return False
     return True
 
 
-def heartbeat_reading(path: Path) -> HeartbeatReading | None:
-    """Read the heartbeat, or ``None`` when there is none to read.
+def guard_heartbeat_path(path: Path, guard_id: str) -> Path:
+    """The file one guard writes: ``heartbeat-<guard_id>.json`` beside the project's heartbeat.
 
-    ``None`` means *no reading* — a missing file, unreadable JSON, or no ``at`` stamp — and every
-    caller reads it as *no guard*. A payload with **no pid** is not a missing reading: it is a reading
-    with no proof of life, which is not the same thing as protection.
+    **One file per guard**, because one file cannot carry two guards' liveness. Two guards can watch
+    one instance in one process — an operator's `watch` beside `up`'s wait guard, or two wait guards —
+    where the pid *and* the instance id are shared, so a single file let the one that finished mark the
+    other's reading as `finished` (finding 17, 2026-10-16). The plain ``heartbeat.json`` stays readable
+    as the legacy single-guard name.
     """
+    return path.parent / f"heartbeat-{guard_id}.json"
+
+
+def heartbeat_files(path: Path) -> list[Path]:
+    """Every heartbeat file this project may have written, newest first.
+
+    The legacy single file plus one per guard. Sorted by modification time so a caller that only wants
+    the latest raw payload (a test, a probe) does not have to parse them all.
+    """
+    found = [path] if path.exists() else []
+    found.extend(p for p in path.parent.glob("heartbeat-*.json") if p != path)
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def heartbeat_readings(path: Path, *, kill=None) -> list[HeartbeatReading]:
+    """Every readable heartbeat in this project's set, best first (see ``heartbeat_reading``)."""
+    readings = []
+    for candidate in heartbeat_files(path):
+        reading = _read_one(candidate, kill=kill)
+        if reading is not None:
+            readings.append(reading)
+    return _best_first(readings)
+
+
+def _best_first(readings: list[HeartbeatReading]) -> list[HeartbeatReading]:
+    """Order readings by what a caller asking "is anything watching?" should see first.
+
+    A live, unmarked, fresh guard comes first; then any live one (a wedged guard is still a process);
+    then the newest of whatever is left, so `status` reports `finished` or `not running` rather than
+    nothing when every guard has ended.
+    """
+    def rank(reading: HeartbeatReading) -> tuple[int, float]:
+        if reading.alive:
+            return 0, reading.age_minutes
+        if reading.running and not reading.ended:
+            return 1, reading.age_minutes
+        return 2, reading.age_minutes
+    return sorted(readings, key=rank)
+
+
+def heartbeat_reading(path: Path, *, kill=None) -> HeartbeatReading | None:
+    """The reading `status`, `doctor` and `watch` decide on: the **best** of the guard set.
+
+    ``None`` means *no reading* — no heartbeat file at all, or none readable — and every caller reads
+    it as *no guard*. A live unmarked guard anywhere in the set wins, so one guard finishing cannot
+    hide another that is still watching (finding 17); when none is alive, the newest reading is
+    returned, so a finished or gone guard is still reported as exactly that.
+    """
+    readings = heartbeat_readings(path, kill=kill)
+    return readings[0] if readings else None
+
+
+def _read_one(path: Path, *, kill=None) -> HeartbeatReading | None:
+    """One file, or ``None`` when it is not a readable heartbeat."""
     if not path.exists():
         return None
     try:
@@ -521,10 +593,11 @@ def heartbeat_reading(path: Path) -> HeartbeatReading | None:
         return None
     if not isinstance(payload, dict):
         return None
-    pid = payload.get("pid")
-    pid = pid if isinstance(pid, int) else None
+    raw_pid = payload.get("pid")
+    pid = raw_pid if isinstance(raw_pid, int) else None
+    running = pid_running(pid) if kill is None else pid_running(pid, kill=kill)
     return HeartbeatReading(age_minutes=round((now_utc() - then).total_seconds() / 60.0, 1),
-                            pid=pid, ended=bool(payload.get("ended")), running=pid_running(pid))
+                            pid=pid, ended=bool(payload.get("ended")), running=running)
 
 
 def heartbeat_age_minutes(path: Path) -> float | None:
@@ -537,28 +610,56 @@ def heartbeat_age_minutes(path: Path) -> float | None:
     return None if reading is None else reading.age_minutes
 
 
-def write_heartbeat(path: Path, snap: Snapshot, note: str = "") -> None:
-    """Write a reading, naming the **process** that wrote it and that it has not finished.
+def write_heartbeat(path: Path, snap: Snapshot, note: str = "",
+                    guard_id: str | None = None) -> None:
+    """Write a reading, naming the **process** and the **guard** that wrote it, unmarked.
 
     ``pid`` used to be written as a placeholder (``None``), which is why `status` had nothing but the
-    age to go on and read a finished guard as protection (Gilbert's ruling, 2026-10-16).
+    age to go on and read a finished guard as protection (Gilbert's ruling, 2026-10-16). ``guard_id``
+    is the identity two guards in *one* process do not share: the pid cannot tell them apart, so a mark
+    matched on the pid alone ended a live guard's file (finding 17, 2026-10-16).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(snap)
     payload["note"] = note
     payload["pid"] = os.getpid()
+    payload["guard_id"] = guard_id
     payload["ended"] = False
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _prune_finished_heartbeats(path)
 
 
-def end_heartbeat(path: Path, pid: int | None = None) -> bool:
-    """Mark the heartbeat finished, when it is this process's to mark: ``True`` if it was.
+def _prune_finished_heartbeats(path: Path) -> None:
+    """Remove sibling heartbeat files that have been marked finished and gone quiet.
 
-    A guard that exits cleanly says so, so "finished" and "silent" stop being the same reading. Two
-    guards can share one heartbeat path — an operator's `watch` and `up`'s wait guard — so the **pid**
-    decides whose mark it is, and a file another process wrote is left alone. A missing file is left
-    missing: its absence already reads as *no guard*, and writing a marker there would invent a reading
-    nobody made.
+    One file per guard means a file per guard invocation, so a clean exit's marker would otherwise
+    accumulate for ever. Only files that say they are **ended** and are older than the stale window are
+    removed — a live guard's file is never touched, and a crashed guard's file (a dead pid, no mark)
+    stays, which is evidence worth keeping. Best-effort: a file that cannot be read or removed is left
+    for a caller that can.
+    """
+    for sibling in path.parent.glob("heartbeat-*.json"):
+        if sibling == path:
+            continue
+        reading = _read_one(sibling)
+        if reading is None or not reading.ended or reading.age_minutes <= GUARD_STALE_MINUTES:
+            continue
+        try:
+            sibling.unlink()
+        except OSError:
+            continue
+
+
+def end_heartbeat(path: Path, pid: int | None = None, guard_id: str | None = None) -> bool:
+    """Mark the heartbeat finished, when it is this guard's to mark: ``True`` if it was.
+
+    A guard that exits cleanly says so, so "finished" and "silent" stop being the same reading. The
+    file is marked only when it is **this guard's**: ``guard_id`` is the identity two guards in one
+    process do not share, and the pid covers a file written by another process (a legacy payload with
+    no ``guard_id`` is matched on the pid alone). Two guards can share one heartbeat path — an
+    operator's `watch` and `up`'s wait guard, or two wait guards — and a file another guard wrote is
+    left alone. A missing file is left missing: its absence already reads as *no guard*, and writing a
+    marker there would invent a reading nobody made.
     """
     if not path.exists():
         return False
@@ -569,8 +670,11 @@ def end_heartbeat(path: Path, pid: int | None = None) -> bool:
         return False
     if not isinstance(payload, dict):
         return False
+    owner_id = payload.get("guard_id")
+    if owner_id is not None and owner_id != guard_id:
+        return False
     owner = payload.get("pid")
-    if isinstance(owner, int) and owner != mine:
+    if owner_id is None and isinstance(owner, int) and owner != mine:
         return False
     payload["ended"] = True
     payload["ended_at"] = iso(now_utc())
@@ -620,7 +724,8 @@ class ReleaseGate(threading.Event):
 
 def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
           interval: float = 60.0, log=print, max_iterations: int | None = None,
-          stop_event=None) -> str:
+          stop_event=None, guard_id: str | None = None,
+          heartbeat_path: Path | None = None) -> str:
     """Foreground supervisor. Returns the reason it stopped.
 
     Every iteration re-reads the provider; nothing is carried in from an earlier reading. The only
@@ -638,7 +743,12 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
     cannot be followed by a heartbeat, and the guard returns ``wait-guard-released`` instead of
     reporting a reading taken before the release. A plain ``Event`` or ``None`` keeps the old
     behaviour: check at the top of each iteration, write as usual.
+
+    ``guard_id`` names **this guard** in every heartbeat it writes, and ``heartbeat_path`` is the file
+    it writes to — one file per guard (``guard_heartbeat_path``), because one file cannot carry two
+    guards' liveness (finding 17, 2026-10-16).
     """
+    heartbeat_path = heartbeat_path or cfg.heartbeat_path
     idle_from_events = 0.0
     started = now_utc()
     iterations = 0
@@ -648,13 +758,15 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
 
         The check and the write are one step when the release handle carries a gate
         (``ReleaseGate.attempt``), so a guard released during a slow provider read — the case a
-        bounded join could not close — cannot land a heartbeat afterwards.
+        bounded join could not close — cannot land a heartbeat afterwards. The write names this guard
+        (``guard_id``), so a second guard in the same process is not mistaken for it later.
         """
         gate = getattr(stop_event, "attempt", None)
         if gate is None:
-            write_heartbeat(cfg.heartbeat_path, snap, note=note)
+            write_heartbeat(heartbeat_path, snap, note=note, guard_id=guard_id)
             return True
-        return bool(gate(lambda: write_heartbeat(cfg.heartbeat_path, snap, note=note)))
+        return bool(gate(lambda: write_heartbeat(heartbeat_path, snap, note=note,
+                                                 guard_id=guard_id)))
 
     while True:
         if stop_event is not None and stop_event.is_set():

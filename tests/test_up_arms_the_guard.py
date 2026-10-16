@@ -29,7 +29,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rentguard import cli  # noqa: E402
+from rentguard import cli, guard  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.guard import ReleaseGate  # noqa: E402
@@ -105,7 +105,7 @@ class ACrashLoopIsWatched(UpCase):
                       f"(defect 2)\n{text}")
         self.assertIn("per-run cap", text,
                       f"the wrong bound fired, so the guard's numbers are not the row's:\n{text}")
-        self.assertTrue(self.cfg.heartbeat_path.exists(),
+        self.assertTrue(guard.heartbeat_files(self.cfg.heartbeat_path),
                         f"no guard heartbeat was written while `up` waited, so nothing was watching "
                         f"the cap:\n{text}")
         self.assertIn(("fake-1", "stop"), provider.actions,
@@ -159,8 +159,8 @@ class AReleasedWaitGuardWritesNothing(UpCase):
         time.sleep(0.2)                       # the guard is inside its first, slow read
         cli._release_wait_guard(handle)       # returns only when that read is over
 
-        self.assertFalse(self.cfg.heartbeat_path.exists(),
-                         "a released wait guard stamped a heartbeat after `up` had released it: "
+        self.assertFalse(guard.heartbeat_files(self.cfg.heartbeat_path),
+                         "a released wait guard stamped a heartbeat file after `up` had released it: "
                          "`status` and `doctor` read a fresh heartbeat as protection armed")
 
     def test_the_heartbeat_is_written_while_the_guard_is_armed(self) -> None:
@@ -171,11 +171,11 @@ class AReleasedWaitGuardWritesNothing(UpCase):
         handle = cli._start_wait_guard(self.cfg, provider, self.ledger, "pod-A",
                                        log=lambda *_: None, interval=0.05)
         deadline = time.monotonic() + 5.0
-        while not self.cfg.heartbeat_path.exists() and time.monotonic() < deadline:
+        while not guard.heartbeat_files(self.cfg.heartbeat_path) and time.monotonic() < deadline:
             time.sleep(0.02)
         cli._release_wait_guard(handle)
 
-        self.assertTrue(self.cfg.heartbeat_path.exists(),
+        self.assertTrue(guard.heartbeat_files(self.cfg.heartbeat_path),
                         "an armed wait guard wrote no heartbeat, so nothing was watching")
 
 
