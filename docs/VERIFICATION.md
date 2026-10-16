@@ -101,9 +101,13 @@ rentguard 0.1.0
 
 ```console
 $ rentguard init
-wrote C:\Users\besen\.dsh\bot\workspace\doc-fresh\rentguard.toml
+wrote <workspace>\doc-fresh\rentguard.toml
 next           : `rentguard doctor`, then `rentguard up --purpose ...`
 ```
+
+*(Host paths in the transcripts below are elided to `<workspace>` — the runs were made in a scratch
+checkout of that name. Nothing else in the output is changed; the elision exists so a public page does not
+carry a machine's layout, and it is marked here rather than done quietly.)*
 
 The generated file writes the defaults: `cap_usd = 25.0`, `per_run_cap_usd = 5.0`,
 `max_hours_per_run = 6.0`, `idle_minutes = 10`, `gpu_preference = [...4090, L40S, A6000]`, and
@@ -115,8 +119,8 @@ path reads `volume_id`; at `af1ba5a` it writes `volume_id` and `volume_mount` (s
 ```console
 $ rentguard doctor
 rentguard      : v0.1.0
-config         : C:\Users\besen\.dsh\bot\workspace\doc-fresh\rentguard.toml
-state dir      : C:\Users\besen\.dsh\bot\workspace\doc-fresh\.rentguard
+config         : <workspace>\doc-fresh\rentguard.toml
+state dir      : <workspace>\doc-fresh\.rentguard
 provider       : runpod
 api key        : MISSING ($DSH_SECRET_RUNPOD_API_KEY)
 spend recorded : $0.00 of a $25.00 cap (0 run(s))

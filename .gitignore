@@ -41,3 +41,7 @@ venv/
 *.orig
 *.rej
 *~
+
+# Held on the machine that ran them, not published: these captures are UTF-16 transcripts of
+tests/_artefacts/assay_cli_fake_probe_2026-10-14.txt
+tests/_artefacts/assay_money_paths_2026-10-14.txt
