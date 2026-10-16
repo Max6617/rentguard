@@ -22,6 +22,7 @@ import contextlib
 import io
 import json
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -128,9 +129,21 @@ class UpNeedsMoreThanOneAliveSample(unittest.TestCase):
 
         Everything above the seam — `candidates`, `create`, `wait_running`, `get` — is the real
         code, so a test that counts a `create` call counts the one the tool would really make.
+
+        **Only the main thread advances the script** (fixed 2026-10-16). `up` arms a wait guard, and
+        that guard polls `get` from its own thread, so a shared cursor let the guard's reads consume
+        this script's samples and the main path saw a different sequence every run: measured under the
+        gate's tracer, 1 run in 10 ended with the stop confirmation reading a 500 ("could not read the
+        account"), where the correct behaviour — leave the row open so the spend stays visible — is the
+        opposite of what this case asserts. A read from the guard thread returns the machine's
+        **latest main-thread reading** without moving the cursor, and the sequence's last sample
+        **holds** once the list is exhausted (the machine keeps the state it ended in), so the main
+        path sees exactly the samples above whatever the interleaving.
         """
         state = {"gets": 0}
         calls: list[tuple[str, str]] = []
+        lock = threading.Lock()
+        main = threading.main_thread()
 
         def script(method: str, path: str, body=None, params=None, retries: int = 3):
             calls.append((method, path))
@@ -142,12 +155,15 @@ class UpNeedsMoreThanOneAliveSample(unittest.TestCase):
             if method == "POST" and path.endswith("/action"):
                 return {}
             if method == "GET" and path == "/v2/pods/pod-1":
-                if state["gets"] >= len(samples):
-                    # The machine is gone before it ever settled: the provider says so.
-                    raise ProviderError("GET /v2/pods/pod-1 -> 500: the machine disappeared")
-                sample = samples[state["gets"]]
-                state["gets"] += 1
-                return sample
+                with lock:
+                    if threading.current_thread() is main:
+                        index = min(state["gets"], len(samples) - 1)
+                        state["gets"] += 1
+                    else:
+                        # The guard's own poll: the machine as the main path last saw it, and the
+                        # cursor does not move, so this thread cannot change the script.
+                        index = max(0, state["gets"] - 1)
+                return samples[index]
             return {}
 
         provider = RunPod("test-key-not-real")
@@ -174,16 +190,23 @@ class UpNeedsMoreThanOneAliveSample(unittest.TestCase):
 
     def test_up_does_not_report_success_after_one_alive_sample(self):
         """Sequence: the pod reports RUNNING, uptime 3 min, ports set (one usable reading), then
-        RUNNING with uptime 0 and null ports for every later reading, and finally it is gone.
+        RUNNING with uptime 0 and null ports for every later reading, and finally **EXITED** — the stop
+        `up` sends when it refuses the rental, honoured by the account.
 
         Effect required: `up` does not report success, and no *open* row claims that machine. The
         row that was opened before the machine existed is closed and names the machine, so the
         seconds it did bill are recorded — the rental is not believed in, and the cost is not
         hidden either (which is the other way this defect could be fixed wrongly).
+
+        The EXITED tail is what the account's own witness needs (`_confirm_stopped`), and it replaced a
+        500: a transport that went *unreadable* after its samples made the stop confirmation unable to
+        agree, so the row was correctly left **open** and this case failed 1 run in 10 under the gate's
+        tracer. A machine that disappears unreadably is a different case, with its own test.
         """
         alive = pod_payload(status="RUNNING", uptime=180, ports=True)
         crash = pod_payload(status="RUNNING", uptime=0, ports=False)
-        provider, calls = self.transport([alive, crash, crash, crash])
+        stopped = pod_payload(status="EXITED", uptime=0, ports=False)
+        provider, calls = self.transport([alive, crash, crash, stopped])
 
         code, out = self.invoke_up(provider)
 
