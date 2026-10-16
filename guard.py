@@ -445,16 +445,26 @@ def heartbeat_age_minutes(path: Path) -> float | None:
 
 
 def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
-          interval: float = 60.0, log=print, max_iterations: int | None = None) -> str:
+          interval: float = 60.0, log=print, max_iterations: int | None = None,
+          stop_event=None) -> str:
     """Foreground supervisor. Returns the reason it stopped.
 
     Every iteration re-reads the provider; nothing is carried in from an earlier reading. The only
     state that accumulates is how long the site of the machine has been idle.
+
+    ``stop_event`` is an optional `threading.Event`-like object (``is_set()`` and ``wait(timeout)``):
+    the loop ends when it is set, and waits on it instead of sleeping so the caller can end the loop
+    promptly. It exists for `up`'s wait-guard (B19, 2026-10-16): a thread watching the machine while
+    `up` waits for it to become usable must stop — and be **joined** — before `up` returns, because a
+    heartbeat left behind by a guard that dies with the process is exactly the "protection believed
+    armed" shape this project keeps finding. It stops nothing on the way out; the reason says so.
     """
     idle_from_events = 0.0
     started = now_utc()
     iterations = 0
     while True:
+        if stop_event is not None and stop_event.is_set():
+            return "wait-guard-released"
         iterations += 1
         try:
             pod = provider.get(instance_id)
@@ -522,8 +532,13 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
         if max_iterations is not None and iterations >= max_iterations:
             return "guard-iteration-limit"
         if interval > 0:
-            import time
-            time.sleep(interval)
+            if stop_event is not None:
+                # Woken rather than slept: the caller sets it to end this loop and then joins the
+                # thread, so a released guard is finished before the caller returns.
+                stop_event.wait(interval)
+            else:
+                import time
+                time.sleep(interval)
 
 
 def snapshot_fallback(cfg: Config, ledger: Ledger) -> Snapshot:

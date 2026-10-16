@@ -283,13 +283,14 @@ class UpBranches(BranchCase):
 
 class DownBranches(BranchCase):
     def test_down_reports_a_machine_it_could_not_stop(self):
-        """Sequence: the stop call fails (a provider 500). Effect: the operator is told the machine
-        may still be billing, and the row is still closed at its real cost.
+        """Sequence: the stop call fails (a provider 500) and the machine stays RUNNING.
 
-        `cmd_watch` wraps this call in a `try` (cli.py:880); `cmd_down` does not (cli.py:1012), and
-        the ledger close comes after it — so an exception here leaves the spend hidden in an open
-        row while the machine keeps billing.
+        Effect required (Gilbert's ruling, 2026-10-16): the operator is told, the exit is non-zero,
+        and the **row stays open** — a stop call the provider did not honour is not a stopped
+        machine, and closing the row would make the ledger say the window is over while the pod
+        bills (defect 1, B19). The open row is what keeps the spend counted.
         """
+        self.cfg.budget.stop_confirm_s = 0.2
         self.write_state({"instance_id": "pod-A", "provider": "fake"})
         self.open_run(hours_ago=1.0)
         fake = FakeProvider()
@@ -298,11 +299,12 @@ class DownBranches(BranchCase):
 
         code, out = self.invoke(cli.cmd_down, cli_args("down"), fake)
 
-        self.assertIsNone(self.ledger.open_run(),
-                          "a refused stop escaped `down` before the ledger row was closed: the "
-                          "machine is (probably) still billing and its cost is not in the ledger."
-                          f"\noutput:\n{out}")
+        self.assertIsNotNone(self.ledger.open_run(),
+                             "a refused stop closed the row while the machine was still billing: the "
+                             f"ledger now says the window is over.\noutput:\n{out}")
+        self.assertNotEqual(code, 0, f"a refused stop exited 0.\noutput:\n{out}")
         self.assertIn("could not stop", out.lower(), f"the failed stop is not reported.\n{out}")
+        self.assertIn("NOT closed", out, f"the row's state is not stated.\n{out}")
 
     def test_down_says_a_volume_survives_the_stop(self):
         """Effect: the difference between a container disk and a network volume is stated, because

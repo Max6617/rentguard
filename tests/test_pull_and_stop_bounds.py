@@ -143,9 +143,12 @@ class TheStopIsBounded(BoundCase):
         """Sequence: the ordinary stop never returns (a hung socket), `stop_timeout_s = 0.25`.
 
         Effect required: one call to `provider.force_stop` is made, `down` does not wait for the
-        blocked call, the row is closed, and the machine is reported stopped.
+        blocked call, and — since the escalation is what actually stops the machine here — the account
+        then agrees, so the row closes and the command is clean. `stop_confirm_s` is small because a
+        second bound now gates the close (defect 1, B19: a stop *call* is not a stopped machine).
         """
         self.cfg.budget.stop_timeout_s = 0.25
+        self.cfg.budget.stop_confirm_s = 2.0
         self.cfg.artefacts.pull = []          # keep the pull out of this case
         calls: list[tuple[str, str]] = []
 
@@ -155,6 +158,7 @@ class TheStopIsBounded(BoundCase):
 
         def force_stop(instance_id):
             calls.append(("force_stop", instance_id))
+            self.provider.instances[instance_id].status = "EXITED"
 
         self.provider.action = blocking_action          # type: ignore[method-assign]
         self.provider.force_stop = force_stop           # type: ignore[method-assign]
@@ -166,29 +170,33 @@ class TheStopIsBounded(BoundCase):
         self.assertIn(("force_stop", "pod-A"), calls,
                       f"the provider's own stop endpoint was never called: {calls}\n{out}")
         self.assertIsNone(self.ledger.open_run(), f"the row was left open.\n{out}")
-        self.assertEqual(code, 0, f"an escalated stop was reported as a failure.\n{out}")
+        self.assertEqual(code, 0, f"an escalated stop that worked was reported as a failure.\n{out}")
 
-    def test_a_refused_stop_still_closes_this_roots_row(self):
-        """Sequence: the provider refuses the stop (a 500 on the action call) and the escalation is
-        refused too. Effect required: the ledger row is closed anyway and the exit is non-zero.
+    def test_a_refused_stop_leaves_the_row_open_and_the_spend_visible(self):
+        """Sequence: the provider refuses the stop (a 500 on the action call), the escalation is
+        refused too, and the machine stays RUNNING.
 
-        The row is this root's record of what was spent; a machine that will not stop is exactly
-        when losing the row would hide the bill, so the close must not sit behind a `return`.
+        Effect required (Gilbert's ruling, 2026-10-16 — it supersedes the earlier "close the row
+        anyway"): the row is **left open**, because a stop call the provider did not honour is not a
+        stopped machine. An open row is what keeps the spend counted: it accrues, `doctor` prints it,
+        and the cap-check and the guard both see it. The exit is non-zero and the refusal is named.
         """
         self.cfg.artefacts.pull = []
         self.cfg.budget.stop_timeout_s = 1.0
+        self.cfg.budget.stop_confirm_s = 0.3
         self.provider.fail_actions = {"stop"}     # ordinary stop and the inherited force_stop
 
         code, out, elapsed = self.down()
 
-        self.assertIsNone(self.ledger.open_run(),
-                          "a refused stop skipped the ledger close: the spend stays hidden in an "
-                          f"open row.\n{out}")
+        self.assertIsNotNone(self.ledger.open_run(),
+                             "a refused stop closed the row while the machine was still RUNNING: the "
+                             "ledger says the window is over and the machine is billing.\n" + out)
         self.assertNotEqual(code, 0, f"a refused stop exited 0.\n{out}")
         self.assertIn("could not stop", out.lower(),
                       f"the refusal is not reported.\n{out}")
-        self.assertIsNotNone(self.ledger.entries()[0].get("estimated_usd"),
-                             "the closed row has no cost")
+        self.assertGreater(self.ledger.live_usd(), 0.0,
+                           "the refused stop's spend stopped accruing: the row is not counting it")
+        self.assertIn("NOT closed", out, f"the output does not say the row was left open.\n{out}")
 
 
 class TheBoundsAreConfigurable(unittest.TestCase):

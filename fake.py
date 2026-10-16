@@ -36,6 +36,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -91,10 +92,16 @@ class FakeInstance:
         return self.uptime_seconds + extra
 
     def payload(self, now: float | None = None) -> dict:
-        """The canonical instance shape, plus the raw ``ssh`` block a provider would return."""
+        """The canonical instance shape, plus the raw ``ssh`` block a provider would return.
+
+        ``createdAt`` is what RunPod reports (an ISO-8601 instant), derived here from **this fake's
+        monotonic clock**: the age is real, so the payload converts it to a wall-clock instant rather
+        than pretending a monotonic number is one. It is absent when the machine's creation was never
+        recorded, which is the shape `adopt`'s estimate check must leave alone.
+        """
         clock = self._now() if now is None else now
         uptime = self.seconds_elapsed(clock)
-        return {
+        payload = {
             "id": self.id,
             "name": self.id,
             "status": self.status,
@@ -112,6 +119,11 @@ class FakeInstance:
                 "proxy": None,
             },
         }
+        if self.created_at:
+            age = max(0.0, clock - self.created_at)
+            created = datetime.now(timezone.utc) - timedelta(seconds=age)
+            payload["createdAt"] = created.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return payload
 
 
 class FakeProvider(Provider):

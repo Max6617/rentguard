@@ -47,7 +47,8 @@ import subprocess
 import sys
 import tarfile
 import threading
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import __version__
@@ -462,6 +463,9 @@ def _template(cfg: Config) -> str:
         f"run_timeout_s = {b.run_timeout_s:g}      # one `run` may take this long, then its session is",
         "#                                killed and reported as bounded; 0 means no bound. It exists",
         "#                                because a dropped session never returns at all",
+        f"stop_confirm_s = {b.stop_confirm_s:g}     # `down` waits this long for the account to stop",
+        "#                                listing the machine as billing before it refuses to call the",
+        "#                                window closed; the row is left open so the spend keeps counting",
         "# balance_usd would be an OPTIONAL local assumption, never a reading. No provider exposes a",
         "# reliable balance, so rentguard never reports one: it reports spend against your cap.",
         "",
@@ -1177,6 +1181,7 @@ def cmd_up(args) -> int:
             emit(action="refused", reason="create-failed", attempts=errors, gpu_preference=offered)
             return 3
 
+        wait_guard = None
         try:
             run = ledger.finalise(provisional["run_id"], instance_id=pod["id"], gpu_id=chosen,
                                   rate_usd_per_hour=float(pod.get("cost") or 0.0)
@@ -1200,6 +1205,10 @@ def cmd_up(args) -> int:
                           "gpu_id": chosen, "cloud": _rp(cfg, "cloud")})
             _write_state(cfg, state)
             note(f"instance       : {pod.get('id')}  ${pod.get('cost')}/h")
+            # Armed here, before the wait, and not after `up` returns (B19, 2026-10-16): the row now
+            # names the machine, so a guard can bind to it, and the caps are the guard's to enforce.
+            # A machine that never becomes usable is the state that needs a bound most.
+            wait_guard = _start_wait_guard(cfg, provider, ledger, pod["id"], log=note)
             pod = provider.wait_running(pod["id"], log=note)
 
             # Two consecutive alive readings, not one. `wait_running` returns the first payload that
@@ -1211,6 +1220,7 @@ def cmd_up(args) -> int:
             # bill are closed out rather than voided or hidden.
             confirmed = provider.get(pod["id"]) or pod
             if not is_alive(confirmed):
+                _release_wait_guard(wait_guard)
                 runtime = confirmed.get("runtime") or {}
                 note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is "
                      f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
@@ -1228,10 +1238,15 @@ def cmd_up(args) -> int:
                                                   "status": confirmed.get("status")},
                      stopped=True, run=_closed_dict(closed))
                 return 1
+            # The machine is usable; the operator arms the real guard from here.
+            _release_wait_guard(wait_guard)
             pod = confirmed
         except BaseException:
             # Interrupted, or the wait failed: the row is already open (that is the invariant), and
-            # when the process is still alive the better outcome is a machine that stops too.
+            # when the process is still alive the better outcome is a machine that stops too. The
+            # wait guard is released on the way out for the same reason it exists: a heartbeat from a
+            # guard nobody can name is worse than no heartbeat.
+            _release_wait_guard(wait_guard)
             _abandon_created(cfg, provider, ledger, pod)
             raise
 
@@ -1509,18 +1524,41 @@ def cmd_down(args) -> int:
                      "the default because a machine that keeps billing is the worse loss.")
 
         stop_failed = False
+        still_billing = False
+        confirm_detail = ""
         if live:
             stopped_ok, detail = _stop_machine(cfg, provider, pod)
             if stopped_ok:
                 note(f"stopping {pod['id']}: {detail}")
             else:
-                # The shutdown-path failure class, second instance: anything that raises between the
-                # decision and the ledger close must not skip the close. The row is closed anyway,
-                # and the exit code is non-zero.
+                # The call failed; the machine may or may not have stopped. Nothing is concluded
+                # here — the account is asked below.
                 stop_failed = True
                 note(f"could not stop {pod['id']}: {detail}")
-                note("the row is still closed below, so the cost is recorded; the machine may still "
-                     "be billing — check `rentguard doctor`")
+            # A stop call that returns is not a machine that stopped (defect 1, B19): the account's
+            # own listing decides, and until it agrees the machine can bill, so the row stays open
+            # and the spend keeps being recorded.
+            bound = float(getattr(cfg.budget, "stop_confirm_s", 30.0) or 0.0)
+            confirmed, confirm_detail = _confirm_stopped(provider, pod["id"], bound=bound)
+            if confirmed:
+                note(f"confirmed      : {confirm_detail}")
+            else:
+                still_billing = True
+                note(f"NOT closed     : {confirm_detail}. The ledger row is left OPEN so the cost "
+                     f"keeps being recorded and the cap keeps seeing it; stop the machine from the "
+                     f"provider console, or run `rentguard down` again once it stops.")
+                note(f"note           : the bound is [budget] stop_confirm_s "
+                     f"({cfg.budget.stop_confirm_s:g}s); it does not stop the machine, it decides "
+                     f"whether this command may call the window closed")
+        if still_billing:
+            note(f"open run       : {(_open_run_dict(ledger) or {}).get('run_id')}  accruing")
+            emit(action="still-billing", stopped=False, still_billing=True,
+                 instance={"id": pod.get("id"), "status": status},
+                 detail=confirm_detail,
+                 open_run=_open_run_dict(ledger),
+                 pull_exit_code=pull_exit,
+                 total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
+            return 1
         row = ledger.close(note="down", instance_status=status)
         if row:
             note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
@@ -1577,7 +1615,52 @@ def _guard_stopped_a_machine(reason: str | None) -> bool:
     """
     if not reason or reason.startswith("provider-error"):
         return False
-    return reason not in ("guard-iteration-limit", "instance gone", "already stopped")
+    return reason not in ("guard-iteration-limit", "instance gone", "already stopped",
+                          "wait-guard-released")
+
+
+def _start_wait_guard(cfg: Config, provider: Provider, ledger: Ledger, instance_id: str, *,
+                      log=print, interval: float = 15.0) -> tuple[threading.Thread, threading.Event]:
+    """Watch the machine while `up` waits for it to become usable: a daemon guard thread.
+
+    B19's invariant: *a window cannot bill without a guard watching it, including when `up` never
+    returns.* The caller cannot arm before `up` returns (that is the driver's ordering, and it is
+    right for defect 16 — a guard armed earlier binds to the previous, dead instance), and the caps
+    are enforced by the guard, so the machine that bills and never becomes usable is exactly the one
+    that had no bound (measured 2026-10-16: `up` waited, the pod was RUNNING with no uptime and no
+    ports, and nothing was watching; the row was closed afterwards at a cost nobody capped).
+
+    Returns ``(thread, release)``: `up` sets ``release`` and **joins** the thread before it returns,
+    so no guard keeps writing heartbeats (or a ledger row) after the command that armed it is gone —
+    a guard the caller cannot name is the "protection believed armed" shape this project keeps
+    finding. The thread is a daemon as well, so it can never keep the process alive.
+
+    It is protection for the wait, not a replacement for the operator's own `rentguard watch`: the
+    closing lines of `up` still say that until something is watching, only they are.
+    """
+    release = threading.Event()
+
+    def run_guard() -> None:
+        try:
+            guard_watch(cfg, provider, ledger, instance_id=instance_id, interval=interval, log=log,
+                        stop_event=release)
+        except Exception as exc:  # noqa: BLE001 - a guard that dies must not take `up` with it
+            log(f"wait guard  : stopped ({type(exc).__name__}: {exc}); `up` continues — arm "
+                f"`rentguard watch` once the machine is usable")
+
+    thread = threading.Thread(target=run_guard, name=f"rentguard-wait-guard-{instance_id}",
+                              daemon=True)
+    thread.start()
+    return thread, release
+
+
+def _release_wait_guard(guard: tuple[threading.Thread, threading.Event] | None) -> None:
+    """End the wait guard and wait for it, so it is finished before `up` returns."""
+    if guard is None:
+        return
+    thread, release = guard
+    release.set()
+    thread.join(5.0)
 
 
 def cmd_watch(args) -> int:
@@ -1649,6 +1732,34 @@ def cmd_watch(args) -> int:
     return 0
 
 
+def _instance_created_at(pod: dict) -> datetime | None:
+    """When the provider says this machine was created, or ``None`` when it does not say.
+
+    RunPod's pod payload carries ``createdAt`` as an ISO-8601 instant (measured on a live pod,
+    2026-10-16: `2026-10-16T10:42:54.019Z`); the fake carries the same key. ``None`` means the
+    provider did not say, and a check that cannot be made must not invent an answer — the caller
+    proceeds and the estimate stays what it is, an estimate.
+    """
+    raw = pod.get("createdAt")
+    if raw is None:
+        raw = pod.get("created_at")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+#: How far an `--uptime-hours` estimate may reach before the provider's creation instant before it is
+#: refused. Clock skew and rounding are real; minutes of error are not skew (the measured over-record
+#: was 6m32s).
+UPTIME_ESTIMATE_SLACK_S = 60.0
+
+
 def cmd_adopt(args) -> int:
     """Attach a ledger row to an instance that is already running.
 
@@ -1678,6 +1789,23 @@ def cmd_adopt(args) -> int:
             # longer reports how long it ran. The source of the number is printed.
             uptime = float(args.uptime_hours) * 3600.0
             note(f"note           : uptime given as {args.uptime_hours} h, not read from the provider")
+            # An estimate must not claim time the machine cannot have had. Measured 2026-10-16: an
+            # estimate backdated a start to 15:16:59 for a pod created 15:23:31, over-recording about
+            # $0.23 — the ledger then said the machine had billed for time before it existed.
+            created_at = _instance_created_at(pod)
+            implied_start = now_utc() - timedelta(seconds=uptime)
+            if (created_at is not None
+                    and implied_start < created_at - timedelta(seconds=UPTIME_ESTIMATE_SLACK_S)):
+                note(f"error: --uptime-hours {args.uptime_hours} puts the start at "
+                     f"{iso(implied_start)}, which is before the provider says this machine was "
+                     f"created ({iso(created_at)}). A row starting there would record time the "
+                     f"machine did not exist for. Read the uptime from the provider, or pass an "
+                     f"estimate inside the machine's life (at most "
+                     f"{(now_utc() - created_at).total_seconds() / 3600.0:.4f} h here).")
+                emit(adopted=False, reason="uptime-precedes-creation", instance_id=pod.get("id"),
+                     status=status, started_at=iso(implied_start), created_at=iso(created_at),
+                     uptime_hours=args.uptime_hours)
+                return 2
         elif uptime <= 0 and status in ("EXITED", "TERMINATED"):
             # No silent zero. An instance that has stopped reports uptime 0, so a row opened now
             # would start the clock at this moment and record ≈$0 for a machine that really ran.
@@ -1754,6 +1882,39 @@ def _ssh_to_file(argv: list[str], target: str, remote: str, *, sink, timeout: fl
         proc.kill()
         proc.wait()
         return -1, True
+
+
+def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
+                     interval: float = 2.0) -> tuple[bool, str]:
+    """Poll the account until it stops listing this instance as billing: ``(confirmed, detail)``.
+
+    A stop **call** returning is not a machine that stopped. Measured 2026-10-16: `down` printed
+    `run closed …` and exited 0 while the pod stayed RUNNING for minutes, and `doctor` showed a live
+    machine with no row against it — the ledger said the window was over and the machine was billing
+    (defect 1, B19). So the account's own listing decides: ``EXITED``, ``TERMINATED`` or gone
+    (``None``) means it can no longer bill, and anything else means it still can.
+
+    ``None`` from the provider is "gone" here, not "could not ask": `_pod` has already shown the
+    instance to this root, so absence from the account is an answer, while a provider that raises is
+    reported as unverified (`confirmed=False`) because a stop nobody could check is not a stop.
+    """
+    deadline = time.monotonic() + max(0.0, bound)
+    last = "unknown"
+    while True:
+        try:
+            pod = provider.get(instance_id)
+        except ProviderError as exc:
+            return False, f"the account could not be read to confirm the stop ({exc})"
+        if pod is None:
+            return True, f"{instance_id} is gone from the account"
+        last = str(pod.get("status") or "UNKNOWN").upper()
+        if last not in LIVE_STATUSES:
+            return True, f"{instance_id} is {last}"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, (f"{instance_id} is still {last} after {bound:g}s "
+                           f"([budget] stop_confirm_s)")
+        time.sleep(min(interval, remaining))
 
 
 def _stop_machine(cfg: Config, provider: Provider, pod: dict) -> tuple[bool, str]:

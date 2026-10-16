@@ -149,7 +149,12 @@ class AdoptNoSilentZero(SurfaceCase):
 
     def test_adopt_accepts_an_explicit_uptime_for_an_exited_machine(self):
         fake = FakeProvider(rate_usd_per_hour=0.59)
-        fake.add("pod-gone", status="EXITED", uptime_seconds=0.0, rate_usd_per_hour=0.59)
+        # The machine has to have existed for the hour being claimed: since 2026-10-16 `adopt`
+        # refuses an estimate that reaches back before the provider's own creation instant (defect 3,
+        # B19 — an estimate backdated a first row to before its pod was created). Its clock is
+        # monotonic, so the age is given in its own units and its payload turns that into `createdAt`.
+        fake.add("pod-gone", status="EXITED", uptime_seconds=0.0, rate_usd_per_hour=0.59,
+                 created_at=FakeProvider._now() - 7200.0)
 
         text, structured, is_error = self.dispatch(
             "rentguard_adopt", fake, {"instance_id": "pod-gone", "uptime_hours": 1.0})

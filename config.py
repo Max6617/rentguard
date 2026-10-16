@@ -37,6 +37,12 @@ class Budget:
     #: 2026-10-15, `run --json` on the community route hung past 120 s while the machine billed and
     #: nothing ran. A legitimate job that needs longer sets this higher.
     run_timeout_s: float = 3600.0
+    #: How long `down` waits for the account to stop listing a machine as billing before it refuses
+    #: to call the window closed. A stop call that returns is not a machine that stopped: measured
+    #: 2026-10-16, `down` printed `run closed …`, exited 0, and the pod stayed RUNNING for minutes
+    #: while `doctor` showed it live and unrecorded. The row stays open in that case, so the spend
+    #: keeps being recorded and the cap keeps seeing it.
+    stop_confirm_s: float = 30.0
 
     def __post_init__(self) -> None:
         if self.cap_usd <= 0:
@@ -51,6 +57,8 @@ class Budget:
             raise ConfigError("budget.idle_minutes must be >= 0")
         if self.run_timeout_s < 0:
             raise ConfigError("budget.run_timeout_s must be >= 0 (0 means: do not bound a run)")
+        if self.stop_confirm_s < 0:
+            raise ConfigError("budget.stop_confirm_s must be >= 0")
 
 
 @dataclass
