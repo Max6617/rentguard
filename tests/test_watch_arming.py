@@ -33,8 +33,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from rentguard import cli  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
-from rentguard.ledger import Ledger  # noqa: E402
+from rentguard.ledger import Ledger, now_utc  # noqa: E402
+from rentguard.provider import ProviderError  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
+
+
+class FlipsAfterArming(FakeProvider):
+    """RUNNING for the arming read, then whatever the machine really does next.
+
+    That ordering is the shape the frame window hit: the guard is armed while the pod is live
+    (defect 16's rule requires a live instance), and only the *poll* sees a machine that has since
+    stopped.
+    """
+
+    def __init__(self, *args, then: str = "EXITED", raises: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reads = 0
+        self.then = then
+        self.raises = raises
+
+    def get(self, instance_id):
+        self.reads += 1
+        if self.reads > 1:
+            if self.raises:
+                raise ProviderError("the provider is unreachable")
+            pod = super().get(instance_id)
+            return None if pod is None else {**pod, "status": self.then}
+        return super().get(instance_id)
 
 
 class ArmingCase(unittest.TestCase):
@@ -62,6 +87,61 @@ class ArmingCase(unittest.TestCase):
         except ValueError:
             document = {"_unparseable": text}
         return code, text + err.getvalue(), document
+
+
+class AStopIsOnlyReportedWhenItHappened(ArmingCase):
+    """`cmd_watch` printed `the guard stopped the machine: already stopped` and emitted
+    `stopped: true` for a machine it found already stopped (defect 23; the guard's own line in the
+    frame window was `guard finished: already stopped`)."""
+
+    def arm_and_poll(self, provider, *, minutes_ago: float = 0.0) -> tuple[int, str, dict]:
+        from datetime import timedelta
+        self.write_state({"instance_id": "pod-A"})
+        self.ledger.open(purpose="probe", provider="fake", instance_id="pod-A",
+                         gpu_id="Fake GPU 24GB", rate_usd_per_hour=2.0,
+                         started_at=now_utc() - timedelta(minutes=minutes_ago))
+        return self.watch(provider, "--once")
+
+    def test_a_machine_already_stopped_is_not_reported_as_stopped(self) -> None:
+        provider = FlipsAfterArming(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+
+        code, text, document = self.arm_and_poll(provider)
+
+        self.assertFalse(document.get("stopped", True),
+                         f"a machine the guard did not stop was reported as stopped: {document}")
+        self.assertNotIn("the guard stopped the machine", text,
+                         f"the summary claims a stop that did not happen:\n{text}")
+        self.assertIn("already stopped", text.lower(),
+                      f"the output does not say what it found:\n{text}")
+        self.assertNotIn(("pod-A", "stop"), provider.actions,
+                         "the guard called stop on a machine that was already stopped")
+
+    def test_a_provider_error_is_not_reported_as_a_stop(self) -> None:
+        provider = FlipsAfterArming(rate_usd_per_hour=2.0, raises=True)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+
+        code, text, document = self.arm_and_poll(provider)
+
+        self.assertFalse(document.get("stopped", True),
+                         f"a guard that could not read the provider claimed a stop: {document}")
+        self.assertNotIn("the guard stopped the machine", text,
+                         f"an unreadable provider was reported as a stop:\n{text}")
+        self.assertIn("provider", text.lower(), f"the failure is not named:\n{text}")
+
+    def test_a_real_stop_is_still_reported_as_stopped(self) -> None:
+        """The control: the field stays true when the guard really did stop the machine."""
+        self.cfg.budget.per_run_cap_usd = 0.10     # five minutes at $2/h is already over it
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+
+        code, text, document = self.arm_and_poll(provider, minutes_ago=5.0)
+
+        self.assertTrue(document.get("stopped"), f"a real stop was not reported: {document}")
+        self.assertIn(("pod-A", "stop"), provider.actions,
+                      f"the guard did not stop an over-cap machine:\n{text}")
+        self.assertIn("per-run cap", document.get("reason", "") or "",
+                      f"the reason is not the cap: {document}")
 
 
 class AStoppedInstanceIsNotArmed(ArmingCase):

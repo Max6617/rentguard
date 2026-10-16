@@ -150,16 +150,23 @@ def emit(**fields) -> None:
 
 
 def note(text: str) -> None:
-    """Human-readable output that must not corrupt a JSON document.
+    """Human-readable output that must not corrupt a JSON document, **flushed as it is written**.
 
-    With ``--json``, stdout carries exactly one JSON document and nothing else, so the prose a
-    person would read goes to stderr. Without ``--json`` both go to stdout, as before. A machine
-    that asked for JSON must be able to ``json.loads`` the whole of stdout.
+    With ``--json``, stdout carries exactly one JSON document and nothing else, so the prose a person
+    would read goes to stderr. Without ``--json`` both go to stdout, as before. A machine that asked
+    for JSON must be able to ``json.loads`` the whole of stdout.
+
+    ``flush=True`` because these lines are how a live run is watched: with stdout redirected to a
+    file — `python -m rentguard.cli watch > guard.log`, which is how both window roots logged their
+    guards — Python block-buffers it, so the log stayed **empty for the whole window** and appeared
+    only when the process exited, exactly when nobody needs it. An empty guard log during a live
+    window is indistinguishable from a dead guard (defect 24, measured 2026-10-16). The heartbeat
+    file is the authoritative liveness check; these lines are history, but history has to arrive.
     """
     if _REPORT is not None:
-        print(text, file=sys.stderr)
+        print(text, file=sys.stderr, flush=True)
     else:
-        print(text)
+        print(text, flush=True)
 
 
 # ------------------------------------------------------------------ plumbing
@@ -1555,6 +1562,24 @@ def _live_machine_for_the_record(cfg: Config, provider: Provider, ledger: Ledger
     return pod
 
 
+def _guard_stopped_a_machine(reason: str | None) -> bool:
+    """Whether `guard.watch` really stopped a machine on the way to returning this reason.
+
+    The field exists so a caller can tell "the guard ended protection by stopping the machine" from
+    "the guard returned and stopped nothing". The reasons that stop nothing are exactly the ones that
+    are *not* `decide`'s money/idle verdicts: a bounded watch running out (`guard-iteration-limit`), a
+    machine that had already stopped (`already stopped`), an instance gone from the account
+    (`instance gone`), and a provider the guard could not read at all (`provider-error: …`).
+
+    Measured 2026-10-16 in the frame window: after `down` the guard's own line was
+    `guard finished: already stopped` while `cmd_watch` printed `the guard stopped the machine:
+    already stopped` and emitted `stopped: true` — a stop that did not happen (defect 23).
+    """
+    if not reason or reason.startswith("provider-error"):
+        return False
+    return reason not in ("guard-iteration-limit", "instance gone", "already stopped")
+
+
 def cmd_watch(args) -> int:
     cfg = _config()
     ledger = Ledger(cfg.ledger_path)
@@ -1599,12 +1624,21 @@ def cmd_watch(args) -> int:
         note(f"watching {pod.get('id')} — stop at ${cfg.budget.per_run_cap_usd:.2f} this run, "
               f"${cfg.budget.cap_usd:.2f} total, {cfg.budget.max_hours_per_run:.1f} h, "
               f"or {cfg.budget.idle_minutes:.0f} min idle")
+        note(f"liveness : the heartbeat ({cfg.heartbeat_path.name} in the state dir) is the "
+              f"authoritative check — `rentguard status` and `doctor` read it. These lines are the "
+              f"guard's log: history, flushed as they happen, never proof that it is still running")
         reason = guard_watch(cfg, provider, ledger, instance_id=pod["id"], interval=interval,
                              log=note, max_iterations=max_iterations)
-        stopped = reason not in ("guard-iteration-limit", "instance gone")
+        stopped = _guard_stopped_a_machine(reason)
         note(f"guard finished: {reason}")
         if stopped:
             note(f"the guard stopped the machine: {reason}")
+        elif reason == "already stopped":
+            note("stopped      : nothing — the machine was already stopped when the guard looked. "
+                 "Protection is NOT armed now: a watch ends when it returns")
+        elif str(reason).startswith("provider-error"):
+            note("stopped      : nothing — the guard could not read the provider, so it cannot be "
+                 "trusted to have been watching. Protection is NOT armed now")
         else:
             # A bounded watch arms protection only while it runs. Say what is true on return.
             note("protection : NOT armed now — a watch stops when it returns, so run it again (or "
