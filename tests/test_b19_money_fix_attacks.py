@@ -288,6 +288,10 @@ class TheWaitGuardCannotOutliveUp(Base):
     def test_no_wait_guard_thread_survives_the_unusable_path(self) -> None:
         unusable = {"status": "RUNNING", "cost": 2.0,
                     "runtime": {"uptime": 0, "ports": None, "gpus": [{"util": 0.0}]}}
+        # The confirmation bound is config, and this fixture pins it to zero: the test is about a
+        # thread surviving, and with the default 30 s it spent that long confirming a machine the
+        # provider will never stop (reported by Forge, 2026-10-16, as a 2x suite slowdown).
+        self.cfg.budget.stop_confirm_s = 0.0
         with mock.patch.object(self.provider, "wait_running",
                                lambda iid, log=None: {**unusable, "id": iid}), \
                 mock.patch.object(self.provider, "get",
@@ -820,6 +824,141 @@ class TheReuseFixAtD8accac(Base):
         self.assertEqual(document.get("action"), "reused", document)
         self.assertNotIn(("pod-A", "stop"), provider.actions,
                          f"a machine usable on the second read was stopped:\n{text}")
+
+
+class TheSharedRetireMachineAtFe38468(Base):
+    """`_retire_machine` owns one invariant: the machine is this root's, and it is either usable,
+    stopped, or visibly billing in an open row. Each branch is attacked directly, then the create
+    path's half of finding 13 and the dying exception."""
+
+    def retire(self, provider, *, instance="pod-A", reason="unusable", dying=False,
+               stop_confirm_s=None):
+        if stop_confirm_s is not None:
+            self.cfg.budget.stop_confirm_s = stop_confirm_s
+        self.provider = provider
+        return cli._retire_machine(self.cfg, provider, self.ledger, instance, reason=reason,
+                                   dying=dying)
+
+    def test_an_unreadable_account_leaves_the_row_open_and_stops_nothing(self) -> None:
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.open_row("pod-A")
+
+        def broken(instance_id):
+            raise ProviderError("the account could not be read")
+        self.provider.get = broken
+
+        result = self.retire(self.provider)
+
+        self.assertIsNone(result, "an unreadable account returned a closed row")
+        self.assertIsNotNone(self.ledger.open_run(),
+                             "the row closed although the account was never read")
+        self.assertNotIn(("pod-A", "stop"), self.provider.actions,
+                         "a machine was stopped on an unreadable account")
+
+    def test_a_machine_named_for_another_root_is_left_alone_and_its_row_voided(self) -> None:
+        import hashlib
+        other_tag = hashlib.sha256(r"C:\somewhere\else".encode()).hexdigest()[:8]
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.provider.instances["pod-A"].id = "pod-A"
+        real_get = self.provider.get
+        self.provider.get = lambda iid: {**real_get(iid), "name": f"rentguard-{other_tag}"}
+        row = self.open_row("pod-A")
+
+        result = self.retire(self.provider)
+
+        self.assertIsNone(result)
+        self.assertNotIn(("pod-A", "stop"), self.provider.actions,
+                         "another root's machine was stopped")
+        closed = [r for r in self.ledger.entries() if r.get("run_id") == row["run_id"]][0]
+        self.assertTrue(closed.get("voided"), f"the row was not voided: {closed}")
+        self.assertEqual(float(closed.get("estimated_usd") or 0.0), 0.0, closed)
+
+    def test_an_unconfirmed_stop_leaves_the_row_open(self) -> None:
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.open_row("pod-A")
+
+        def action_without_stopping(instance_id, action):
+            self.provider.actions.append((instance_id, action))     # accepted; still RUNNING
+        self.provider.action = action_without_stopping
+
+        result = self.retire(self.provider, stop_confirm_s=0.0)
+
+        self.assertIsNone(result, "an unconfirmed stop returned a closed row")
+        self.assertIsNotNone(self.ledger.open_run(),
+                             "the row closed although the account still shows the machine billing")
+        self.assertIn(("pod-A", "stop"), self.provider.actions, "no stop was attempted")
+
+    def test_a_gone_machine_closes_its_own_row_and_no_other(self) -> None:
+        self.open_row("pod-A")                         # one open row: pod-A's
+        result = self.retire(self.provider)            # the provider has no pod-A at all
+
+        self.assertIsNotNone(result, "a vanished machine's row was left open")
+        self.assertIsNone(self.ledger.open_run(), "the row is still open")
+
+        # And a row naming a different machine is left exactly as it is.
+        self.setUp()
+        other = self.open_row("pod-B")
+        result = self.retire(self.provider, instance="pod-A")
+        self.assertIsNone(result, "a row naming another machine was closed")
+        self.assertIsNotNone(self.ledger.open_run(), "pod-B's row was closed by pod-A's exit")
+        self.assertEqual(self.ledger.open_run().get("run_id"), other["run_id"])
+
+    def test_the_create_path_does_not_open_a_row_for_a_machine_that_vanished(self) -> None:
+        """Finding 13's other half: the create path had the same `or pod`, so a machine gone by the
+        second reading was reported as a rental with a row against it."""
+        class GoneAfterCreate(FakeProvider):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.gone = False
+
+            def wait_running(self, instance_id, log=None, **kwargs):
+                pod = super().wait_running(instance_id, log=log)
+                self.gone = True
+                return pod
+
+            def get(self, instance_id):
+                if self.gone:
+                    return None
+                return super().get(instance_id)
+
+        provider = GoneAfterCreate(rate_usd_per_hour=2.0)
+        self.provider = provider
+        self.cfg.budget.stop_confirm_s = 0.0
+
+        code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "probe", "--json"])
+
+        created_id = (document.get("instance") or {}).get("id")
+        open_row = self.ledger.open_run()
+        self.assertNotEqual(code, 0,
+                            f"the create path reported a rental for a machine the account does not "
+                            f"show (exit {code}, action {document.get('action')!r})\n{text}")
+        self.assertTrue(open_row is None or open_row.get("instance_id") != created_id,
+                        f"a row is open against a machine the account does not show: {open_row}")
+
+    def test_the_dying_path_closes_without_waiting_and_leaves_the_machine_visible(self) -> None:
+        """`_abandon_created` is `_retire_machine(dying=True)`: the interrupt path closes the row
+        without waiting for the account. The machine is stopped first, and what may still bill is
+        left visible. This pins the effect and the deliberate exception."""
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.open_row("pod-A")
+        self.record_state("pod-A")
+        self.cfg.budget.stop_confirm_s = 30.0          # a waiting path would spend this
+        self.provider.action = lambda iid, action: self.provider.actions.append((iid, action))
+        pod = self.provider.get("pod-A")
+
+        started = time.monotonic()
+        cli._abandon_created(self.cfg, self.provider, self.ledger, pod)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 5.0, f"the dying path waited {elapsed:.1f}s for the account")
+        self.assertIn(("pod-A", "stop"), self.provider.actions,
+                      "the dying path did not even try to stop the machine")
+        self.assertIsNone(self.ledger.open_run(), "the dying path left the row open")
+        self.assertEqual(self.provider.get("pod-A")["status"], "RUNNING", "fixture")
+        findings = guard.state_findings({"instance_id": "pod-A"}, None,
+                                        provider_gate=lambda i: self.provider.get(i))
+        self.assertTrue(any(f.severity == "error" for f in findings),
+                        f"the machine left behind is invisible to doctor: {findings}")
 
 
 if __name__ == "__main__":

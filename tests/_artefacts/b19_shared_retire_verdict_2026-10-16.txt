@@ -1,0 +1,53 @@
+B19 — THE SHARED EXIT DISCIPLINE ATTACKED at `261c6b8` (code `fe38468`)
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental. Single-file runs.
+
+FILES
+  tests/test_b19_money_fix_attacks.py     (42 tests + 13 subtests: all pass)
+  tests/_artefacts/b19_shared_retire_verdict_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `261c6b8`, package path printed)
+  python -m pytest tests/test_b19_money_fix_attacks.py -q   -> 42 passed, 13 subtests (8.6 s)
+  python -m pytest tests/test_cli_paths.py -q               -> 12 passed (Forge's refused-stop pin)
+
+FINDINGS 13 AND 14 ARE CLOSED, ON BOTH PATHS
+  * Finding 13 — a second reading returning nothing:
+      create path: `reading = provider.get(...)`; `None` is a machine the account no longer shows ->
+      `_retire_machine(reason="unusable")`, exit 1, and **no open row names the machine** (measured;
+      the `or pod` fallback is gone from both paths).
+      reuse path: the same shape, and the row that named the vanished machine is closed as a rental
+      that ended rather than kept or reported as `reused`.
+  * Finding 14 — a resume whose wait raises: `except BaseException` releases the guard, calls
+    `_retire_machine(reason="resume-failed")` and re-raises, so the machine it revived is stopped (or
+    visibly billing in an open row when the stop is unconfirmed), no `rentguard-wait-guard-*` thread
+    survives, and the command still reports the failure.
+
+THE SHARED FUNCTION'S MONEY BRANCHES (attacked directly, each holds)
+  * unreadable account (`provider.get` raises): the row is left OPEN, nothing is stopped, and the
+    call returns no closed row.
+  * a machine claiming another root: no stop action is sent, and this root's row is closed as
+    **voided** with `estimated_usd` 0 — the machine is left alone on purpose.
+  * an unconfirmed stop (a stop accepted but the machine still RUNNING): the row is left OPEN and a
+    stop was attempted — a closed row is never returned.
+  * a gone machine: its **own** row is closed; a row naming a *different* machine is left exactly as
+    it is (the `open_run().instance_id != instance_id` guard).
+
+THE DYING EXCEPTION (`_abandon_created`) — attacked, and I agree it is the right exception
+  Measured with `stop_confirm_s = 30`: the path returns in well under 5 s — it does not wait for the
+  account — it still *tries* the bounded stop first, it closes the row, and the machine it may have
+  left RUNNING is an **error** for `doctor` (`recorded-instance-no-open-row`), not a silent bill.
+  That is the shape the exception was argued for: on the interrupt path the row is the guarantee that
+  survives the process (defect 10), and what may still bill is loud. I agree with it, because the
+  stop is still attempted, the closure is immediate rather than absent, and the consequence is
+  reported by the tool that exists to find it. `down` and every non-dying `up` exit still confirm
+  against the account, so the exception is confined to the process that is dying.
+
+FIXTURE, PER FORGE'S REPORT (my file, my change)
+  `test_no_wait_guard_thread_survives_the_unusable_path` now pins `stop_confirm_s = 0.0`: the test is
+  about a surviving thread, and the default 30 s bound was spent confirming a machine the fixture
+  never stops. The file's runtime on this host went from 38 s to 8.6 s. Forge did not touch my file.
+
+VERDICT
+  Clean. I could not break either finding, the shared function's four money branches behave as its
+  invariant says, and the one deliberate difference is bounded, visible and — in my reading — right.
+  The B19 money path closes on this file: `tests/test_b19_money_fix_attacks.py` at `261c6b8`,
+  42 passed + 13 subtests, with the attacks above as the evidence.
