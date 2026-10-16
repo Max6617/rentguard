@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`fe38468`** (2026-10-16).
+say where they stand at the revision this file describes, **`a45c26e`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`fe38468` unless the entry says otherwise.
+`a45c26e` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -534,3 +534,46 @@ it revived, the unconfirmable stop that leaves the row open, the unreadable acco
 the interrupt path that closes it anyway, another root's machine that is not stopped and whose row is
 voided, and the controls. `tests/test_cli_paths.py` moves its assertion to the shared message and now
 also pins that the row stays open when the stop was refused.
+
+## A finished guard read as protection, because liveness was an age (fixed)
+
+**Found** by Forge on 2026-10-16 while measuring `up` after the polarity ruling, and ruled on by Gilbert
+the same evening: *liveness must be a process fact, not a timestamp fact.*
+
+`status` decided `guard: alive` from the heartbeat's age alone — under five minutes and it said
+protection was there. But a guard that has **finished** leaves its last heartbeat behind:
+`up` arms a wait guard while it waits for a machine to answer and releases it before returning, and a
+`watch` that stops at the cap exits. Measured at `261c6b8`, with the wait made to last half a second so
+the guard polled once:
+
+```console
+$ rentguard up --purpose probe
+[exit 0; its wait guard was armed and released inside the command]
+$ rentguard status
+guard          : alive (heartbeat 0.0 min ago)
+```
+
+Nothing was watching, and `up`'s own closing line says "Until something is watching, only you are" — the
+tool contradicting itself inside one invocation. A false protection report is the same class as the
+false money reports above: it is the reading that stops someone arming the guard that would have caught
+the bill.
+
+**Fixed at `a45c26e`.** The heartbeat now carries the **pid** that wrote it (it used to write a `None`
+placeholder) and an `ended` mark, and one reading decides every caller: `alive` requires the pid to be
+running **and** the writer not to have marked itself finished. `pid_running` keeps POSIX's three
+answers — gone, not-ours-so-alive, running — instead of folding them into one `OSError`; `cmd_watch`
+marks itself ended on every exit path and `up`'s wait guard is marked inside its thread, so the mark
+lands before the release join returns; and the age is printed on every verdict line without ever being
+the verdict. `watch`'s `armed_before` needs all three facts (unmarked, running, fresh within a multiple
+of the poll interval), because a crashed guard's pid can be reused by an unrelated process.
+
+**One measured limit**, in [limitations](limitations.md): on Windows an exited process whose handle is
+still held elsewhere can be probed successfully, so a **killed** guard can read as `running` until that
+handle closes. A clean exit is unaffected — its own mark is the verdict — so the limit touches the
+kill/crash case alone, which the freshness rule in `armed_before` covers for the protection claim.
+
+**The tests that close it.** `tests/test_heartbeat_liveness.py` (33 tests, 5 subtests): the probe's
+three answers plus the real call against this process and an impossible pid, the writer's pid and mark,
+`end_heartbeat` leaving another writer's file alone, the reader's four verdicts, the three-clause armed
+claim, `watch` marking itself on return, and the reproduction — `up` then `status` no longer says
+`alive`. Two fixtures that hand-wrote the pre-ruling shape now write the shape a guard writes.
