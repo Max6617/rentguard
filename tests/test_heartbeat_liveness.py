@@ -123,6 +123,20 @@ class ThePidProbe(unittest.TestCase):
         """A malformed payload must not read as protection either."""
         self.assertFalse(guard.pid_running("not-a-pid"), "a non-numeric pid read as running")
 
+    def test_only_an_integer_is_a_pid(self) -> None:
+        """A float is not a pid: `int(1.5)` is 1, and on POSIX pid 1 is a live process.
+
+        Measured on CI at `e230f80`: `pid_running(1.5)` was True on Linux (pid 1 → PermissionError →
+        the "alive" branch) and False on Windows. That is a false *alive* — the dangerous direction —
+        so the probe takes integers only, with no float truncation and no booleans.
+
+        The `kill` seam is deliberately not used: these values must be refused before any probe runs,
+        which is what makes the test mean the same thing on both platforms.
+        """
+        for value in (1.5, 2.0, 0.5, "42", True, False, b"42"):
+            with self.subTest(pid=value):
+                self.assertFalse(guard.pid_running(value), f"{value!r} was read as a pid")
+
     def test_a_probe_that_raises_something_else_is_gone_not_a_traceback(self) -> None:
         """POSIX `os.kill` raises **OverflowError** for a pid that does not fit a C int.
 

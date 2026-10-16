@@ -503,15 +503,19 @@ def pid_running(pid: int | None, *, kill=os.kill) -> bool:
     ``os.kill``. There is one documented limit, in `docs/limitations.md`: on Windows an exited process
     whose handle is still held elsewhere can be probed successfully, which is why a clean exit's own
     mark — not this probe — is what a finished guard relies on.
+
+    A pid must be an **integer**. A float is not a pid, and truncating one is how ``1.5`` became pid 1
+    — on POSIX a live process we may not signal, which is the one branch that returns **True**.
+    Measured on CI at `e230f80`: ``pid_running(1.5)`` was True on Linux and False on Windows, so a
+    malformed heartbeat could have read as protection on the platform that matters most. Integers
+    only, and no booleans (`True == 1`).
     """
-    try:
-        number = int(pid)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    if isinstance(pid, bool) or not isinstance(pid, int):
         return False
-    if number <= 0:
+    if pid <= 0:
         return False
     try:
-        kill(number, 0)
+        kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
