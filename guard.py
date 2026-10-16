@@ -577,16 +577,17 @@ def heartbeat_readings(path: Path, *, kill=None) -> list[HeartbeatReading]:
 def _best_first(readings: list[HeartbeatReading]) -> list[HeartbeatReading]:
     """Order readings by what a caller asking "is anything watching?" should see first.
 
-    A live, unmarked, fresh guard comes first; then any live one (a wedged guard is still a process);
-    then the newest of whatever is left, so `status` reports `finished` or `not running` rather than
-    nothing when every guard has ended.
+    A live guard comes first — wedged or fresh, because a live process is protection while a finished
+    one is only a record — and the freshest of those wins; when none is alive the newest reading is
+    reported, so `status` says `finished` or `not running` rather than nothing once every guard has
+    ended.
+
+    There is **one** live tier, not two: `alive` is `running and not ended`, so a "live but not alive"
+    tier can never be reached (Assay, 2026-10-16, reading the first version of this ordering) and is
+    not written here just to be covered.
     """
     def rank(reading: HeartbeatReading) -> tuple[int, float]:
-        if reading.alive:
-            return 0, reading.age_minutes
-        if reading.running and not reading.ended:
-            return 1, reading.age_minutes
-        return 2, reading.age_minutes
+        return (0 if reading.alive else 1), reading.age_minutes
     return sorted(readings, key=rank)
 
 

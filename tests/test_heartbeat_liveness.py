@@ -544,6 +544,20 @@ class TheGuardSet(unittest.TestCase):
 
         self.assertTrue(reading.alive, f"a live guard was hidden by a finished one: {reading}")
 
+    def test_a_wedged_live_guard_still_wins_over_a_finished_one(self) -> None:
+        """`alive` is `running and not ended`, so a silent live guard and a fresh one are the **same**
+        tier: the live process is protection, the finished guard is only a record. Assay read the first
+        ordering and found a second tier that could never be reached (2026-10-16) — this pins what the
+        tier actually does, so deleting the dead branch cannot quietly change who wins.
+        """
+        self.guard_file("wedged", age_minutes=30.0)          # live, unmarked, silent
+        self.guard_file("finished", ended=True, age_minutes=0.5)
+
+        reading = guard.heartbeat_reading(self.path)
+
+        self.assertTrue(reading.alive, f"a finished guard hid a live wedged one: {reading}")
+        self.assertGreater(reading.age_minutes, 5.0, f"the finished guard won on age alone: {reading}")
+
     def test_two_live_guards_report_the_fresher(self) -> None:
         self.guard_file("slow", age_minutes=3.0)
         self.guard_file("fast", age_minutes=0.1)
