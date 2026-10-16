@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`a45c26e`** (2026-10-16).
+say where they stand at the revision this file describes, **`1014ade`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`a45c26e` unless the entry says otherwise.
+`1014ade` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -577,3 +577,33 @@ three answers plus the real call against this process and an impossible pid, the
 `end_heartbeat` leaving another writer's file alone, the reader's four verdicts, the three-clause armed
 claim, `watch` marking itself on return, and the reproduction — `up` then `status` no longer says
 `alive`. Two fixtures that hand-wrote the pre-ruling shape now write the shape a guard writes.
+
+### The three seams in that fix, and what closed them (fixed at `1014ade`)
+
+Assay attacked the rule at `75d6d37` (`352a7d9`, verdict
+`tests/_artefacts/heartbeat_liveness_attack_2026-10-16.txt`) and found three leaks in the fix itself. Its
+controls — the three pid answers, a pid-less payload, the ownership rule, the `armed_before` triple, the
+freshness bound and the disclosed Windows caveat — all held.
+
+- **A probe failure that is not an `OSError` crashed the read** (finding 15). POSIX `os.kill` raises
+  `OverflowError` for a pid that does not fit a C int, so a heartbeat carrying such a pid — hand-edited,
+  truncated, or from a foreign writer — propagated out of `heartbeat_reading` and took `status` and
+  `doctor` with it. It reads as gone now, and the probe is a seam on the read path so the POSIX shape is
+  testable on this Windows host.
+- **The structured `stale` field contradicted the prose** (finding 16, the one that matters for money).
+  `stale` was `not alive`, and `alive` is the process fact, so a live, unmarked, 60-minute-old heartbeat
+  read `wedged` in prose and `stale: false` in the JSON a script or a Bot gates on — a wedged guard
+  reported as nothing to worry about. `stale` is the **age** window again (`GUARD_STALE_MINUTES`, the
+  same five minutes the prose uses), so both readings say the same thing.
+- **Releasing one guard marked a live second guard finished** (finding 17). Two guards in one process
+  share the pid, and two guards for one instance share the instance id, so the pid-keyed mark could not
+  tell them apart: the guard that finished marked the shared file and the live one read `finished` until
+  its next write. There is now **one heartbeat file per guard** (`heartbeat-<guard id>.json`; the legacy
+  `heartbeat.json` is still read), the mark is matched on that id, the readers take the **best** of the
+  set — a live unmarked guard wins over a finished one, and when none is alive the newest reading is
+  reported, so `finished` and `not running` still show — and the next writer prunes markers older than
+  the window. A crashed guard's file is kept: its dead pid is evidence.
+
+All three were red first in `tests/test_heartbeat_liveness.py`, which is now 39 tests and 15 subtests,
+and five fixtures across four files that expected a guard to have written the single legacy path now ask
+the set. The disclosed Windows handle caveat is unchanged and still in [limitations](limitations.md).

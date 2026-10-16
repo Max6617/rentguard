@@ -500,6 +500,7 @@ verified inside it:
 | `0d01d57` — the money-path pass (2026-10-16) | 601 passed, **2 failed**, 8 skipped, 99 subtests | **not re-measured** — measured modules changed since `be4e7c7`, so the floor figure would be stale here |
 | `fe38468` — the reuse-path failure exits (2026-10-16) | **610 passed**, 0 failed, 8 skipped, 99 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (72.03 s / 68.93 s) | 3,305 / 3,361 = **98.3%, exit 0** — `cli.py` 97.9%, floor 98.0 |
 | `a45c26e` — the heartbeat as a process fact (2026-10-16) | **649 passed**, 0 failed, 8 skipped, 104 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.02 s / 38.99 s) | 3,376 / 3,432 = **98.4%, exit 0** — `cli.py` 98.1%, `guard.py` 97.7%, floor 98.0 |
+| `1014ade` — the heartbeat set, one file per guard (2026-10-16) | **671 passed**, 0 failed, 8 skipped, 114 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.05 s / 40.08 s) | 3,427 / 3,487 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.0%, floor 98.0 |
 
 The two failures at `0d01d57` are Assay's attacks on the reuse-path fix —
 `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`: a machine that vanishes between the two
