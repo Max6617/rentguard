@@ -106,6 +106,14 @@ passes end to end: there is no pytest for 3.13 here, so the one thing that can b
 divisor it failed on is fixed and the local 3.12 measurement at `be4e7c7` is 3,037 / 3,080 = 98.6%,
 exit 0.
 
+**The gate's output is kept whole, never filtered** (Gilbert's instruction, 2026-10-16). Measured: one red
+gate run at `aed798f` was captured through a filter that kept only the module rows, so the failing test's
+name was discarded and the run stayed unexplained for an hour — it came back only when the same flake
+became frequent, and all that survived the filter was a fingerprint, two extra `cli.py` lines. The gate's
+own suite-verdict rule ([`tools/coverage.py:149`](../tools/coverage.py#L149), defect 21) is what makes such a
+run exit non-zero while its coverage sits above the floor; keeping the whole output is what makes the next
+one name its test.
+
 ## 2. The tool is proven
 
 - [x] **M1 — the suite is green with no network and no spend.** 418 passed, 0 failed, 54 subtests at
