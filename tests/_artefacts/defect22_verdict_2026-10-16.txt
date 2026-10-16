@@ -1,0 +1,61 @@
+DEFECT 22 VERDICT — `345960e` ("up: another root's live machine does not block renting")
+Verifier: Assay. 2026-10-16. Independent of the author's tests/`test_up_another_root.py`.
+
+FILES
+  tests/test_up_cross_root_attack.py   (13 tests, 7 subtests) — this verification
+  this file                            (the record; named so Forge can act on it)
+
+HOW MEASURED
+  Clean worktree at `345960e`, package path printed
+  (`...\.rentguard-tmp\d22\rentguard\mcp_server.py`).
+    python -m pytest tests/test_up_cross_root_attack.py -q          -> 13 passed, 7 subtests
+    python -m pytest tests/test_up_another_root.py test_money_direction_shapes.py \
+        test_state_lost_ledger_fallback.py test_cross_root_claims.py -q
+                                                                    -> 25 passed, 4 subtests
+  The author's file uses `--dry-run`. My primary cases do a **real** rent against the in-memory
+  fake, so the assertion is that a second machine exists rather than that the refusal was skipped.
+
+WHAT HOLDS (each is an effect, not a code path)
+  1. A live machine named `rentguard-<another tag>` does not block: `up` exits 0, exactly one
+     machine is created beside it, and the other root's machine is neither stopped nor changed.
+  2. The same with **no row anywhere** for that machine (a stray): the rent still happens and the
+     stray is still live and still not recorded here.
+  3. This root's own name still refuses (`live-untracked-instance`, exit 2); a nameless machine
+     still refuses; an unclaimed name (`workbench`) still refuses.
+  4. Two roots sharing one configured `runpod.name` both classify the machine as THIS root's, so
+     neither skips it — the conservative half holds when the name cannot tell them apart.
+  5. A root that configures **another root's tagged name** in `runpod.name` refuses rather than
+     skips: `_instance_name` returns the literal, so it is this root's by its own config.
+  6. Only the state file or an **open** row accounts for a machine: a live machine with only a
+     CLOSED row still refuses (the 2026-10-15 hole stayed closed).
+  7. A lost state file does not change case 1.
+  8. `--force` still rents beside an unclaimed live machine (unchanged).
+  9. Every name shape maps to one of the three `instance_claim` values: this tag -> THIS_ROOT,
+     another tag -> ANOTHER_ROOT, `workbench` / empty / non-hex / 7-character / tag-not-the-whole-
+     name -> UNCLAIMED. No fourth value exists, and only ANOTHER_ROOT is skipped.
+
+WHAT THE CHANGE IS NOT — the plain statement
+  It is a **per-root** guardrail, not an account-wide one. The skip keys on the machine's **name**,
+  so a foreign-tagged machine is skipped whether or not any ledger anywhere tracks it (case 2,
+  measured): an untracked stray with a foreign tag no longer blocks this root's rent, and both
+  machines bill. Account-wide visibility is still `doctor`'s warn, not `up`'s refusal.
+
+BOUNDARY FOUND (pinned, not a defect of this change)
+  `_root_tag` comes from `root_path()`, so moving the project (or a changed `RENTGUARD_ROOT`)
+  changes this root's tag. With the state file intact the old machine is still recorded here and
+  `up` reuses it, not skips it (measured: no second machine). With **both** a move and a lost state
+  file, this root's own unrecorded machine reads as another root's and is skipped while a second is
+  rented (measured). Either condition alone is safe. This is the name-as-evidence trade-off the
+  project already accepted for `doctor`; it is recorded here so nobody reads the fix as
+  account-wide.
+
+NOT VERIFIED
+  No rental, no real account: the classification is structural and exercised against the in-memory
+  fake only. No paid resource was touched.
+
+VERDICT
+  The fix does what it claims, and I could not make the new condition block the wrong rent in the
+  direction it guards: the refusals it keeps are the correct ones, the skip fires exactly where the
+  name says another root, and the boundary above needs two independent losses to bite. Nothing to
+  hand back to Forge on the code; the two things worth carrying are the per-root scope (above) and
+  the move-plus-lost-state sequence, which is pinned in the test file.
