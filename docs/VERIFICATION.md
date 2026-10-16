@@ -501,6 +501,7 @@ verified inside it:
 | `fe38468` — the reuse-path failure exits (2026-10-16) | **610 passed**, 0 failed, 8 skipped, 99 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (72.03 s / 68.93 s) | 3,305 / 3,361 = **98.3%, exit 0** — `cli.py` 97.9%, floor 98.0 |
 | `a45c26e` — the heartbeat as a process fact (2026-10-16) | **649 passed**, 0 failed, 8 skipped, 104 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.02 s / 38.99 s) | 3,376 / 3,432 = **98.4%, exit 0** — `cli.py` 98.1%, `guard.py` 97.7%, floor 98.0 |
 | `1014ade` — the heartbeat set, one file per guard (2026-10-16) | **671 passed**, 0 failed, 8 skipped, 114 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.05 s / 40.08 s) | 3,427 / 3,487 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.0%, floor 98.0 |
+| `0e43da0` — the pid probe's integer rule, the prune/read race and the ordering's dead tier (2026-10-16) | **680 passed**, 0 failed, 8 skipped, 123 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.92 s / 39.61 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, `session.py` 167/167, floor 98.0 |
 
 The two failures at `0d01d57` are Assay's attacks on the reuse-path fix —
 `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`: a machine that vanishes between the two

@@ -604,6 +604,47 @@ freshness bound and the disclosed Windows caveat — all held.
   reported, so `finished` and `not running` still show — and the next writer prunes markers older than
   the window. A crashed guard's file is kept: its dead pid is evidence.
 
-All three were red first in `tests/test_heartbeat_liveness.py`, which is now 39 tests and 15 subtests,
+All three were red first in `tests/test_heartbeat_liveness.py`, which held 43 test methods at `1014ade`
+and 46 with 12 subtests now, after the two added for finding 18 and the dead tier (the "39 tests and 15
+subtests" written here when this entry was made was a miscount; 43 is what the file has at that commit),
 and five fixtures across four files that expected a guard to have written the single legacy path now ask
 the set. The disclosed Windows handle caveat is unchanged and still in [limitations](limitations.md).
+
+### The read against the prune, the ordering's dead tier, and the CI red (fixed at `0e43da0`)
+
+Assay's next attack (`d9cbb1d`, verdict `tests/_artefacts/heartbeat_set_attack_2026-10-16.txt`) found one
+seam, in the same window's new code:
+
+- **A heartbeat pruned between the listing and the stat crashed the whole read** (finding 18, fixed at
+  `3cbfc15`). `heartbeat_files` sorted the set by `p.stat().st_mtime`, and every `write_heartbeat` prunes
+  the set — so a reader can list the directory while another guard removes a file from it, and the bare
+  stat raised `FileNotFoundError: [WinError 2] …\heartbeat-ended-guard.json` out of `heartbeat_reading`.
+  That is `status` and `doctor` — the two commands a person uses to ask *is anything watching, is anything
+  billing* — tracebacking because a file went away. Reproduced with a glob seam that unlinks what it just
+  found. The set is built from the files that still answer a stat now: a vanished candidate is skipped,
+  and the survivors are ordered newest first. My test pins the set's **contents** — the surviving guard is
+  still reported — not only the absence of a crash.
+
+The same attack run could not make the rest of the set rule fail: a crashed guard beside a finished one
+reports the newest, and every control held. One reading in it was a code-truth defect rather than a
+finding:
+
+- **The ordering's second tier could never be reached** (fixed at `0e43da0`). `alive` *is*
+  `running and not ended`, so `_best_first`'s middle branch was dead code and the docstring described a
+  tier — "then any live one (a wedged guard is still a process)" — that does not exist. The ordering is
+  one live tier, freshest first, then the newest of the rest; that is what the code already did, and the
+  tier is deleted rather than covered. `test_a_wedged_live_guard_still_wins_over_a_finished_one` pins the
+  tier that remains.
+
+**The published tip was red for a different reason, and CI found it rather than this host** (fixed at
+`aa6c721`). Run `38952072673` fails one test in all three jobs at `e230f80`:
+`PidProbeSeams::test_things_that_are_not_pids_are_gone` SUBFAILED with `pid=1.5`. `pid_running` truncated
+its argument, so `1.5` became pid 1; `os.kill(1, 0)` raises `PermissionError` on Linux — a live process we
+do not own, which is the **one** branch that returns True — so a malformed heartbeat read as protection.
+Windows raises `EINVAL` for the same call and reads False, which is why the local suite was green. A false
+*alive* is the dangerous direction, and CI was the only witness. The probe takes integers only now (no
+floats, no booleans), and `test_only_an_integer_is_a_pid` pins the non-integer shapes without a `kill`
+seam so the test means the same on both platforms.
+
+The revision of record is `0e43da0`: 680 passed / 8 skipped / 123 subtests in both provider modes, gate
+3,489 / 3,430 statements = 98.3%, exit 0.
