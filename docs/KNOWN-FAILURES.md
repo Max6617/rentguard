@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`042fd21`** (2026-10-15).
+say where they stand at the revision this file describes, **`4e7f3d3`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`042fd21` unless the entry says otherwise.
+`4e7f3d3` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -325,3 +325,35 @@ docstring: the two pull seams disagree about an *empty* delivery. The tar path n
 nothing is reported `pulled: true, files: []` and exits 0, which is what `tests/test_stop_cannot_hang.py`
 and `tests/test_feature_matrix.py` rely on. Since `down`'s non-zero exit is keyed on the pull's exit
 code, the two seams cannot be made consistent without changing `down`'s ruled behaviour.
+
+## The stop gate asked `is_alive`, so a crash-looping pod's row was closed under it (fixed)
+
+**Found** by Forge on 2026-10-16 while restructuring `cmd_down` for the B19 re-attack — and recorded as
+its own finding rather than as a by-product of it, because the re-attack's findings were about *which
+witness* confirms a closure, and this is about *which machines* a closure is attempted for. Gilbert's
+ruling on the report that carried it: "name it in the record as your finding".
+
+`cmd_down` decided both questions from one expression:
+`live = status not in ("EXITED", "TERMINATED") and is_alive(pod)`. `is_alive` is the **usability** test —
+a positive uptime *and* a port — so a pod reporting `RUNNING` with zero uptime and null ports was read as
+"nothing to stop". No stop call was sent, `_confirm_stopped` never ran, `still_billing` stayed false, and
+the row was **closed**. That is defect 1's shape with a different trigger: the ledger says the window is
+over while the machine bills, and the cap and the guard read nothing.
+
+The shape is not hypothetical. It is the state the first pilot attempt sat in for about ten minutes on
+2026-10-16 — `RUNNING but not usable yet (uptime=None, ports=NULL) — waiting`, the log that `B19`'s
+defect 2 (unwatched window) and `tests/test_up_arms_the_guard.py` were written from — and it is the
+machine the guard refuses to arm against. `down` is the command a person reaches for when that pod is
+misbehaving, and it was the one command that would have declared the window finished.
+
+**Fixed at `4e7f3d3`.** The two questions are separate now: `billing = status not in
+TERMINAL_STATUSES` gates the **stop call and the confirmation**, while `usable = billing and
+is_alive(pod)` gates only the pre-stop **pull**, which is the one action that genuinely needs a machine
+that answers. A crash-looping pod is stopped, confirmed against both witnesses (the instance's record and
+the account's listing), and only then is its row closed.
+
+**The test that closes it.** `tests/test_down_stop_verified.py`,
+`AStopThatIsHonoured::test_a_crash_loop_pod_is_stopped_rather_than_having_its_row_closed_under_it`: a
+provider whose pod is `status="RUNNING", uptime_seconds=0, ports=None` must appear in
+`provider.actions` as `("pod-A", "stop")`, and the row must be closed only once the account agrees the
+machine stopped.
