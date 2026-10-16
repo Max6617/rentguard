@@ -192,11 +192,17 @@ class StatusBranches(BranchCase):
         self.assertIn("adopt", out, f"the remedy is not offered.\n{out}")
 
     def test_a_fresh_heartbeat_is_reported_as_a_live_guard(self):
-        """Effect: the operator is told a supervisor is watching, with its age."""
+        """Effect: the operator is told a supervisor is watching, with its age.
+
+        The fixture writes the **current** heartbeat shape — the pid of the writer, and that it has
+        not marked itself finished. A pid-less heartbeat is not protection any more: `alive` needs a
+        running process (Gilbert's ruling, 2026-10-16), so the fixture names one.
+        """
         self.write_state({"instance_id": "pod-A"})
         self.open_run()
         self.cfg.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cfg.heartbeat_path.write_text(json.dumps({"at": iso(now_utc())}), encoding="utf-8")
+        self.cfg.heartbeat_path.write_text(
+            json.dumps({"at": iso(now_utc()), "pid": os.getpid(), "ended": False}), encoding="utf-8")
         fake = FakeProvider()
         fake.add("pod-A", uptime_seconds=3600)
 

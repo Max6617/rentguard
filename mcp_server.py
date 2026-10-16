@@ -148,9 +148,12 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Arm protection for one poll: take a single reading and return the guard's decision "
             "(whether the machine should stop, and why) plus whether a guard was ALREADY armed "
-            "before this call. A one-shot poll does not keep a guard alive — protection is armed "
-            "only while a watch is running — so this is how an agent samples a machine it is "
-            "driving itself. Read-only unless the single reading says to stop."),
+            "before this call. `armed_before` is a claim about protection and needs every fact: the "
+            "heartbeat's writer has not marked itself finished, its pid is still running, and its "
+            "last heartbeat is inside a multiple of the poll interval. A one-shot poll does not keep "
+            "a guard alive — protection is armed only while a watch is running — so this is how an "
+            "agent samples a machine it is driving itself. Read-only unless the single reading says "
+            "to stop."),
         "inputSchema": {
             "type": "object",
             "properties": {

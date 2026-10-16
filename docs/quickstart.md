@@ -276,13 +276,22 @@ Then check it, because a supervisor you believe in and that is not running is wo
 
 ```console
 $ rentguard status
-guard          : alive (heartbeat 0.3 min ago)
+guard          : alive (pid <pid>, heartbeat 0.3 min ago)
 ```
 
+`alive` needs a **running process that has not marked itself finished**, so a guard that has ended is
+never reported as protection. The same line reads, in the other three cases:
+
 ```console
-guard          : NO HEARTBEAT — nothing is watching this instance
-guard          : heartbeat 12.4 min old — the guard is probably dead; nothing is watching this instance
+guard          : finished (last heartbeat 0.1 min ago) — nothing is watching this instance, so it will bill until someone stops it
+guard          : not running (pid <pid> is gone; last heartbeat 12.4 min ago) — nothing is watching this instance, so it will bill until someone stops it
+guard          : NO GUARD — nothing is watching this instance, so it will bill until someone stops it
 ```
+
+The first is the ordinary one — `watch` stops at a cap, on idle, or when the machine is already stopped,
+and says so rather than leaving a fresh file behind that reads like protection. The age is printed in
+all of them as the secondary signal; it is not the verdict. (The pid is elided here; `status` prints the
+real one.)
 
 ## 6. Run a command
 

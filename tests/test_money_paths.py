@@ -334,9 +334,12 @@ class InterruptedWrite(MoneyCase):
 
 class StaleGuard(MoneyCase):
     def test_a_stale_heartbeat_is_reported_as_not_watching(self):
-        """Sequence: the guard died 30 minutes ago (heartbeat file 30 min old); `status` runs.
+        """Sequence: the guard died 30 minutes ago (heartbeat file 30 min old, no pid, unmarked);
+        `status` runs.
 
-        Effect: the operator is told nothing is watching.
+        Effect: the operator is told nothing is watching. The vocabulary moved with Gilbert's ruling
+        of 2026-10-16 (liveness is a process fact): this file names no running writer, so the honest
+        line is `not running …  nothing is watching`, not `probably dead` from an age alone.
         """
         self.write_state({"instance_id": "pod-A"})
         self.open_run(hours_ago=0.1)
@@ -348,8 +351,10 @@ class StaleGuard(MoneyCase):
         code, out = self.invoke(cli.cmd_status, cli_args("status"), provider)
 
         lowered = out.lower()
-        self.assertTrue(any(w in lowered for w in ("probably dead", "stale", "not watching")),
+        self.assertTrue(any(w in lowered for w in ("not running", "nothing is watching", "finished",
+                                                   "stale", "probably dead")),
                         f"a 30-minute-old heartbeat was reported as healthy.\noutput:\n{out}")
+        self.assertNotIn("alive", lowered, f"an unmarked, pid-less heartbeat was called alive:\n{out}")
 
 
 # ====================================================================== PATH 7

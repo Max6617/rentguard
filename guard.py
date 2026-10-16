@@ -20,6 +20,7 @@ own uptime instead of assuming zero. Assuming zero is how a cap fails silently.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -448,25 +449,136 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
     return findings
 
 
-def write_heartbeat(path: Path, snap: Snapshot, note: str = "") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = asdict(snap)
-    payload["note"] = note
-    payload["pid"] = None
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+@dataclass
+class HeartbeatReading:
+    """What the heartbeat file says about its writer, and whether that writer is still running.
+
+    The verdict is the writer's own **mark** first and its **pid** second, with the age carried beside
+    them as the secondary signal it has always been (Gilbert's ruling, 2026-10-16: *liveness must be a
+    process fact, not a timestamp fact*). ``alive`` needs both facts: a guard that has finished is not
+    protection even while its process lives, and a pid that is gone is not protection even when the
+    heartbeat is seconds old.
+    """
+
+    age_minutes: float
+    pid: int | None
+    ended: bool
+    running: bool
+
+    @property
+    def alive(self) -> bool:
+        return self.running and not self.ended
 
 
-def heartbeat_age_minutes(path: Path) -> float | None:
-    """How long ago the guard last reported. A supervisor you believe in and that is not running is
-    worse than no supervisor; this is how ``status`` tells you which one you have."""
+def pid_running(pid: int | None, *, kill=os.kill) -> bool:
+    """Whether a process with this pid is running on this host.
+
+    Three answers, not two, and the middle one is the one a single ``except OSError`` gets wrong
+    (Gilbert's ruling, 2026-10-16):
+
+    - ``ProcessLookupError`` — POSIX: no such process. **Gone.**
+    - ``PermissionError`` — POSIX, and Windows access denied: the process is there and is not ours to
+      signal. **Running**; calling this gone is the direction that silently disarms the check.
+    - ``OSError`` — Windows raises ``EINVAL`` (errno 22) for a pid with no process, measured on this
+      host on 2026-10-16; ``os.kill(pid, 0)`` was also measured *not* to terminate the target there.
+      **Gone**, and any other ``OSError`` reads the same way: a probe that failed is not proof of life.
+
+    ``kill`` is a seam so both platforms' behaviours are testable on either host; production passes
+    ``os.kill``. There is one documented limit, in `docs/limitations.md`: on Windows an exited process
+    whose handle is still held elsewhere can be probed successfully, which is why a clean exit's own
+    mark — not this probe — is what a finished guard relies on.
+    """
+    try:
+        number = int(pid)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    if number <= 0:
+        return False
+    try:
+        kill(number, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def heartbeat_reading(path: Path) -> HeartbeatReading | None:
+    """Read the heartbeat, or ``None`` when there is none to read.
+
+    ``None`` means *no reading* — a missing file, unreadable JSON, or no ``at`` stamp — and every
+    caller reads it as *no guard*. A payload with **no pid** is not a missing reading: it is a reading
+    with no proof of life, which is not the same thing as protection.
+    """
     if not path.exists():
         return None
     try:
-        stamp = json.loads(path.read_text(encoding="utf-8"))["at"]
-        then = datetime.fromisoformat(stamp)
-    except (OSError, ValueError, KeyError):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        then = datetime.fromisoformat(payload["at"])
+    except (OSError, ValueError, KeyError, TypeError):
         return None
-    return round((now_utc() - then).total_seconds() / 60.0, 1)
+    if not isinstance(payload, dict):
+        return None
+    pid = payload.get("pid")
+    pid = pid if isinstance(pid, int) else None
+    return HeartbeatReading(age_minutes=round((now_utc() - then).total_seconds() / 60.0, 1),
+                            pid=pid, ended=bool(payload.get("ended")), running=pid_running(pid))
+
+
+def heartbeat_age_minutes(path: Path) -> float | None:
+    """How long ago the guard last reported, or ``None`` with no readable heartbeat.
+
+    Kept for callers that want only the age, but the age alone cannot tell a live guard from one that
+    has finished — that verdict is ``heartbeat_reading``'s (ruling, 2026-10-16).
+    """
+    reading = heartbeat_reading(path)
+    return None if reading is None else reading.age_minutes
+
+
+def write_heartbeat(path: Path, snap: Snapshot, note: str = "") -> None:
+    """Write a reading, naming the **process** that wrote it and that it has not finished.
+
+    ``pid`` used to be written as a placeholder (``None``), which is why `status` had nothing but the
+    age to go on and read a finished guard as protection (Gilbert's ruling, 2026-10-16).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(snap)
+    payload["note"] = note
+    payload["pid"] = os.getpid()
+    payload["ended"] = False
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def end_heartbeat(path: Path, pid: int | None = None) -> bool:
+    """Mark the heartbeat finished, when it is this process's to mark: ``True`` if it was.
+
+    A guard that exits cleanly says so, so "finished" and "silent" stop being the same reading. Two
+    guards can share one heartbeat path — an operator's `watch` and `up`'s wait guard — so the **pid**
+    decides whose mark it is, and a file another process wrote is left alone. A missing file is left
+    missing: its absence already reads as *no guard*, and writing a marker there would invent a reading
+    nobody made.
+    """
+    if not path.exists():
+        return False
+    mine = os.getpid() if pid is None else pid
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    owner = payload.get("pid")
+    if isinstance(owner, int) and owner != mine:
+        return False
+    payload["ended"] = True
+    payload["ended_at"] = iso(now_utc())
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 class ReleaseGate(threading.Event):

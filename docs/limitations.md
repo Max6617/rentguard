@@ -94,12 +94,23 @@ network volumes, container disk, egress, image pulls, minimum billing increments
 taxes, credits. [What the cap guarantees](cap.md) lists this in full.
 
 **The cap only fires while `watch` runs.** `watch` is a foreground process on your machine. Close the
-terminal, suspend the laptop, or let it crash, and nothing stops the instance. `status` and `doctor`
-report the guard heartbeat and say so when it is more than five minutes old; nothing restarts it for
-you. Treat "is the heartbeat fresh" as a check you own — and note that a guard which has **finished**
-leaves its last heartbeat behind: `up` arms a guard while it waits and releases it before returning, and
-a `watch` that stopped at the cap exits, so a fresh heartbeat is evidence that a guard was watching
-recently, not proof that one is watching now. `up`'s closing lines say the same thing.
+terminal, suspend the laptop, or let it crash, and nothing stops the instance. The heartbeat is how
+`status` and `doctor` tell you which of those happened, and it is read as a **process fact** (Gilbert's
+ruling, 2026-10-16): the file names the pid that wrote it, and `alive` requires that pid to be running
+**and** the writer not to have marked itself finished. `cmd_watch` marks on every exit path, and `up`
+marks its own wait guard before its release returns, so a guard that ended reads `finished (last
+heartbeat X min ago)` rather than `alive`; a pid that is gone reads `not running (pid P is gone; …)`; a
+writer that is running but has gone quiet for more than five minutes reads `running (pid P) but silent
+for X min — probably wedged`; and with no heartbeat at all it reads `NO GUARD`. The age is on the line
+in every one of those, as the secondary signal it is — never the verdict. Nothing restarts the guard
+for you.
+
+**One measured limit on the pid check**, on Windows only: an exited process whose handle is still held
+elsewhere can be probed successfully, so a guard that was **killed or crashed** can read as running
+until that handle closes. A clean exit is unaffected — the writer's own mark is what says it finished —
+so this touches the kill/crash case alone, and the freshness rule in `watch`'s own `armed_before`
+(a running pid, unmarked, **and** a heartbeat inside a multiple of the poll interval) is what keeps the
+protection claim honest there.
 
 **It overshoots by at least one poll.** The guard checks every 60 seconds by default. A run that
 crosses the cap just after a check pays for up to one more interval before the stop is sent, and the

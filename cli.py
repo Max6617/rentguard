@@ -62,7 +62,9 @@ from .guard import (
     Finding,
     ReleaseGate,
     TERMINAL_STATUSES,
+    end_heartbeat,
     heartbeat_age_minutes,
+    heartbeat_reading,
     is_billing,
     snapshot,
     state_findings,
@@ -537,7 +539,7 @@ def cmd_doctor(args) -> int:
     ledger = Ledger(cfg.ledger_path)
     name = provider_name(cfg)
     open_run = ledger.open_run()
-    age = heartbeat_age_minutes(cfg.heartbeat_path)
+    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
     findings: list[Finding] = []
     with json_report(args):
         emit(command="doctor", version=__version__,
@@ -583,10 +585,8 @@ def cmd_doctor(args) -> int:
             note("ledger lines   : all readable")
         emit(malformed_ledger_lines=malformed)
 
-        emit(guard={"heartbeat_age_minutes": age, "stale": age is None or age > 5})
-        note(f"guard heartbeat: "
-              f"{'(never)' if age is None else f'{age:.1f} min ago'}"
-              f"{'  <-- STALE, nothing is watching' if (age is None or age > 5) else ''}")
+        emit(guard=guard_facts)
+        note(f"guard heartbeat: {guard_line}")
 
         if name != "fake" and not api_key():
             findings.append(Finding(code="no-api-key", severity="error",
@@ -814,11 +814,11 @@ def cmd_status(args) -> int:
     provider = _provider(cfg)
     open_run = ledger.open_run()
     pod = _pod(provider, cfg)
-    age = heartbeat_age_minutes(cfg.heartbeat_path)
+    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
     with json_report(args):
         emit(command="status", provider=provider_name(cfg),
              recorded_instance_id=_read_state(cfg).get("instance_id"),
-             guard={"heartbeat_age_minutes": age, "stale": age is None or age > 5})
+             guard=guard_facts)
 
         if pod is None and open_run is not None:
             # The state in which money hides: the ledger believes a machine is rented and the
@@ -900,14 +900,7 @@ def cmd_status(args) -> int:
         elif snap.pricing_unknown:
             line += "  (a lower bound: this machine's own price could not be established)"
         note(line)
-        if age is None:
-            note("guard          : NO GUARD — nothing is watching this instance, so it will bill "
-                 "until someone stops it")
-        elif age > 5:
-            note(f"guard          : probably dead (heartbeat {age:.1f} min old) — nothing is "
-                 f"watching this instance, so it will bill until someone stops it")
-        else:
-            note(f"guard          : alive (heartbeat {age:.1f} min ago)")
+        note(f"guard          : {guard_line}")
         emit(instance={"id": pod.get("id"), "status": snap.status,
                        "gpu": (pod.get("gpu") or {}).get("id"),
                        "uptime_hours": snap.uptime_hours if raw_uptime is not None else None,
@@ -1740,6 +1733,12 @@ def _start_wait_guard(cfg: Config, provider: Provider, ledger: Ledger, instance_
         except Exception as exc:  # noqa: BLE001 - a guard that dies must not take `up` with it
             log(f"wait guard  : stopped ({type(exc).__name__}: {exc}); `up` continues — arm "
                 f"`rentguard watch` once the machine is usable")
+        finally:
+            # Marked here, inside the thread, so the mark is written *before* `up`'s release join
+            # returns: a wait guard that has finished must not leave a heartbeat reading as
+            # protection (Gilbert's ruling, 2026-10-16). `end_heartbeat` leaves a file another pid
+            # wrote alone, so an operator's own `watch` is not ended by `up` finishing.
+            end_heartbeat(cfg.heartbeat_path)
 
     thread = threading.Thread(target=run_guard, name=f"rentguard-wait-guard-{instance_id}",
                               daemon=True)
@@ -1780,9 +1779,15 @@ def cmd_watch(args) -> int:
              max_iterations=max_iterations)
         # The armed state is read *before* this call polls. A watch writes a heartbeat of its own, so
         # asking afterwards would always report "armed" about a guard that has already returned —
-        # the exact question an agent needs answered honestly.
-        age_before = heartbeat_age_minutes(cfg.heartbeat_path)
-        armed_before = age_before is not None and age_before <= max(2 * interval / 60.0, 2.0)
+        # the exact question an agent needs answered honestly. It is a claim about **protection**, so
+        # it needs all three facts (Gilbert's ruling, 2026-10-16): the guard did not mark itself
+        # finished, its pid is running, and the heartbeat is fresh within a multiple of the poll
+        # interval. The pid clause alone would read a crashed guard's pid — later handed by the OS to
+        # an unrelated process — as protection; the freshness clause is what catches that.
+        reading = heartbeat_reading(cfg.heartbeat_path)
+        age_before = reading.age_minutes if reading is not None else None
+        armed_before = bool(reading is not None and reading.alive
+                            and reading.age_minutes <= max(2 * interval / 60.0, 2.0))
         emit(armed_before=armed_before, heartbeat_age_minutes=age_before)
         if pod is None:
             note("no instance recorded; nothing to watch")
@@ -1817,6 +1822,10 @@ def cmd_watch(args) -> int:
               f"guard's log: history, flushed as they happen, never proof that it is still running")
         reason = guard_watch(cfg, provider, ledger, instance_id=pod["id"], interval=interval,
                              log=note, max_iterations=max_iterations)
+        # This guard is finished and says so: "finished" and "silent" must not be the same reading
+        # (Gilbert's ruling, 2026-10-16). Marked after the loop returns, on every path — the cap, an
+        # already-stopped machine, an instance that vanished, an iteration limit, a provider error.
+        end_heartbeat(cfg.heartbeat_path)
         stopped = _guard_stopped_a_machine(reason)
         note(f"guard finished: {reason}")
         if stopped:
@@ -1835,6 +1844,33 @@ def cmd_watch(args) -> int:
              armed_before=armed_before,
              total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
     return 0
+
+
+def _guard_report(reading) -> tuple[str, dict]:
+    """The guard's line and its structured form, from one reading: the verdict is the **process**.
+
+    ``alive`` needs the writer's own mark *and* a running pid (Gilbert's ruling, 2026-10-16); the age
+    is printed beside them as the secondary signal it always was. A finished guard, a pid that is gone
+    and a heartbeat nobody ever wrote are three sentences, because they are three different facts —
+    and the one they used to share, `alive`, was the false one.
+    """
+    if reading is None:
+        return ("NO GUARD — nothing is watching this instance, so it will bill until someone stops it",
+                {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
+                 "ended": None})
+    facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": not reading.alive,
+             "pid": reading.pid, "running": reading.running, "ended": reading.ended}
+    if reading.ended:
+        return (f"finished (last heartbeat {reading.age_minutes:.1f} min ago) — nothing is watching "
+                f"this instance, so it will bill until someone stops it", facts)
+    if not reading.running:
+        return (f"not running (pid {reading.pid} is gone; last heartbeat "
+                f"{reading.age_minutes:.1f} min ago) — nothing is watching this instance, so it will "
+                f"bill until someone stops it", facts)
+    if reading.age_minutes > 5:
+        return (f"running (pid {reading.pid}) but silent for {reading.age_minutes:.1f} min — probably "
+                f"wedged", facts)
+    return f"alive (pid {reading.pid}, heartbeat {reading.age_minutes:.1f} min ago)", facts
 
 
 def _instance_created_at(pod: dict) -> datetime | None:
