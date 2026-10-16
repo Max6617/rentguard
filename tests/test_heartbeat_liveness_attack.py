@@ -85,6 +85,24 @@ class PidProbeSeams(unittest.TestCase):
             with self.subTest(pid=value):
                 self.assertIs(guard.pid_running(value), False)
 
+    def test_only_a_real_integer_is_a_pid_and_the_read_path_agrees(self) -> None:
+        """The lesson from this file's own CI red: `test_things_that_are_not_pids_are_gone` used the
+        real probe for 1.5, `int(1.5)` truncated it to pid 1, and pid 1 is *alive* on POSIX
+        (PermissionError) while Windows answers EINVAL — so the seam-free case was green here and red
+        there. This pins the cross-platform truth without a seam, and the read path with it."""
+        self.assertIs(guard.pid_running(os.getpid()), True,
+                      "the reader's own pid was called gone")
+        for value in (1.5, 2.0, 0.5, "42", b"42", True, False):
+            with self.subTest(pid=value):
+                self.assertIs(guard.pid_running(value), False, f"{value!r} was read as a pid")
+
+        path = cfg_for(scratch_dir(self)).heartbeat_path
+        write_heartbeat(path, pid=1234.0, ended=False, age_minutes=0.0)   # a JSON float
+        reading = guard.heartbeat_reading(path)
+        self.assertIs(reading.pid, None, f"a float pid survived the read: {reading}")
+        self.assertIs(reading.running, False)
+        self.assertIs(reading.alive, False)
+
 
 class TheStructuredStaleFlag(unittest.TestCase):
     """The prose verdict handles age; the machine-readable `stale` field must too, because that is

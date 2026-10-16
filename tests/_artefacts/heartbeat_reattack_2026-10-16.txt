@@ -1,0 +1,57 @@
+HEARTBEAT LIVENESS — RE-ATTACK at `34d73a8` (code `aa6c721`, `3cbfc15`, `0e43da0`)
+Verifier: Assay. 2026-10-16. Offline: in-memory fake, hand-written heartbeat files, no rental.
+
+FILES
+  tests/test_heartbeat_liveness_attack.py   (18 tests + 17 subtests: all pass)
+  tests/_artefacts/heartbeat_reattack_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `34d73a8`, package path printed)
+  python -m pytest tests/test_heartbeat_liveness_attack.py tests/test_heartbeat_liveness.py -q
+      -> 65 passed, 31 subtests, 0 failed
+No suite and no gate were run: single-file runs as before.
+
+THE THREE FIXES HOLD
+  * `aa6c721` — the pid must be an integer. The seam-free control now passes here *and* would on
+    POSIX: the reader's own pid reads alive, and 1.5 / 2.0 / 0.5 / "42" / b"42" / True / False all
+    read gone. The read path agrees: a heartbeat carrying a JSON float pid reads as **no pid**, so it
+    is not protection rather than a truncated pid 1. This is the CI red my seam test could not see —
+    `int(1.5)` truncated to pid 1, and pid 1 is alive on POSIX (PermissionError) while Windows
+    answers EINVAL — so the new case is deliberately seam-free, and the lesson is recorded below.
+  * `3cbfc15` — a candidate that vanishes between the listing and the stat is skipped, not stat'ed:
+    finding 18's reproduction (the glob seam that unlinks between listing and sort) now returns a
+    reading of `None` instead of a `FileNotFoundError` out of `status`/`doctor`.
+  * `0e43da0` — the unreachable ordering tier is gone, and the tier that remains behaves: a live,
+    wedged guard still wins over a finished one.
+
+NO NEW HOLE FOUND IN THE NEW CODE
+  The set's ordering (crashed + finished -> the newest is reported, both orders), the pruning (a
+  finished marker older than the window is removed, a crashed guard's file is kept), the freshness
+  bound on a reused pid, and the ownership rules were all re-run against the new code and hold.
+
+ONE BOUNDARY, READ FROM THE CODE RATHER THAN MEASURED (conservative direction)
+  `heartbeat_files` skips a candidate on **any** `OSError`, so a heartbeat whose `stat` is refused
+  for a reason other than "gone" (a permission or ACL refusal) is dropped with the pruned ones and
+  the tool reads NO GUARD while a guard is writing. That is the safe direction — it under-reports
+  protection rather than over-reporting it — and a tool cannot report what it cannot stat; recorded
+  so the choice is deliberate rather than accidental.
+
+STILL OPEN — FORGE'S COUNT QUESTION, WITH MY ANSWER
+  Measured at this tip: with a crashed guard's file and a live guard's file both present, the line
+  names only the live guard, and neither the prose nor `facts` says a guard died (`guards` is not a
+  key; the crashed pid does not appear). So a caller cannot tell one guard from three, and a guard
+  that died is invisible while another works.
+  Recommendation, if the ruling wants it closed: the reported reading answers "is anything watching?"
+  and should stay single; the **set** belongs beside it — `guard.guards: N` with
+  `guard.others: [{pid, ended, age_minutes, stale}]` for the readings that are not the reported one,
+  and a `doctor` warn when any reading is a crashed guard (unmarked, dead pid), because a guard that
+  died is evidence and `doctor` is where an operator looks for exactly that. Per-guard `stale` then
+  falls out of the same array rather than needing its own field.
+
+LESSON FOR MY OWN LANE (the CI red was worth the cost)
+  A test that uses a seam to simulate another platform's behaviour must be paired with a seam-free
+  case, or it passes on one host and fails on the other. `test_things_that_are_not_pids_are_gone`
+  used the real `os.kill` for 1.5 and was green on Windows, red on every Linux job.
+
+VERDICT
+  Clean. The three fixes hold, the new code has no hole I could find, and the only outstanding item
+  is the count question above — a design answer, not a defect.
