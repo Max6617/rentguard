@@ -78,8 +78,28 @@ the instance's own record and the account's listing, and any disagreement keeps 
 still billing. The machine the **open row** names is confirmed too, even when it is a different one from
 the machine this call stopped.
 `adopt --uptime-hours` is an **estimate**, for a machine whose report is gone: it must be a positive
-number of hours and must fit inside the machine's life (its creation instant, or its own positive
-uptime), or the row is refused rather than opened at a start that records nothing.
+finite number of hours (`0`, a negative, `nan` and `inf` are refused) and must fit inside the machine's
+life (its creation instant, or its own positive uptime), or the row is refused rather than opened at a
+start that records nothing.
+
+`up` refuses beside a machine it cannot account for, and it names the machine. **"Live" is not the
+test**: only `EXITED`, `TERMINATED` or gone counts as finished, so everything else — `STOPPING`, `ERROR`,
+anything a provider adds later, a missing status — counts as **billing**. While such a machine has no
+ledger row here, `up` will not rent; it prints the machine's id and status and takes `--force` to rent
+anyway. The cost is real and deliberate: an `ERROR` pod that never billed blocks a rent until it is
+terminated or overridden, and a machine stopped a second ago blocks one for the seconds it spends
+`STOPPING` — the same command rents as soon as the provider says `EXITED`. A false refusal is loud and
+takes one word; a silent billing machine is neither.
+
+A **resume** is held to the same rule as a fresh rent. When `up` finds a machine it already recorded, it
+takes a second liveness reading before calling it a rental: a machine that is not usable is stopped, its
+row is closed, and the command exits 1 with `unusable` — `run` and `pull` would have refused it seconds
+later. While a resume waits for the machine to answer, a guard is armed, so the wait cannot bill
+unwatched. **Two holes are open in that path at `0d01d57`** and being fixed: a machine that vanishes
+between the two readings is still reported `reused`, and a resume whose wait fails leaves the machine it
+just revived billing with no row and no guard. [Limitations](docs/limitations.md) names both, with their
+reproductions — until they are green, treat a `reused` line as a claim worth confirming with `rentguard
+status`.
 
 No account yet? Every command also runs against an in-memory provider — real behaviour, no network, no
 key, no money: [test the cap without spending](docs/fake.md).
@@ -93,8 +113,8 @@ takes `--json`: stdout then carries exactly one JSON document and the human text
 The cap is a dollar figure in `rentguard.toml`. It is enforced in two places, both outside the
 provider:
 
-- before renting, `up` refuses when the recorded spend reaches the cap, when a live instance has no
-  ledger row, or when an open row names an instance that is not there;
+- before renting, `up` refuses when the recorded spend reaches the cap, when a machine that may still be
+  billing has no ledger row here, or when an open row names an instance that is not there;
 - while renting, `watch` stops the instance when the total or the per-run cap is crossed, when the
   run exceeds its maximum hours, or when the GPU has been idle for the idle window.
 

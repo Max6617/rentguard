@@ -3,7 +3,7 @@
 What rentguard does not do, and what it cannot promise. Read this before trusting it with money you
 cannot lose.
 
-Describes **`042fd21`** (2026-10-15). Where a number or a quote appears, it names the revision it was
+Describes **`0d01d57`** (2026-10-16). Where a number or a quote appears, it names the revision it was
 read at.
 
 ## Worked example: an open row whose instance is gone
@@ -169,6 +169,21 @@ proceeds unlocked rather than refusing to record money.
 while it crash-loops. `is_alive` requires a positive uptime *and* a port; `up` — both the path that
 rents a new machine and the path that reuses one it already recorded — `run` and `pull` refuse to treat
 anything else as a rental.
+
+**A resume is held to the same rule — and it is not closed yet** (`d8accac`, two holes open at
+`0d01d57`). `up` takes a second liveness reading on a machine it already recorded, stops a machine that
+fails it and closes the row (exit 1, `unusable`), and arms a guard while a resume waits for the machine
+to answer. The two holes, both red and being fixed:
+
+- if the machine **vanishes between the two readings**, the second reading is discarded (`get(...) or
+  pod`) and the stale first one is what gets checked, so `up` reports `reused`, exit 0, and a row is open
+  against a machine the account no longer shows;
+- a resume whose **wait fails** leaves the machine it just revived `RUNNING` with no ledger row and no
+  guard — the command had started it, the wait raised, and nothing stopped it.
+
+The reproductions are `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`, two tests. Until they
+are green, treat a `reused` line as a claim about a machine someone should confirm with `rentguard
+status`.
 
 **Without a network volume, the container disk dies with the instance.** A restart gives you a fresh
 container and none of your results. If you need results to survive, either set `[runpod].volume_id` or

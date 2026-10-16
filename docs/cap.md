@@ -31,9 +31,16 @@ spend crosses the cap. Everything below is about what that does and does not cov
 | Maximum hours | every `watch` poll | the provider's uptime for the instance | stops the instance, closes the row |
 | Idle GPU | every `watch` poll | GPU utilisation held at 0 for the idle window | stops the instance, closes the row |
 | Already stopped | every `watch` poll | provider status `EXITED` or `TERMINATED` | closes the row, sends no stop |
+| Closing the row on `down` | `rentguard down`, after the stop | two witnesses: the instance's own record **and** the account's listing | closes only when both call the machine terminal (`EXITED`, `TERMINATED`, or gone); otherwise exit 1, `action: "still-billing"`, and the row stays **open** so the accrual and the cap keep seeing it |
 
 When more than one is true, the first one in this order is the one reported: already stopped, total
 cap, per-run cap, maximum hours, idle.
+
+A **resume** is held to the same rule as a fresh rent: `up` takes a second liveness reading on a machine
+it already recorded before calling it a rental, and while a resume waits for the machine to answer a
+guard is armed, so a waiting window cannot bill unwatched. Two holes are open in that path at `0d01d57`
+(a machine that vanishes between the readings, and a resume whose wait fails) and are named with their
+reproductions in [limitations](limitations.md).
 
 ## The arithmetic
 
@@ -109,9 +116,11 @@ it the ledger proceeds unlocked rather than refusing to write; in that case the 
 ## Prove the decision without spending
 
 The guard is a pure decision (`rentguard.guard.decide`) fed by a snapshot, and the money paths run
-against an in-memory provider with no network and no spend. At `042fd21`, `python -m pytest tests -q`
-from the checkout collects **490 tests, 0 failures** (54 subtests); these are the files this page leans
-on:
+against an in-memory provider with no network and no spend. At `0d01d57`, `python -m pytest tests -q`
+from the checkout collects **611 tests: 601 passed, 2 failed, 8 skipped, 99 subtests**. The two failures
+are the open reuse-path attacks (`tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`, named in
+[limitations](limitations.md)) — recorded here rather than smoothed over; Forge is mid-fix. These are the
+files this page leans on:
 
 | Suite | Tests | What it covers |
 | --- | --- | --- |

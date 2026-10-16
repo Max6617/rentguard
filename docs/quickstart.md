@@ -7,10 +7,13 @@ Time: about ten minutes, most of it waiting for the pod to boot. Money: whatever
 costs per hour, capped by the `cap_usd` you set.
 
 **The install evidence in §1 was re-run at `51e350e`; the free rehearsal in "Rehearse without paying"
-was run at `e53f544`** (both 2026-10-15), and each says which. The command transcripts are the free
-fake-provider ones and their real output is in [VERIFICATION.md](VERIFICATION.md). The paid step was run
-separately as milestone M2 — see [M2 — the real rental](M2-REAL-RENTAL.md) — and this page marks which
-transcripts are free and which are M2's.
+was run at `e53f544`** (both 2026-10-15), and each says which. The money-path behaviours in §3
+(`adopt --uptime-hours`), §4 (`up` beside a machine that may still bill, and the resume) and §8 (`down`'s
+closure) describe **`0d01d57`** (2026-10-16), and the transcripts beside them were run at that revision.
+The command transcripts are the free fake-provider ones and their real output is in
+[VERIFICATION.md](VERIFICATION.md). The paid step was run separately as milestone M2 — see
+[M2 — the real rental](M2-REAL-RENTAL.md) — and this page marks which transcripts are free and which
+are M2's.
 
 ## 1. Install
 
@@ -159,6 +162,18 @@ already spent is recorded rather than hidden. A live machine carrying **another 
 softer case: `doctor` warns, because that project's ledger owns it, and `down` will not stop a machine
 someone else is paying for.
 
+`adopt --uptime-hours` is an **estimate**, for a machine whose report is gone — the provider says
+nothing, so you supply the hours. It must be a positive finite number that fits inside the machine's
+life, or the row is refused rather than opened at a start that records nothing. Zero, a negative, `nan`
+and `inf` are one class: not a length of time.
+
+```console
+$ rentguard adopt fake-1 --purpose "estimate" --uptime-hours 0
+note           : uptime given as 0.0 h, not read from the provider
+error: --uptime-hours 0.0 is not a length of time, so a row starting there would record nothing for a machine that is billing: 0 starts the row now, a negative value starts it in the future, where it never accrues, and 0.0 is not a finite number of hours at all. Pass a positive number of hours — the smallest sensible value is just above 0 (0.01 h is 36 s); this machine is at most 21.4326 h old, and any estimate inside its life is accepted.
+[exit 2]
+```
+
 ## 4. Rent a machine
 
 Then rent:
@@ -214,6 +229,31 @@ error: the recorded instance is not what this config asks for, so it will not be
 Exit code 2. The config is the promise, and a substitution that nobody chose is how a window gets spent on
 a card you did not ask for. `--force` overrides it, and the override is written into the state file as
 well as printed, so it is visible after the fact.
+
+`up` also refuses beside a machine it cannot account for — one that may still be billing and has no
+ledger row here. **"May still be billing" is everything except `EXITED`, `TERMINATED`, or gone**,
+including a status this tool has never heard of. It names the machine, and `--force` rents anyway:
+
+```console
+$ rentguard up --purpose "beside an error pod"
+error: 1 instance(s) on the account may still be billing with no ledger row here: fake-1. Renting again could start a second bill.
+       stop it (`rentguard down`), record it (`rentguard adopt fake-1 --purpose ...`), or pass --force to rent anyway — a status that is not EXITED/TERMINATED counts as billing, including a STOPPING machine that is about to finish.
+[exit 2]
+```
+
+The cost is real and deliberate: a pod that is `STOPPING` after a `down` blocks a rent for those seconds,
+and an `ERROR` pod that never billed blocks it until it is terminated or you pass `--force`. A false
+refusal is loud and takes one word; a silent billing machine is neither.
+
+A **resume** is held to the same rule as a fresh rent. When `up` finds a machine it already recorded, it
+takes a second liveness reading before calling it a rental: a machine that is not usable is stopped, its
+row is closed, and the command exits 1 with `unusable` — `run` and `pull` would have refused it seconds
+later. While a resume waits for the machine to answer, a guard is armed, so the wait cannot bill
+unwatched. **Two holes in that path are open at `0d01d57`** and being fixed — a machine that vanishes
+between the two readings is still reported `reused`, and a resume whose wait fails leaves the revived
+machine billing with no row and no guard. Both are named with their reproductions in
+[limitations](limitations.md); until they are green, a `reused` line is worth confirming with `rentguard
+status`.
 
 ## 5. Start the guard
 
@@ -303,7 +343,17 @@ rentguard down
 
 Stops the instance and closes the ledger row with its wall-clock cost. If `[artefacts].pull` is set it
 pulls first; a failed pull still stops the machine, exits non-zero and prints which patterns were
-lost. Output from the free rehearsal in §9:
+lost.
+
+**The row is closed only when the account agrees the machine has finished.** Two witnesses are consulted
+— the instance's own record and the account's listing — and finished means `EXITED`, `TERMINATED`, or
+gone. Every other status counts as still billing, including one this tool has never heard of, so a stop
+the provider did not honour, a machine caught in `STOPPING`, or a **crash-looping** pod all leave the row
+**open** and exit 1 with `action: "still-billing"`; the accrual keeps counting and the cap keeps seeing
+it. The machine the **open row** names is confirmed the same way, even when it is not the one this call
+stopped, and `down` does not stop that machine for you.
+
+Output from the free rehearsal in §9:
 
 ```console
 $ rentguard down
