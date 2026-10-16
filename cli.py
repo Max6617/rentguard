@@ -40,6 +40,7 @@ import hashlib
 import fnmatch
 import io
 import json
+import math
 import os
 import re
 import shlex
@@ -60,6 +61,7 @@ from .guard import (
     CLAIM_UNCLAIMED,
     Finding,
     ReleaseGate,
+    TERMINAL_STATUSES,
     heartbeat_age_minutes,
     snapshot,
     state_findings,
@@ -1523,8 +1525,11 @@ def cmd_down(args) -> int:
         # `is_alive` is the same answer `run` and `pull` refuse on. `billing` is "can it charge me":
         # a pod that reports RUNNING with no uptime and no ports is not usable and **is** billing
         # (the crash loop the guard refuses to arm against), so it is stopped and confirmed here
-        # rather than skipped and its row closed under it.
-        billing = str(status or "").upper() not in ("EXITED", "TERMINATED")
+        # rather than skipped and its row closed under it. Only the *terminal* statuses end it — a
+        # status the tool has never heard of (`STOPPING`, a transitional or provider-specific state)
+        # is billing until the provider says `EXITED`/`TERMINATED` or stops showing the machine
+        # (re-attack finding 8, 2026-10-16).
+        billing = str(status or "").upper() not in TERMINAL_STATUSES
         usable = billing and is_alive(pod)
         pull_exit = None
         # Pull before the machine stops: an instance without a network volume is a container, and
@@ -1840,9 +1845,11 @@ def cmd_adopt(args) -> int:
 
     ``--uptime-hours`` is an **estimate**, for a machine whose report is gone, and it is checked
     against the life the provider describes the machine as having: ``createdAt`` when the payload
-    carries it, otherwise the machine's own positive uptime. An estimate that reaches further back
-    than a witness allows is refused with the witness named, and no row is opened. Three limits are
-    declared rather than closed, because inventing an answer where the provider gives none is the
+    carries it, otherwise the machine's own positive uptime. A value that is not a positive finite
+    number of hours — ``0``, a negative, ``nan``, ``inf`` — is refused outright (it would open a row
+    that records nothing for a machine that is billing). An estimate that reaches further back than a
+    witness allows is refused with the witness named. No row is opened by any refusal. Three limits
+    are declared rather than closed, because inventing an answer where the provider gives none is the
     direction this tool rules against:
 
     * with **neither** a creation instant nor a positive uptime, any positive estimate is accepted —
@@ -1876,24 +1883,29 @@ def cmd_adopt(args) -> int:
             uptime = estimate * 3600.0
             note(f"note           : uptime given as {args.uptime_hours} h, not read from the provider")
             created_at = _instance_created_at(pod)
-            implied_start = now_utc() - timedelta(seconds=uptime)
             # A life the check can measure the estimate against, when the provider describes one.
             age_hint = (f"; this machine is at most {(now_utc() - created_at).total_seconds() / 3600.0:.4f} h "
                         f"old, and any estimate inside its life is accepted") if created_at else ""
-            # An estimate of zero or less is not a small estimate, it is a broken one: 0 backdates the
-            # row to this instant and a negative value starts it in the **future**, where it can never
-            # accrue — so either records $0.00 for a machine that is billing, and the creation check
-            # below cannot see it (a future instant does not precede creation). Measured 2026-10-16 by
-            # Assay: `--uptime-hours=-2` opened a row two hours ahead (re-attack finding 5).
-            if estimate <= 0:
+            # An estimate that is not a positive, finite number of hours is not a small estimate, it is
+            # a broken one: 0 backdates the row to this instant and a negative value starts it in the
+            # **future**, where it can never accrue — so either records $0.00 for a machine that is
+            # billing, and the creation check below cannot see it (a future instant does not precede
+            # creation). `nan` and `inf` are the same class: they parse as floats and every comparison
+            # with NaN is False, so `<= 0` cannot see them and `timedelta(seconds=...)` raised
+            # ValueError/OverflowError out of the command instead of refusing (measured 2026-10-16 by
+            # Assay: `--uptime-hours=-2` opened a row two hours ahead — re-attack finding 5 — and
+            # `nan`/`inf` crashed — finding 9).
+            if not math.isfinite(estimate) or estimate <= 0:
                 note(f"error: --uptime-hours {args.uptime_hours} is not a length of time, so a row "
                      f"starting there would record nothing for a machine that is billing: 0 starts "
-                     f"the row now, and a negative value starts it in the future, where it never "
-                     f"accrues. Pass a positive number of hours — the smallest sensible value is "
-                     f"just above 0 (0.01 h is 36 s){age_hint}.")
-                emit(adopted=False, reason="uptime-not-positive", instance_id=pod.get("id"),
+                     f"the row now, a negative value starts it in the future, where it never "
+                     f"accrues, and {args.uptime_hours} is not a finite number of hours at all. Pass "
+                     f"a positive number of hours — the smallest sensible value is just above 0 "
+                     f"(0.01 h is 36 s){age_hint}.")
+                emit(adopted=False, reason="uptime-not-a-length-of-time", instance_id=pod.get("id"),
                      status=status, uptime_hours=args.uptime_hours)
                 return 2
+            implied_start = now_utc() - timedelta(seconds=uptime)
             # An estimate must not claim time the machine cannot have had. Measured 2026-10-16: an
             # estimate backdated a start to 15:16:59 for a pod created 15:23:31, over-recording about
             # $0.23 — the ledger then said the machine had billed for time before it existed.
@@ -2012,7 +2024,14 @@ def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
     `run closed …` and exited 0 while the pod stayed RUNNING for minutes, and `doctor` showed a live
     machine with no row against it — the ledger said the window was over and the machine was billing
     (defect 1, B19). So the account decides: ``EXITED``, ``TERMINATED`` or gone (``None``) means it
-    can no longer bill, and anything else means it still can.
+    can no longer bill, and **anything else means it still can**.
+
+    That last clause has to be the *terminal* set, not the complement of the live set (re-attack
+    finding 8, 2026-10-16). Written as ``status not in LIVE_STATUSES`` it read every status the tool
+    has never heard of — `STOPPING`, a transitional or provider-specific state — as finished, and
+    because the listing gate asked the same question with the same set, both witnesses agreed a
+    machine that was still shutting down (and still billing) had stopped. One set used twice is not
+    two witnesses.
 
     This is **one of two witnesses**, not the verdict: ``_may_close_the_row`` also reads the account's
     own listing, because this endpoint can disagree with it — a ``get`` that says EXITED while
@@ -2033,7 +2052,7 @@ def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
         if pod is None:
             return True, f"{instance_id} is gone from the account"
         last = str(pod.get("status") or "UNKNOWN").upper()
-        if last not in LIVE_STATUSES:
+        if last in TERMINAL_STATUSES:
             return True, f"{instance_id} is {last}"
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -2043,25 +2062,28 @@ def _confirm_stopped(provider: Provider, instance_id: str, *, bound: float,
         time.sleep(min(interval, remaining))
 
 
-def _listed_live(provider: Provider) -> tuple[dict[str, str] | None, str]:
-    """The account's own listing of what is still billing: ``({instance_id: status}, detail)``.
+def _listed_unfinished(provider: Provider) -> tuple[dict[str, str] | None, str]:
+    """The account's own listing of what has **not** finished: ``({instance_id: status}, detail)``.
 
-    ``None`` means the listing could not be read at all, which is **not** "nothing is live": a
-    closure may not rest on a listing nobody read. Every instance the account still shows in a live
-    status is in the map, whatever this root's own records say about it.
+    Every instance the account still shows in a status that is not one of ``TERMINAL_STATUSES`` is in
+    the map, whatever this root's own records say about it — a machine the listing calls ``RUNNING``
+    and one it calls ``STOPPING`` have the same answer here: it has not stopped.
+
+    ``None`` means the listing could not be read at all, which is **not** "nothing is live": a closure
+    may not rest on a listing nobody read.
     """
     try:
         rows = provider.list_pods()
     except Exception as exc:  # noqa: BLE001 - an unreadable listing is not a readable one
         return None, f"the account listing could not be read ({type(exc).__name__}: {exc})"
-    live: dict[str, str] = {}
+    unfinished: dict[str, str] = {}
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         status = str(row.get("status") or "").upper()
-        if status in LIVE_STATUSES:
-            live[str(row.get("id"))] = status
-    return live, ""
+        if status not in TERMINAL_STATUSES:
+            unfinished[str(row.get("id"))] = status or "UNKNOWN"
+    return unfinished, ""
 
 
 def _may_close_the_row(provider: Provider, instance_ids: list[str], *, bound: float,
@@ -2073,9 +2095,9 @@ def _may_close_the_row(provider: Provider, instance_ids: list[str], *, bound: fl
     * the instance's own record (``_confirm_stopped``), polled for the machines this call stopped
       (``polled``) so a stop that has not taken effect has the bound's patience, and read once for
       the others so a machine this call did not stop cannot hold the command for a minute;
-    * the account's own **listing** (``_listed_live``), which is the witness the fix's own sentence
-      names. A record that says EXITED — or returns nothing — while the listing still shows the
-      machine RUNNING is a disagreement, and a disagreement keeps the row open.
+    * the account's own **listing** (``_listed_unfinished``), which is the witness the fix's own
+      sentence names. A record that says EXITED or returns nothing while the listing still shows the
+      machine in any unfinished status is a disagreement, and a disagreement keeps the row open.
 
     An unreadable witness is not agreement either. The ordering is deliberate: the listing is read
     after the poll, so the sentence counts the same way a reader does — first "does the machine's own
@@ -2086,7 +2108,7 @@ def _may_close_the_row(provider: Provider, instance_ids: list[str], *, bound: fl
                                              bound=bound if instance_id in polled else 0.0)
         if not confirmed:
             return False, detail
-    listed, detail = _listed_live(provider)
+    listed, detail = _listed_unfinished(provider)
     if listed is None:
         return False, detail
     for instance_id in instance_ids:

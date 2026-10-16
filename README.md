@@ -73,8 +73,10 @@ leave the machine up to retry the copy, knowing it keeps billing.
 
 `down` calls a window closed only when the account **agrees** the machine has stopped: it consults both
 the instance's own record and the account's listing, and any disagreement keeps the row open (exit 1,
-`action: "still-billing"`) so the cost keeps accruing and the cap keeps seeing it. The machine the
-**open row** names is confirmed too, even when it is a different one from the machine this call stopped.
+`action: "still-billing"`) so the cost keeps accruing and the cap keeps seeing it. "Stopped" means
+`EXITED`, `TERMINATED` or gone — any other status, including one this tool has never heard of, counts as
+still billing. The machine the **open row** names is confirmed too, even when it is a different one from
+the machine this call stopped.
 `adopt --uptime-hours` is an **estimate**, for a machine whose report is gone: it must be a positive
 number of hours and must fit inside the machine's life (its creation instant, or its own positive
 uptime), or the row is refused rather than opened at a start that records nothing.

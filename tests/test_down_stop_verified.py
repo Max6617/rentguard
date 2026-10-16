@@ -301,5 +301,54 @@ class DownAnswersForTheMachineTheRowNames(DownCase):
         self.assertEqual(code, 0, f"a clean double-finish exited {code}:\n{text}")
 
 
+class AStatusThatHasNotFinished(DownCase):
+    """Only `EXITED`, `TERMINATED` or gone may close a row (re-attack finding 8, 2026-10-16).
+
+    `_confirm_stopped`'s own docstring said "EXITED, TERMINATED or gone means it can no longer bill,
+    and anything else means it still can", and the code did the opposite for every status outside
+    `LIVE_STATUSES`: `if last not in LIVE_STATUSES: return True`. A machine the provider reports as
+    `STOPPING` — neither live nor finished, and still billing while it shuts down — had its row closed
+    with **both** witnesses agreeing, because the listing gate used the same set. One set, used twice,
+    is what made the two witnesses agree on a wrong answer.
+    """
+
+    def test_a_stopping_pod_keeps_its_row_open(self) -> None:
+        provider = IgnoresStop(rate_usd_per_hour=0.89)
+        provider.add("pod-A", uptime_seconds=1800, status="STOPPING")   # a stop that is still in flight
+        self.cfg.budget.stop_confirm_s = 0.0
+
+        code, document, text = self.down(provider)
+
+        self.assertIsNotNone(
+            self.ledger.open_run(),
+            "the row closed on a status that is neither live nor EXITED/TERMINATED/gone: pod-A "
+            f"reports STOPPING, which still bills (exit {code}, action "
+            f"{document.get('action')!r})\n{text}")
+        self.assertNotEqual(code, 0, f"a still-shutting-down machine exited 0:\n{text}")
+        self.assertIn("STOPPING", text, f"the status that blocked the closure is not named:\n{text}")
+
+    def test_a_listing_that_shows_a_stopping_machine_keeps_the_row_open(self) -> None:
+        """The listing gate's own half: the instance's record says gone, the listing says STOPPING."""
+        class GoneButStopping(FakeProvider):
+            def get(self, instance_id):
+                return None
+
+            def list_pods(self):
+                rows = super().list_pods()
+                return [{**row, "status": "STOPPING"} for row in rows]
+
+        provider = GoneButStopping(rate_usd_per_hour=0.89)
+        provider.add("pod-A", uptime_seconds=1800, status="STOPPING")
+
+        code, document, text = self.down(provider)
+
+        self.assertIsNotNone(
+            self.ledger.open_run(),
+            "the listing showed pod-A STOPPING and the row closed anyway, because absence from the "
+            f"instance endpoint was read as finished (exit {code})\n{text}")
+        self.assertNotEqual(code, 0, f"a still-shutting-down machine exited 0:\n{text}")
+        self.assertIn("STOPPING", text, f"the status the listing reported is not named:\n{text}")
+
+
 if __name__ == "__main__":
     unittest.main()

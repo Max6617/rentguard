@@ -124,7 +124,7 @@ class AnEstimateThatIsNoLengthOfTime(AdoptCase):
         code, document, text = self.adopt("--uptime-hours", "-2")
 
         self.assertEqual(code, 2, f"a negative estimate was accepted:\n{text}")
-        self.assertEqual(document.get("reason"), "uptime-not-positive", document)
+        self.assertEqual(document.get("reason"), "uptime-not-a-length-of-time", document)
         self.assertIsNone(self.ledger.open_run(),
                           f"a row was opened that can never accrue:\n{text}")
         self.assertIn("positive", text, f"the refusal does not say what to pass instead:\n{text}")
@@ -133,8 +133,20 @@ class AnEstimateThatIsNoLengthOfTime(AdoptCase):
         code, document, text = self.adopt("--uptime-hours", "0")
 
         self.assertEqual(code, 2, f"a zero estimate was accepted:\n{text}")
-        self.assertEqual(document.get("reason"), "uptime-not-positive", document)
+        self.assertEqual(document.get("reason"), "uptime-not-a-length-of-time", document)
         self.assertIsNone(self.ledger.open_run(), text)
+
+    def test_nan_and_infinity_are_refused_rather_than_crashing(self) -> None:
+        """Re-attack finding 9: `float` parses both, `<= 0` sees neither (NaN comparisons are False),
+        and `timedelta(seconds=...)` then raised ValueError / OverflowError out of `cmd_adopt`."""
+        for value in ("nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                self.setUp()
+                code, document, text = self.adopt(f"--uptime-hours={value}")
+
+                self.assertEqual(code, 2, f"--uptime-hours={value} was not refused:\n{text}")
+                self.assertEqual(document.get("reason"), "uptime-not-a-length-of-time", document)
+                self.assertIsNone(self.ledger.open_run(), text)
 
     def test_the_message_names_the_smallest_sensible_value(self) -> None:
         """Gilbert's requirement on the refusal: say what the smallest sensible value is."""
