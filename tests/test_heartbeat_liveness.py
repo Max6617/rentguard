@@ -285,6 +285,22 @@ class TheReading(unittest.TestCase):
         self.assertFalse(reading.alive, reading)
         self.assertTrue(reading.ended)
 
+    def test_a_bool_pid_is_no_pid(self) -> None:
+        """`True` is an `int` in Python, so a hand-edited or foreign `"pid": true` survived as a pid and
+        every line and label called it `pid True` while the probe correctly read it as not running
+        (Assay, 2026-10-16). The probe's rule — no booleans, no floats — starts at the read now, so the
+        structured facts and the prose agree that there is no pid at all.
+        """
+        self.write(pid=True)
+        reading = guard.heartbeat_reading(self.path)
+
+        self.assertIsNone(reading.pid, f"a bool survived as a pid: {reading}")
+        self.assertFalse(reading.running, reading)
+        for value in (False, 1.5, "42"):
+            with self.subTest(pid=value):
+                self.write(pid=value)
+                self.assertIsNone(guard.heartbeat_reading(self.path).pid, value)
+
     def test_a_dead_pid_is_not_alive_even_with_a_fresh_age(self) -> None:
         """The backstop for a crash: nothing marked it ended, the age is seconds, the pid is gone."""
         self.write(pid=dead_pid())
@@ -413,7 +429,7 @@ class StatusReadsTheVerdict(HeartbeatCase):
 
         set_lines = [line for line in out.splitlines() if "guard set" in line.lower()]
         self.assertEqual(len(set_lines), 1, f"doctor did not print one line for the set:\n{out}")
-        self.assertIn("2 heartbeats", set_lines[0], set_lines[0])
+        self.assertIn("2 heartbeat files", set_lines[0], set_lines[0])
         self.assertIn("alive", set_lines[0], f"the live guard is missing from the set: {set_lines[0]}")
         self.assertIn("not running", set_lines[0],
                       f"the crashed guard is invisible in the set: {set_lines[0]}")
@@ -429,6 +445,70 @@ class StatusReadsTheVerdict(HeartbeatCase):
 
         self.assertNotIn("guard set", out.lower(),
                          f"a single heartbeat got a second line saying the same thing:\n{out}")
+
+    def status_json(self, provider) -> dict:
+        args = cli.build_parser().parse_args(["status", "--json"])
+        out = io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda cfg: provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.cmd_status(args)
+        text = out.getvalue()
+        return json.loads(text[text.index("{"):])
+
+    def test_the_set_rides_beside_the_reading_in_the_facts(self) -> None:
+        """Gilbert's ruling, 2026-10-16: the verdict line stays single (it answers "is anything
+        watching?") and the **set** goes beside it in `facts` — `readings` and `others`, each with its
+        own process facts and its own `stale`. A protection *redundancy* loss must be visible to a
+        script, not only to an operator reading prose.
+        """
+        provider = self.machine()
+        snapshot = guard.snapshot_fallback(self.cfg, Ledger(self.cfg.ledger_path))
+        guard.write_heartbeat(guard.guard_heartbeat_path(self.cfg.heartbeat_path, "live"), snapshot)
+        self.heartbeat(pid=dead_pid(), ended=False, at=iso(now_utc() - timedelta(minutes=8)))
+
+        facts = self.status_json(provider)["guard"]
+
+        self.assertEqual(facts["readings"], 2, facts)
+        self.assertEqual(len(facts["others"]), 1, f"the crashed guard is not in the set: {facts}")
+        other = facts["others"][0]
+        self.assertEqual(other["pid"], dead_pid(), other)
+        self.assertFalse(other["running"], other)
+        self.assertFalse(other["ended"], f"a crashed guard is not a finished one: {other}")
+        self.assertTrue(other["stale"], f"a crashed guard's reading is not stale: {other}")
+
+    def test_one_heartbeat_is_a_set_of_one(self) -> None:
+        """The schema is stable: one heartbeat says `readings: 1` and no others, rather than no keys."""
+        provider = self.machine()
+        self.heartbeat()
+
+        facts = self.status_json(provider)["guard"]
+
+        self.assertEqual(facts["readings"], 1, facts)
+        self.assertEqual(facts["others"], [], facts)
+        self.assertTrue(facts["running"], facts)
+
+    def test_doctor_warns_about_a_crashed_guard_and_not_about_a_finished_one(self) -> None:
+        """A crashed guard beside a live one is a protection redundancy loss: something was watching and
+        now nothing is, while the verdict line still — correctly — reports the live guard. `doctor`
+        warns, and it does not warn about a guard that marked itself finished, which is not a loss.
+        """
+        provider = self.machine()
+        snapshot = guard.snapshot_fallback(self.cfg, Ledger(self.cfg.ledger_path))
+        guard.write_heartbeat(guard.guard_heartbeat_path(self.cfg.heartbeat_path, "live"), snapshot)
+        self.heartbeat(pid=dead_pid(), ended=False, at=iso(now_utc() - timedelta(minutes=8)))
+
+        code, out = self.run_cmd(cli.cmd_doctor, ["doctor"], provider)
+
+        self.assertIn("guard-crashed", out, f"the crashed guard was not warned about:\n{out}")
+        self.assertIn(str(dead_pid()), out, f"the warning does not name the dead pid:\n{out}")
+        self.assertIn("WARN", out, f"the warning is not a warning:\n{out}")
+
+        self.heartbeat(pid=dead_pid(), ended=True, at=iso(now_utc() - timedelta(minutes=8)))
+        code, out = self.run_cmd(cli.cmd_doctor, ["doctor"], provider)
+
+        self.assertNotIn("guard-crashed", out,
+                         f"a guard that marked itself finished was warned about as crashed:\n{out}")
 
 
 class TheArmedClaimNeedsEveryFact(HeartbeatCase):
@@ -640,6 +720,28 @@ class TheGuardSet(unittest.TestCase):
         self.assertEqual(files, [survivor], "a path that no longer answers a stat was still listed")
         self.assertIsNotNone(reading, "the surviving guard was lost with the pruned file")
         self.assertTrue(reading.alive, reading)
+
+    def test_a_finished_stale_legacy_file_is_residue_not_a_guard(self) -> None:
+        """The legacy `heartbeat.json` is read for ever and used to be pruned by nothing, so a migrated
+        state dir reported two readings permanently — one live guard plus old residue — and `doctor`'s
+        set line overstated the number of guards on every run (Assay's finding 19, 2026-10-16). A
+        finished marker older than the window is not a guard: it is not counted, and the next writer
+        removes it like any other finished sibling.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"at": iso(now_utc() - timedelta(minutes=30)),
+                                         "pid": os.getpid(), "ended": True}), encoding="utf-8")
+        live = self.guard_file("live")
+
+        line = cli._guard_set_line(guard.heartbeat_readings(self.path))
+        self.assertIsNone(line, f"one live guard plus an old finished legacy file was reported as a "
+                                f"set: {line!r}")
+
+        guard.write_heartbeat(guard.guard_heartbeat_path(self.path, "writer"), self.snapshot())
+
+        self.assertFalse(self.cfg.heartbeat_path.exists(),
+                         "the finished legacy residue was left for ever, so the set line returns")
+        self.assertTrue(live.exists(), "a live guard's heartbeat was pruned with the residue")
 
     def test_the_writer_prunes_a_finished_sibling_but_not_a_live_or_crashed_one(self) -> None:
         finished = self.guard_file("finished", ended=True, age_minutes=30.0)

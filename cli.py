@@ -544,8 +544,21 @@ def cmd_doctor(args) -> int:
     name = provider_name(cfg)
     open_run = ledger.open_run()
     readings = heartbeat_readings(cfg.heartbeat_path)
-    guard_line, guard_facts = _guard_report(readings[0] if readings else None)
+    guard_line, guard_facts = _guard_report(readings[0] if readings else None, readings)
     findings: list[Finding] = []
+    # A crashed guard beside a live one is a protection **redundancy** loss: something was watching and
+    # now nothing is, while the verdict line — correctly — still reports the live guard. It is a warn,
+    # not an error: the set's best reading is what `armed` and the cap rest on, so protection itself is
+    # reduced, not gone. `not reading.ended` and a named pid is what makes it a crash rather than a
+    # pid-less or foreign file (Gilbert's ruling, 2026-10-16).
+    for reading in readings:
+        if reading.pid is not None and not reading.running and not reading.ended:
+            findings.append(Finding(
+                code="guard-crashed", severity="warn",
+                message=f"a guard is gone and never marked its heartbeat finished (pid {reading.pid}, "
+                        f"last heartbeat {reading.age_minutes:.1f} min ago): its protection ended when "
+                        f"its process did. The verdict line reports the best reading of the set, so "
+                        f"whatever else is watching still is"))
     with json_report(args):
         emit(command="doctor", version=__version__,
              config=str(cfg.source) if cfg.source else None,
@@ -824,7 +837,8 @@ def cmd_status(args) -> int:
     provider = _provider(cfg)
     open_run = ledger.open_run()
     pod = _pod(provider, cfg)
-    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
+    readings = heartbeat_readings(cfg.heartbeat_path)
+    guard_line, guard_facts = _guard_report(readings[0] if readings else None, readings)
     with json_report(args):
         emit(command="status", provider=provider_name(cfg),
              recorded_instance_id=_read_state(cfg).get("instance_id"),
@@ -1866,20 +1880,41 @@ def cmd_watch(args) -> int:
     return 0
 
 
-def _guard_report(reading) -> tuple[str, dict]:
+def _reading_facts(reading) -> dict:
+    """One heartbeat reading in the structured form a script gates on, ``stale`` included.
+
+    ``stale`` is per reading here, which is the point: the reported reading's own flag cannot describe a
+    second guard, and a caller asking "how many are watching, and is any of them silent" needs both.
+    """
+    if reading is None:
+        return {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
+                "ended": None}
+    return {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
+            "pid": reading.pid, "running": reading.running, "ended": reading.ended}
+
+
+def _guard_report(reading, readings: list | None = None) -> tuple[str, dict]:
     """The guard's line and its structured form, from one reading: the verdict is the **process**.
 
     ``alive`` needs the writer's own mark *and* a running pid (Gilbert's ruling, 2026-10-16); the age
     is printed beside them as the secondary signal it always was. A finished guard, a pid that is gone
     and a heartbeat nobody ever wrote are three sentences, because they are three different facts —
     and the one they used to share, `alive`, was the false one.
+
+    The **set** rides beside the line in the structured form (Gilbert's ruling, 2026-10-16): ``readings``
+    counts the heartbeat files that are readable and ``others`` lists every reading that is not the
+    reported one, each with its own process facts and its own ``stale``. A protection **redundancy** loss
+    — a crashed guard beside a live one — is then visible to a script as well as to an operator, without
+    the verdict line having to become two sentences. The line stays the single reading, because that is
+    what answers "is anything watching?".
     """
+    readings = list(readings) if readings else ([reading] if reading is not None else [])
+    facts = _reading_facts(reading)
+    facts["readings"] = len(readings)
+    facts["others"] = [_reading_facts(other) for other in readings[1:]]
     if reading is None:
         return ("NO GUARD — nothing is watching this instance, so it will bill until someone stops it",
-                {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
-                 "ended": None})
-    facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
-             "pid": reading.pid, "running": reading.running, "ended": reading.ended}
+                facts)
     if reading.ended:
         return (f"finished (last heartbeat {reading.age_minutes:.1f} min ago) — nothing is watching "
                 f"this instance, so it will bill until someone stops it", facts)
@@ -1894,21 +1929,33 @@ def _guard_report(reading) -> tuple[str, dict]:
 
 
 def _guard_set_line(readings: list) -> str | None:
-    """One line naming **every** heartbeat in the set, or ``None`` when there is only one.
+    """One line naming every heartbeat in the set, or ``None`` when there is only one worth naming.
 
     The reported reading stays single, because it answers one question — *is anything watching?* — and
-    the preference for a live reading already makes `armed` false for every other shape (Gilbert's
-    ruling, 2026-10-16: no new machinery, the set as diagnostics). What that leaves invisible is a
-    crashed guard beside a live one: the best-of reading is the live guard, and nothing said another
-    guard died. This is where `doctor` says it, in one line, with each reading's process fact and age.
+    the preference for a live reading already makes `armed` false for every other shape. What that
+    leaves invisible is a crashed guard beside a live one: the best-of reading is the live guard, and
+    nothing said another guard died. This is where `doctor` says it, in one line, with each reading's
+    process fact and age.
 
-    Diagnostics only, deliberately: no `status` line, no JSON key, and nothing at all for the ordinary
-    single-guard case, so the line can never be read as a second verdict.
+    Three things are deliberate about what counts:
+
+    - A **finished marker older than the window** is residue, not a guard — the same rule the writer
+      prunes by. Counting it made a migrated state dir, where the legacy ``heartbeat.json`` is read for
+      ever, print this line permanently and overstate the number of guards (Assay's finding 19,
+      2026-10-16).
+    - The number is **readings**, and the line says "heartbeat files" rather than "guards" for exactly
+      that reason: two files can be one guard's past, a corrupt file is not a reading at all, and a
+      pid-less one is.
+    - It is **prose only** — no `status` line, nothing for the ordinary single-guard case, and never a
+      second verdict. The structured half of the ruling (the whole set beside the reading in `facts`)
+      lives in `_guard_report`, not here.
     """
-    if len(readings) < 2:
+    members = [reading for reading in readings
+               if not (reading.ended and reading.age_minutes > GUARD_STALE_MINUTES)]
+    if len(members) < 2:
         return None
     parts = []
-    for reading in readings:
+    for reading in members:
         if reading.alive:
             verdict = "alive"
         elif reading.ended:
@@ -1917,7 +1964,7 @@ def _guard_set_line(readings: list) -> str | None:
             verdict = "not running"
         pid = "no pid" if reading.pid is None else f"pid {reading.pid}"
         parts.append(f"{verdict} ({pid}, {reading.age_minutes:g} min ago)")
-    return f"{len(readings)} heartbeats — " + "; ".join(parts)
+    return f"{len(members)} heartbeat files — " + "; ".join(parts)
 
 
 def _instance_created_at(pod: dict) -> datetime | None:

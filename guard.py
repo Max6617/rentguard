@@ -615,7 +615,11 @@ def _read_one(path: Path, *, kill=None) -> HeartbeatReading | None:
     if not isinstance(payload, dict):
         return None
     raw_pid = payload.get("pid")
-    pid = raw_pid if isinstance(raw_pid, int) else None
+    # A bool is an int in Python, so `True` survived as a pid and every line and label called it
+    # "pid True" while the probe correctly read it as not running (Assay, 2026-10-16). The rule the
+    # probe already follows — no booleans, no floats — starts here, so a malformed pid reads as **no
+    # pid** everywhere instead of as a pid that only the verdict disagrees with.
+    pid = raw_pid if isinstance(raw_pid, int) and not isinstance(raw_pid, bool) else None
     running = pid_running(pid) if kill is None else pid_running(pid, kill=kill)
     return HeartbeatReading(age_minutes=round((now_utc() - then).total_seconds() / 60.0, 1),
                             pid=pid, ended=bool(payload.get("ended")), running=running)
@@ -658,8 +662,18 @@ def _prune_finished_heartbeats(path: Path) -> None:
     removed — a live guard's file is never touched, and a crashed guard's file (a dead pid, no mark)
     stays, which is evidence worth keeping. Best-effort: a file that cannot be read or removed is left
     for a caller that can.
+
+    The **legacy** ``heartbeat.json`` is a candidate too (finding 19, 2026-10-16). It is written by older
+    revisions and is never written again once per-guard files exist, so an ended, window-old one is
+    residue by then: `heartbeat_readings` still reads it, which made a migrated state dir report two
+    readings for ever and kept `doctor`'s set line permanently on. The writer's own file is skipped as
+    before, so a legacy writer never removes what it is writing.
     """
-    for sibling in path.parent.glob("heartbeat-*.json"):
+    candidates = list(path.parent.glob("heartbeat-*.json"))
+    legacy = path.parent / "heartbeat.json"
+    if legacy != path and legacy not in candidates:
+        candidates.append(legacy)
+    for sibling in candidates:
         if sibling == path:
             continue
         reading = _read_one(sibling)
