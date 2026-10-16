@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`4e7f3d3`** (2026-10-16).
+say where they stand at the revision this file describes, **`5356d93`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`4e7f3d3` unless the entry says otherwise.
+`5356d93` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -357,3 +357,56 @@ the account's listing), and only then is its row closed.
 provider whose pod is `status="RUNNING", uptime_seconds=0, ports=None` must appear in
 `provider.actions` as `("pod-A", "stop")`, and the row must be closed only once the account agrees the
 machine stopped.
+
+## The closure read every status it did not know as "finished" (fixed)
+
+**Found** by Assay's re-attack of the B19 money fixes (`746c1be`, verdict
+`tests/_artefacts/b19_reattack_verdict_2026-10-16.txt`, finding 8), 2026-10-16.
+
+`_confirm_stopped`'s own docstring said "EXITED, TERMINATED or gone means it can no longer bill, and
+anything else means it still can", and the code did the opposite: `if last not in LIVE_STATUSES:
+return True`. A pod the provider reports as `STOPPING` — still shutting down, and still billing until
+it is `EXITED` — was therefore read as finished, and so was any transitional or provider-specific
+status the tool has never heard of.
+
+The second half is what made it silent: the listing gate asked the same question with the same set
+(`_listed_live`), so **both witnesses agreed** on the wrong answer. One set used twice is not two
+witnesses, and the whole point of a two-witness closure is that the witnesses can disagree.
+
+Measured with the in-memory fake: a pod `STOPPING` whose stop call is accepted but leaves it shutting
+down made `down` exit 0 with `action: "stopped"`, and the row closed under a machine that was still
+billing.
+
+**Fixed at `5356d93`.** The set that ends a closure is the **terminal** one: `EXITED`, `TERMINATED`,
+or gone from the account. `TERMINAL_STATUSES` replaces `LIVE_STATUSES` in `_confirm_stopped`, in
+`cmd_down`'s `billing` gate, and in the listing gate, which is now `_listed_unfinished` — every
+instance the account still lists in a status other than terminal keeps the row open — and the refusal
+names the status (`pod-A is still STOPPING on a single read`).
+
+**The tests that close it.** `tests/test_down_stop_verified.py::AStatusThatHasNotFinished`: a
+`STOPPING` pod keeps its row open and exits non-zero, and a listing that shows `STOPPING` keeps the
+row open even when the instance's own record returns nothing.
+
+**Reported, not changed:** the same polarity decides "is this machine live" in `_live` (which `up`'s
+untracked-instance refusal reads), in `_pod`'s fallback, and in `guard.state_findings` (which `doctor`
+reports as drift). Inverting those would make every unknown status, `ERROR` included, read as billing —
+over-reporting rather than over-recording — so it is a ruling of its own rather than a line added here.
+
+## `--uptime-hours=nan` and `inf` crashed instead of being refused (fixed)
+
+**Found** by the same re-attack (finding 9), 2026-10-16.
+
+`--uptime-hours` takes a float, so `nan` and `inf` parse. The refusal that closes finding 5 is
+`estimate <= 0`, and **every comparison with NaN is False** while infinity is not `<= 0`, so neither
+was refused; the next line, `now_utc() - timedelta(seconds=uptime)`, then raised `ValueError` for NaN
+and `OverflowError` for infinity out of `cmd_adopt` — a traceback where a named refusal already
+existed.
+
+**Fixed at `5356d93`.** `math.isfinite` joins the guard, and the reason is
+`uptime-not-a-length-of-time`, which is what the message already said: `0`, a negative, `nan` and
+`inf` are one class — a value that is not a positive finite number of hours, and one that would open a
+row recording nothing for a machine that is billing.
+
+**The test that closes it.**
+`tests/test_adopt_estimate.py::AnEstimateThatIsNoLengthOfTime::test_nan_and_infinity_are_refused_rather_than_crashing`
+(`nan`, `inf`, `-inf`, each refused with exit 2 and no row opened).
