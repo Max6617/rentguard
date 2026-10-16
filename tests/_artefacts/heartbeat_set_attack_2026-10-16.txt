@@ -1,0 +1,59 @@
+THE GUARD SET — ATTACKED at `e230f80` (code `1014ade`)
+Verifier: Assay. 2026-10-16. Offline: in-memory fake, hand-written heartbeat files, no rental.
+
+FILES
+  tests/test_heartbeat_liveness_attack.py   (18 tests + 11 subtests: 1 failed, 17 passed)
+  tests/_artefacts/heartbeat_set_attack_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `e230f80`, package path printed)
+  python -m pytest tests/test_heartbeat_liveness_attack.py tests/test_heartbeat_liveness.py -q
+      -> 1 failed, 60 passed, 17 subtests
+The one failure is finding 18 below.
+
+FINDINGS 15, 16 AND 17 ARE CLOSED (verified)
+  * 15 — `pid_running` reads OverflowError as gone, and the probe is a seam on the read path:
+    `heartbeat_reading(path, kill=<overflow>)` gives running false, no crash, and the report says
+    "not running".
+  * 16 — `stale` is the age window again: a live, unmarked, 60-minute reading is "wedged" with
+    `stale: true` in `status --json`, and a fresh live one is `stale: false`.
+  * 17 — one file per guard: releasing one guard no longer marks a live other finished (my two-guard
+    test passes), and the readers take the best of the set.
+
+FINDING 18 — a heartbeat pruned during the read crashes `status` and `doctor`.
+  Every `write_heartbeat` prunes the set, so a reader can list the directory while another process
+  removes a file from it. `heartbeat_files` sorts the listing with `p.stat().st_mtime`, and a file
+  gone between the glob and the stat raises out of the whole read.
+  Measured: list, then unlink (the concurrent prune), then stat ->
+      FileNotFoundError: [WinError 2] ... \.rentguard\heartbeat-ended-guard.json
+  out of `heartbeat_reading`, which `status` and `doctor` call for their one verdict line.
+  Reachability: any writer pruning while a read runs — one `write_heartbeat` per poll from any guard,
+  and `status`/`doctor` are the commands an operator runs *because* they are unsure. The window is
+  small; the failure is total when it lands.
+  Severity: robustness on the read path for the protection verdict; a file that is gone must read as
+  absent, never as a traceback. A defensive `stat` (skip on OSError) or an mtime captured inside the
+  listing loop is the fix.
+
+WHAT ELSE HOLDS (attacked, not broken)
+  * the best-of ordering when a crashed guard (dead pid, no mark) and a finished guard (live pid,
+    marked) coexist: neither is alive, and the **newest** is reported — "not running" or "finished"
+    according to which is newer, in both orders.
+  * the prune: a finished marker older than the window is removed; a crashed guard's file (dead pid,
+    no mark) stays, as claimed.
+  * the disclosed pid-reuse caveat on the set: a crashed file whose pid a live process has reused
+    reads "alive" only inside the freshness window, and "wedged" with `stale: true` at 8 minutes.
+  * the age is carried beside every verdict: `stale` and the prose agree in every shape tested.
+
+FOR FORGE'S TWO DESIGN QUESTIONS (recorded, not claims)
+  * the count of guards is not exposed. With a crashed guard beside a live one, the live guard is the
+    reading and nothing in the line or the facts says another guard died — measured, and the test that
+    records it passes. `facts` carries no count and no list, so a caller cannot tell one guard from
+    three. A `guards: N` (or the readings themselves) in the structured form would close it.
+  * `stale` is the reported reading's, so the same shape hides a wedged guard behind a fresh one. If
+    the structured form grows the count, `stale` per guard belongs beside it rather than instead of it.
+  * a trivial observation while reading the ordering: `_best_first`'s second tier
+    (`running and not ended`) is `alive`, so it is unreachable; the ordering is alive-then-newest as
+    the docstring's first and third tiers describe it.
+
+VERDICT
+  The three findings are genuinely closed and the set's ordering, pruning and freshness all behave as
+  described. One new seam: the read itself is not safe against the prune every writer performs (18).

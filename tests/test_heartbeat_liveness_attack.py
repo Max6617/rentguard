@@ -223,5 +223,123 @@ class ControlsThatMustKeepPassing(unittest.TestCase):
                       f"the freshness clause did not cover the caveat: {line!r}")
 
 
+class TheGuardSetAtE230f80(unittest.TestCase):
+    """One file per guard, best-of ordering and pruning. Attacks the read against a concurrent prune,
+    the ordering when a crashed guard and a finished one coexist, and what a caller is told about the
+    guards that are not the reported one."""
+
+    def setUp(self) -> None:
+        self.root = scratch_dir(self)
+        self.cfg = cfg_for(self.root)
+
+    def test_a_heartbeat_removed_between_the_listing_and_the_stat_does_not_crash_the_read(self) -> None:
+        """Every `write_heartbeat` prunes the set, so `status`/`doctor` can list the directory while
+        another process removes a file from it. `heartbeat_files` sorts by `p.stat()`, and a file gone
+        between the glob and the stat raises FileNotFoundError out of the whole read."""
+        path = self.cfg.heartbeat_path
+        write_heartbeat(guard.guard_heartbeat_path(path, "ended-guard"),
+                        pid=os.getpid(), ended=True, age_minutes=30.0)
+        real_glob = Path.glob
+
+        def glob_then_a_guard_prunes(directory, pattern):
+            found = list(real_glob(directory, pattern))
+            for candidate in found:              # the concurrent prune, right here
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
+            return iter(found)
+
+        try:
+            with mock.patch.object(Path, "glob", glob_then_a_guard_prunes):
+                reading = guard.heartbeat_reading(path)
+        except FileNotFoundError as exc:
+            self.fail(f"a heartbeat pruned between the listing and the stat crashed the read with "
+                      f"{type(exc).__name__}: {exc}; the read must skip a file that is gone")
+        self.assertIsNone(reading, "no file survived, so the reading should be None")
+
+    def test_the_newest_of_a_crashed_and_a_finished_guard_is_reported(self) -> None:
+        """A crashed guard is a dead pid with no mark; a finished one is a live pid with the mark.
+        Neither is alive, so the newest is what a caller is shown."""
+        path = self.cfg.heartbeat_path
+        cases = [
+            (1.0, 20.0, "not running", "the crashed guard is newer"),
+            (20.0, 1.0, "finished", "the finished guard is newer"),
+        ]
+        for crashed_age, finished_age, wanted, label in cases:
+            with self.subTest(label=label):
+                self.setUp()
+                path = self.cfg.heartbeat_path
+                write_heartbeat(guard.guard_heartbeat_path(path, "crashed"),
+                                pid=999999, ended=False, age_minutes=crashed_age)
+                write_heartbeat(guard.guard_heartbeat_path(path, "finished"),
+                                pid=os.getpid(), ended=True, age_minutes=finished_age)
+                line, facts = cli._guard_report(guard.heartbeat_reading(path))
+                self.assertIn(wanted, line, f"{label}: {line!r}")
+
+    def test_a_crashed_guard_beside_a_live_one_is_not_reported_at_all(self) -> None:
+        """Records what a caller is told today, for Forge's design question: the best-of returns the
+        live guard, and nothing in the line or the facts says another guard crashed."""
+        path = self.cfg.heartbeat_path
+        write_heartbeat(guard.guard_heartbeat_path(path, "crashed"),
+                        pid=999999, ended=False, age_minutes=8.0)
+        write_heartbeat(guard.guard_heartbeat_path(path, "live"),
+                        pid=os.getpid(), ended=False, age_minutes=0.2)
+
+        line, facts = cli._guard_report(guard.heartbeat_reading(path))
+
+        self.assertIn("alive", line, line)
+        self.assertNotIn("999999", line, f"the crashed guard is named after all: {line!r}")
+        self.assertNotIn("guards", facts, f"the facts now carry a count: {facts}")
+
+    def test_the_read_path_takes_the_probe_seam(self) -> None:
+        """Finding 15's second half: the probe is a seam on the read path, so the POSIX OverflowError
+        shape cannot reach `status` or `doctor`."""
+        path = self.cfg.heartbeat_path
+        write_heartbeat(path, pid=2 ** 40, ended=False, age_minutes=0.0)
+
+        def overflow(pid, sig):
+            raise OverflowError("signed integer is greater than maximum")
+
+        reading = guard.heartbeat_reading(path, kill=overflow)
+
+        self.assertIsNotNone(reading)
+        self.assertIs(reading.running, False, "an unsignalable pid read as running")
+        self.assertIs(reading.alive, False)
+        self.assertIn("not running", cli._guard_report(reading)[0])
+
+    def test_a_reused_pid_in_a_crashed_guard_file_reads_alive_only_while_fresh(self) -> None:
+        """The disclosed caveat on the set: a crashed guard's file is kept as evidence, and if its pid
+        is reused by a live process the probe cannot tell. The freshness window bounds it."""
+        path = self.cfg.heartbeat_path
+        write_heartbeat(guard.guard_heartbeat_path(path, "crashed"), pid=999999,
+                        ended=False, age_minutes=0.5)
+        with mock.patch.object(guard, "pid_running", lambda pid, **k: True):
+            line, facts = cli._guard_report(guard.heartbeat_reading(path))
+        self.assertIn("alive", line, line)
+
+        write_heartbeat(guard.guard_heartbeat_path(path, "crashed"), pid=999999,
+                        ended=False, age_minutes=8.0)
+        with mock.patch.object(guard, "pid_running", lambda pid, **k: True):
+            reading = guard.heartbeat_reading(path)
+            line, facts = cli._guard_report(reading)
+        self.assertIn("wedged", line, line)
+        self.assertIs(facts["stale"], True, facts)
+
+    def test_the_prune_removes_a_finished_old_file_and_keeps_a_crashed_one(self) -> None:
+        """Forge's claim, pinned: a finished marker older than the window is pruned; a crashed
+        guard's file (dead pid, no mark) stays as evidence."""
+        path = self.cfg.heartbeat_path
+        ended_old = guard.guard_heartbeat_path(path, "ended-old")
+        crashed = guard.guard_heartbeat_path(path, "crashed")
+        write_heartbeat(ended_old, pid=os.getpid(), ended=True, age_minutes=30.0)
+        write_heartbeat(crashed, pid=999999, ended=False, age_minutes=30.0)
+
+        guard._prune_finished_heartbeats(guard.guard_heartbeat_path(path, "writer"))
+
+        self.assertFalse(ended_old.exists(), "the finished old marker was not pruned")
+        self.assertTrue(crashed.exists(), "the crashed guard's evidence was pruned")
+
+
 if __name__ == "__main__":
     unittest.main()
