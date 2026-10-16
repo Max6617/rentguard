@@ -667,14 +667,42 @@ the freshness bound or the ownership rules.
   permission or ACL refusal) is dropped with the pruned ones and the tool reads *NO GUARD* while a guard
   writes. That is the safe direction — under-reporting protection rather than inventing it — and a tool
   cannot report what it cannot stat.
-- **Open, for a ruling rather than a fix:** the number of guards is not exposed. With a crashed guard's
-  file and a live guard's file both present, the line and the `facts` name only the live guard, so a
-  caller cannot tell one guard from three and a guard that died while another worked is invisible.
-  Assay's recommendation is that the reported reading stay single (it answers "is anything watching?") and
-  the **set** sit beside it: `guard.guards: N` with `guard.others: [{pid, ended, age_minutes, stale}]`,
-  plus a `doctor` warn when any reading is a crashed guard (unmarked, dead pid), which is where an
-  operator looks for exactly that. Not implemented before the ruling.
+- **Ruled and closed (Gilbert, 2026-10-16): no new machinery.** The reported reading stays single — it
+  answers "is anything watching?", and with the best-of preference a crashed guard beside a live one
+  cannot make `armed` true — so the claim never needed the count. What stays invisible without it is the
+  crash itself, so `doctor` prints the **set** as a diagnostic line, implemented at `04925b8`:
 
-The revision of record is `aed798f`: 681 passed / 8 skipped / 130 subtests in both provider modes, gate
-3,489 / 3,430 statements = 98.3%, exit 0 — with the one unreproduced red gate run of that batch recorded
-in [VERIFICATION](VERIFICATION.md) beside the row rather than rounded off.
+  ```
+  guard heartbeat: alive (pid 26900, heartbeat 0.0 min ago)
+  guard set      : 2 heartbeats — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
+  ```
+
+  It appears only when more than one heartbeat is readable, never on `status` and never in JSON, and its
+  own limits are named in [limitations](limitations.md): no file or guard id per reading, and no
+  per-guard `stale`.
+
+### The fixture that made the gate red, and the one run that stayed nameless (fixed at `554d079`)
+
+One gate run in sixteen at `aed798f` printed a red internal suite and exited 1 while `TOTAL` sat above the
+floor — the gate's own suite-verdict rule (defect 21) doing its job — and my output filter threw the failing
+test's name away. Fifteen green runs after it (six in the same suite-then-gate sequence) left one
+fingerprint: **`cli.py` 1708 against the usual 1706**, two extra lines, exactly the two lines of
+`_confirm_stopped`'s `except ProviderError` branch.
+
+The name came back the ordinary way: the flake stopped being rare, failing 3 runs in 4 in one batch and
+then 1 in 10 under the tracer, and it is
+`tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`.
+**The mechanism was the fixture, not the tool.** `up` arms a wait guard; that guard polls `get` from its
+own thread; and the test's scripted transport kept **one sample cursor for every thread**, so the guard's
+reads consumed the script. In the bad interleaving the list ran out before the stop confirmation, the
+transport answered 500, `_confirm_stopped` could not agree with an unreadable witness, and `up` left the
+row **open** — the correct, conservative direction, and the opposite of what the case asserts. The test was
+measuring the interleaving. Fixed in the fixture at `554d079`: only the main thread advances the script, a
+guard-thread read returns the machine's latest main-thread reading, the last sample holds once the list
+ends, and the tail is **EXITED** rather than a 500 — the docstring always said "finally it is gone" and the
+fixture never implemented a witness the account could agree with. **1 failure in 10** traced runs before,
+**0 in 20** after. The lesson kept: a test that shares mutable script state across threads measures its own
+scheduling.
+
+The revision of record is `554d079`: 683 passed / 8 skipped / 130 subtests in both provider modes, gate
+3,506 / 3,446 statements = 98.3%, exit 0.

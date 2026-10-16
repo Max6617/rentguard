@@ -110,6 +110,22 @@ line in every one of those, as the secondary signal it is — never the verdict.
 the window are pruned by the next guard that writes, so the state dir does not fill with them.) Nothing
 restarts the guard for you.
 
+**The verdict line answers for one guard; `doctor` prints the set beside it.** The reported reading stays
+single on purpose — it answers *is anything watching?*, and with the best-of preference a crashed guard
+beside a live one cannot make `armed` true (Gilbert's ruling, 2026-10-16: no new machinery, the set as
+diagnostics). What that leaves invisible is the crash itself, so when more than one heartbeat file is
+readable, `doctor` adds one line:
+
+```
+guard heartbeat: alive (pid 26900, heartbeat 0.0 min ago)
+guard set      : 2 heartbeats — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
+```
+
+Two limits of that line, deliberately: it names each reading's **process fact and age**, not the file or
+guard id the reading came from (the readings carry no identity), and there is no per-guard `stale` field —
+`status --json`'s `guard` block remains the one reported reading. It is a diagnostic, so it appears only
+when there is more than one heartbeat, and never in the JSON.
+
 **One measured limit on the pid check**, on Windows only: an exited process whose handle is still held
 elsewhere can be probed successfully, so a guard that was **killed or crashed** can read as running
 until that handle closes. A clean exit is unaffected — the writer's own mark is what says it finished —

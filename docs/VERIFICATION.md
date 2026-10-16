@@ -503,18 +503,20 @@ verified inside it:
 | `1014ade` — the heartbeat set, one file per guard (2026-10-16) | **671 passed**, 0 failed, 8 skipped, 114 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.05 s / 40.08 s) | 3,427 / 3,487 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.0%, floor 98.0 |
 | `0e43da0` — the pid probe's integer rule, the prune/read race and the ordering's dead tier (2026-10-16) | **680 passed**, 0 failed, 8 skipped, 123 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.92 s / 39.61 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, `session.py` 167/167, floor 98.0 |
 | `aed798f` — Assay's clean re-attack of the heartbeat fixes (2026-10-16) | **681 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.07 s / 39.70 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
+| `554d079` — `doctor` names the heartbeat set, and the flaky money-defect fixture is fixed (2026-10-16) | **683 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.15 s / 39.38 s) | 3,446 / 3,506 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
 
-**One caveat on the `aed798f` row, measured rather than tidied away.** The first gate run of that batch —
-taken right after a plain suite run in the same command — had a **red internal suite** and exited 1 while
-printing `cli.py 1708` and `TOTAL 3432 = 98.4%`; the gate's own rule ([`tools/coverage.py:149`](../tools/coverage.py#L149),
-defect 21) is why it printed no `target met`, and my own output filter discarded the failing test's name.
-Every gate run since is green: **fifteen plain runs at the same revision, six of them in that same
-suite-then-gate sequence** (each `cli.py 1706`, `TOTAL 3430 = 98.3%, exit 0`), plus two fake-mode runs, and
-the guard-related files re-run eight times under the tracer. The number in the row is that stable
-measurement; the one red run is an unreproduced flake, so no test was changed on a guess. Two
-fingerprints are worth keeping rather than hiding: the red run hit **two more `cli.py` lines** than the
-green ones, and the same suite under a scratch tracer of mine reports `cli.py 1707` where the gate reports
-`1706` — the hit count is harness-sensitive by a line even when the suite is green.
+**The one red gate run of the `aed798f` batch is named and fixed.** It was
+`tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`:
+`up` arms a wait guard, that guard polls `get` from its own thread, and the fixture's scripted transport kept
+**one cursor for every thread** — so the guard's reads consumed the samples, and in the bad interleaving the
+list ran out before the stop confirmation, where the transport answered 500 and `_confirm_stopped` could not
+agree. The row was then correctly left **open**, the opposite of what that case asserts. Reproduced
+**1 failure in 10** traced runs at `04925b8`, fixed at `554d079` (main thread only advances the script, the
+last sample holds, the tail is EXITED as the docstring always claimed), and **20 traced runs after the fix
+are green**. In the `aed798f` run itself the identity is an inference from its **two extra `cli.py` lines** —
+exactly the two lines of `_confirm_stopped`'s unreadable-witness branch — because my own output filter lost
+that run's test name. One harness detail kept, since it traps the next measurement: the same suite under a
+scratch tracer of mine reports `cli.py 1707` where the gate reports `1706`.
 
 The two failures at `0d01d57` are Assay's attacks on the reuse-path fix —
 `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`: a machine that vanishes between the two
