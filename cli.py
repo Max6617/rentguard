@@ -1085,23 +1085,62 @@ def cmd_up(args) -> int:
                                             "forced": overridden, "mismatches": mismatches}
                 _write_state(cfg, state)
                 emit(config_override={"forced": overridden, "mismatches": mismatches})
-            if status in ("EXITED", "ERROR"):
-                if getattr(args, "dry_run", False):
-                    note(f"dry run: would resume instance {pod['id']} (was {status})")
-                    emit(action="dry-run", instance_id=pod.get("id"), resumed=True)
-                    return 0
-                note(f"resuming instance {pod['id']} (was {status})")
-                provider.action(pod["id"], "start")
-                pod = provider.wait_running(pod["id"])
-            else:
-                note(f"instance {pod['id']} is already {status}")
-            run = _open_if_needed(cfg, ledger, pod, args.purpose, provider)
-            _print_access(cfg, provider, pod)
-            emit(action="reused", instance={"id": pod.get("id"), "status": pod.get("status"),
-                                            "cost_usd_per_hour": pod.get("cost")},
-                 run=_run_dict(run), cap={"cap_usd": cfg.budget.cap_usd,
-                                          "per_run_cap_usd": cfg.budget.per_run_cap_usd})
-            return 0
+            wait_guard = None
+            try:
+                if status in ("EXITED", "ERROR"):
+                    if getattr(args, "dry_run", False):
+                        note(f"dry run: would resume instance {pod['id']} (was {status})")
+                        emit(action="dry-run", instance_id=pod.get("id"), resumed=True)
+                        return 0
+                    note(f"resuming instance {pod['id']} (was {status})")
+                    provider.action(pod["id"], "start")
+                    # A guard for this wait, exactly as the create path arms one (B19, 2026-10-16):
+                    # the caps are the guard's to enforce and `wait_running` here can run for minutes.
+                    # This path used to wait unguarded, so a machine that kept billing while nothing
+                    # watched it was the one state the guard exists to prevent.
+                    wait_guard = _start_wait_guard(cfg, provider, ledger, pod["id"], log=note)
+                    pod = provider.wait_running(pod["id"])
+                else:
+                    note(f"instance {pod['id']} is already {status}")
+                # Two alive readings, not one, exactly as the create path requires (defect 2, B19).
+                # The reading above is `_pod`'s payload, or `wait_running`'s first one that merely
+                # looked alive, and `is_alive` requires a positive uptime *and* a port. Without this,
+                # a pod stuck at RUNNING with no uptime and null ports — the crash loop `run` refuses
+                # to upload to — was reported as `reused`, exit 0, and billed with nothing watching it
+                # (finding 12, 2026-10-16).
+                confirmed = provider.get(pod["id"]) or pod
+                if not is_alive(confirmed):
+                    _release_wait_guard(wait_guard)
+                    runtime = confirmed.get("runtime") or {}
+                    note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is "
+                         f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
+                         f"{'set' if runtime.get('ports') else 'NULL'}); that is not a rental, and the "
+                         f"machine is being stopped so it cannot bill with nothing watching it")
+                    stopped_ok, detail = _stop_machine(cfg, provider, pod)
+                    if not stopped_ok:
+                        note(f"  could not stop it ({detail}); it may still be billing — check "
+                             f"`rentguard doctor`")
+                    closed = ledger.close(note="up-unusable", instance_status=confirmed.get("status"))
+                    if closed is not None:
+                        note(f"run closed     : {closed['run_id']}  ${closed['estimated_usd']}  "
+                             f"(the seconds it existed are recorded)")
+                    emit(action="unusable", instance={"id": pod.get("id"),
+                                                      "status": confirmed.get("status")},
+                         stopped=True, run=_closed_dict(closed))
+                    return 1
+                pod = confirmed
+                run = _open_if_needed(cfg, ledger, pod, args.purpose, provider)
+                _print_access(cfg, provider, pod)
+                emit(action="reused", instance={"id": pod.get("id"), "status": pod.get("status"),
+                                                "cost_usd_per_hour": pod.get("cost")},
+                     run=_run_dict(run), cap={"cap_usd": cfg.budget.cap_usd,
+                                              "per_run_cap_usd": cfg.budget.per_run_cap_usd})
+                return 0
+            finally:
+                # Released on every way out, an interrupt during the wait included: no guard may
+                # outlive the command that armed it, and a heartbeat left behind by one nobody can
+                # name is the "protection believed armed" shape this project keeps finding.
+                _release_wait_guard(wait_guard)
 
         # A live instance that nothing recorded. `state.json` may be empty or truncated, and a
         # machine that is billing must not be forgotten just because the file is unreadable. What

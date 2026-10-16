@@ -96,7 +96,10 @@ taxes, credits. [What the cap guarantees](cap.md) lists this in full.
 **The cap only fires while `watch` runs.** `watch` is a foreground process on your machine. Close the
 terminal, suspend the laptop, or let it crash, and nothing stops the instance. `status` and `doctor`
 report the guard heartbeat and say so when it is more than five minutes old; nothing restarts it for
-you. Treat "is the heartbeat fresh" as a check you own.
+you. Treat "is the heartbeat fresh" as a check you own — and note that a guard which has **finished**
+leaves its last heartbeat behind: `up` arms a guard while it waits and releases it before returning, and
+a `watch` that stopped at the cap exits, so a fresh heartbeat is evidence that a guard was watching
+recently, not proof that one is watching now. `up`'s closing lines say the same thing.
 
 **It overshoots by at least one poll.** The guard checks every 60 seconds by default. A run that
 crosses the cap just after a check pays for up to one more interval before the stop is sent, and the
@@ -163,8 +166,9 @@ proceeds unlocked rather than refusing to record money.
 ## The machine
 
 **`RUNNING` is a claim, not a state.** A pod can report `RUNNING` with zero uptime and null ports
-while it crash-loops. `is_alive` requires a positive uptime *and* a port; `run` and `pull` refuse to
-touch anything else.
+while it crash-loops. `is_alive` requires a positive uptime *and* a port; `up` — both the path that
+rents a new machine and the path that reuses one it already recorded — `run` and `pull` refuse to treat
+anything else as a rental.
 
 **Without a network volume, the container disk dies with the instance.** A restart gives you a fresh
 container and none of your results. If you need results to survive, either set `[runpod].volume_id` or
