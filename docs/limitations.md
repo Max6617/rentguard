@@ -136,6 +136,17 @@ UTC it can refuse a legitimate estimate. An estimate that is not a positive fini
 zero, a negative, `nan`, `inf` — is refused outright: it would record nothing for a machine that is
 billing.
 
+**Every status except `EXITED` and `TERMINATED` counts as billing** (Gilbert's ruling, 2026-10-16).
+`up` refuses to rent while the account shows such a machine with no ledger row here, `doctor` counts it
+as live and names it, and the drift check treats it as an open bill — including a status this tool has
+never heard of (`STOPPING`, `ERROR`, anything a provider adds later). That is deliberately over-strict:
+a false refusal is loud, names the machine, and takes one word (`--force`) to override, while a silent
+billing machine is neither. The cost is real and known, and it is the price of not being silent: an
+`ERROR` pod that never billed blocks a rent until it is terminated or `--force` is passed, and a machine
+stopped a moment ago blocks one for the seconds it spends in the provider's transitional state — the
+same command rents as soon as the provider reports `EXITED`. A machine whose status is missing or
+unknown counts as billing too, because nothing about it says the machine finished.
+
 **Recorded totals exclude the open row.** `ledger` and `doctor` sum closed rows only; `ledger` prints
 the open row's accrued cost on its own line under the table, and `status` prints the live estimate
 under `this run` and `all runs`. The worked example above is what that looks like when the row is real

@@ -63,6 +63,7 @@ from .guard import (
     ReleaseGate,
     TERMINAL_STATUSES,
     heartbeat_age_minutes,
+    is_billing,
     snapshot,
     state_findings,
     watch as guard_watch,
@@ -88,8 +89,6 @@ DEFAULTS = {
     "volume_id": "",
     "volume_mount": "/workspace",
 }
-
-LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
 
 #: The tag on a row that was opened before its machine existed and has not been corrected yet. It is
 #: what tells a row that merely *intended* a rental (void it) from one that recorded a real one.
@@ -238,7 +237,12 @@ def _pod(provider: Provider, cfg: Config) -> dict | None:
         candidate = row.get("instance_id")
         if candidate:
             shown = provider.get(candidate)
-            if shown is not None and shown.get("status") in LIVE_STATUSES:
+            # "Still billing" is the **terminal** set's complement, not the live set's (Gilbert's
+            # ruling, 2026-10-16): a machine the provider reports `STOPPING` is still charging, and a
+            # status this tool has never seen says nothing about the machine having finished. Reading
+            # the live set here lost the only record of a machine that was stopping, and `up` then
+            # rented a second one beside it.
+            if shown is not None and is_billing(shown.get("status")):
                 instance_id = candidate
     if not instance_id:
         return None
@@ -249,8 +253,14 @@ def _pod(provider: Provider, cfg: Config) -> dict | None:
 
 
 def _live(provider: Provider) -> list[dict]:
-    """Every instance on the account that is billing, or as good as."""
-    return [p for p in provider.list_pods() if p.get("status") in LIVE_STATUSES]
+    """Every instance on the account that may still be billing.
+
+    "May still be billing" is the **terminal** set's complement: RUNNING and PROVISIONING, and also a
+    transitional `STOPPING` or a failed `ERROR`, because only the provider saying the machine finished
+    makes it safe to treat it as finished (Gilbert's ruling, 2026-10-16). The name is kept for its
+    callers and its tests; the question it answers is the ruling's.
+    """
+    return [p for p in provider.list_pods() if is_billing(p.get("status"))]
 
 
 def _rp(cfg: Config, key: str, default=None):
@@ -620,20 +630,25 @@ def cmd_doctor(args) -> int:
             pods = []
             pods_error = str(exc)
             note(f"provider error : {exc}")
-        live = [p for p in pods if p.get("status") in LIVE_STATUSES]
-        note(f"account pods   : {len(pods)} total, {len(live)} live")
+        # "Still able to bill" is the terminal set's complement, so a transitional or failed status is
+        # counted rather than read as finished (Gilbert's ruling, 2026-10-16). The word "live" is kept
+        # on purpose: in this codebase it has always meant "billing", not "genuinely up" — see
+        # `ledger.live_usd()`, the `live_instances` key and the `live-instance-no-ledger-row` finding.
+        # The pod's real status is printed on the line below this one whatever it is.
+        billing = [p for p in pods if is_billing(p.get("status"))]
+        note(f"account pods   : {len(pods)} total, {len(billing)} live")
         emit(live_instances=[{"id": p.get("id"), "status": p.get("status"),
                               "name": p.get("name"), "claim": instance_claim(cfg, p),
                               "cost_usd_per_hour": p.get("cost"),
                               "gpu": (p.get("gpu") or {}).get("id"),
-                              "tracked": p.get("id") == tracked} for p in live])
-        for pod in live:
+                              "tracked": p.get("id") == tracked} for p in billing])
+        for pod in billing:
             known = pod.get("id") == tracked
             note(f"  {pod.get('id')}  {str(pod.get('status')):<12} ${pod.get('cost')}/h  "
                   f"{str((pod.get('gpu') or {}).get('id')):<28} "
                   f"{'tracked' if known else 'UNTRACKED'}"
                   + (f"  name={pod.get('name')!r}" if pod.get("name") else ""))
-        if not live:
+        if not billing:
             note("  (nothing is billing)")
 
         # The money figure, now that the provider can witness the open run. One figure with its parts
@@ -700,16 +715,18 @@ def cmd_doctor(args) -> int:
                     return True
             return False
 
-        live_pods = [p for p in pods if p.get("status") in LIVE_STATUSES]
+        # Same question, same set: a machine that may still be billing holds the volume, and only a
+        # finished one is the "nothing is using it" case (Gilbert's ruling, 2026-10-16).
+        billing_pods = [p for p in pods if is_billing(p.get("status"))]
 
         def holders(volume: dict) -> tuple[str | None, str | None]:
-            """(the live pod using it, a stopped pod still configured with it)."""
+            """(a pod that may still be billing and uses it, a finished pod still configured with it)."""
             volume_id = volume.get("id")
             if volume.get("attached_to"):
                 return str(volume["attached_to"]), None
-            live = next((p.get("id") for p in live_pods if references(p, volume_id)), None)
+            live = next((p.get("id") for p in billing_pods if references(p, volume_id)), None)
             stopped = next((p.get("id") for p in pods
-                            if p.get("status") not in LIVE_STATUSES and references(p, volume_id)),
+                            if not is_billing(p.get("status")) and references(p, volume_id)),
                            None)
             return live, stopped
 
@@ -754,7 +771,7 @@ def cmd_doctor(args) -> int:
         # A live instance with no row *here* is not automatically a stray: the ledger is a local file,
         # so another root's row for this machine is invisible, and the fix for a stray is to stop it.
         # The name decides what can be said out loud. Only an unclaimed name is a hard error.
-        untracked = [p for p in live if p.get("id") != tracked]
+        untracked = [p for p in billing if p.get("id") != tracked]
         unclaimed = [p for p in untracked if instance_claim(cfg, p) == CLAIM_UNCLAIMED]
         foreign = [p for p in untracked if instance_claim(cfg, p) == CLAIM_ANOTHER_ROOT]
         ours = [p for p in untracked if instance_claim(cfg, p) == CLAIM_THIS_ROOT]
@@ -1105,9 +1122,12 @@ def cmd_up(args) -> int:
                    and instance_claim(cfg, p) != CLAIM_ANOTHER_ROOT]
         if unknown and not args.force:
             ids = ", ".join(str(p.get("id")) for p in unknown)
-            note(f"error: {len(unknown)} live instance(s) with no ledger row: {ids}. Renting "
-                  f"again would start a second bill. Adopt it "
-                  f"(`rentguard adopt <id> --purpose ...`) or stop it first.")
+            note(f"error: {len(unknown)} instance(s) on the account may still be billing with no "
+                  f"ledger row here: {ids}. Renting again could start a second bill.")
+            note(f"       stop it (`rentguard down`), record it "
+                  f"(`rentguard adopt {unknown[0].get('id')} --purpose ...`), or pass --force to "
+                  f"rent anyway — a status that is not EXITED/TERMINATED counts as billing, including "
+                  f"a STOPPING machine that is about to finish.")
             emit(action="refused", reason="live-untracked-instance",
                  untracked=[p.get("id") for p in unknown])
             return 2
@@ -1647,7 +1667,9 @@ def _live_machine_for_the_record(cfg: Config, provider: Provider, ledger: Ledger
     The state file is a cache and the **open ledger row** is the record that survives it (the same
     reason `_pod` falls back to that row). A guard armed while a stale state file names the previous,
     stopped pod must watch the machine the row says is billing — otherwise it watches a dead id,
-    returns at once, and the live machine bills unguarded (defect 16, 2026-10-15).
+    returns at once, and the live machine bills unguarded (defect 16, 2026-10-15). "Billing" is the
+    terminal set's complement (Gilbert's ruling, 2026-10-16): a machine the provider reports `STOPPING`
+    may still be charging, so it is a machine the guard may be armed against.
     """
     row_instance = (ledger.open_run() or {}).get("instance_id")
     if not row_instance or row_instance == recorded.get("id"):
@@ -1655,7 +1677,7 @@ def _live_machine_for_the_record(cfg: Config, provider: Provider, ledger: Ledger
     pod = provider.get(row_instance)
     if pod is None:
         return None
-    if str(pod.get("status") or "").upper() not in LIVE_STATUSES:
+    if not is_billing(pod.get("status")):
         return None
     return pod
 
@@ -1764,15 +1786,16 @@ def cmd_watch(args) -> int:
         # A guard exists to stop a machine that is billing. Armed against one that is not, it returns
         # on its first poll, exits 0, and every line of that reads as protection while a machine that
         # appears a minute later bills unwatched — measured 2026-10-15, between two windows, and only
-        # a person noticing re-armed it. So: bind to a live machine the record can name, or refuse.
+        # a person noticing re-armed it. So: bind to a machine that may still be billing — the terminal
+        # set's complement (Gilbert's ruling, 2026-10-16) — or refuse.
         status = str(pod.get("status") or "").upper()
-        if status not in LIVE_STATUSES:
+        if not is_billing(status):
             live = _live_machine_for_the_record(cfg, provider, ledger, pod)
             if live is None:
-                note(f"error: refusing to arm against {pod.get('id')} — it reports {status}, not a "
-                     f"billing status ({', '.join(LIVE_STATUSES)}), and no live machine is named by "
-                     f"this project's open row. Arming here would report protection that does not "
-                     f"exist; arm the guard once `up` has a live machine.")
+                note(f"error: refusing to arm against {pod.get('id')} — it reports {status}, which "
+                     f"the provider calls finished, and no machine that may still be billing is named "
+                     f"by this project's open row. Arming here would report protection that does not "
+                     f"exist; arm the guard once `up` has a billing machine.")
                 note("protection : NOT armed — nothing is being watched")
                 emit(reason="no-live-instance", instance_id=pod.get("id"), status=status, armed=False)
                 return 2

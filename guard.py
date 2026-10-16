@@ -29,13 +29,33 @@ from .config import Config
 from .ledger import Ledger, closed_run_end, iso, now_utc
 from .provider import Instance, Provider, ProviderError
 
-#: Statuses that mean "this machine can still be billing". A recorded instance that is not in this
-#: set is finished business, not drift: a clean `down` leaves exactly that.
+#: The statuses a provider reports for a machine that is genuinely up. It is vocabulary now, not a
+#: decision set: since Gilbert's ruling of 2026-10-16 the question "may this machine still bill?" is
+#: answered by ``is_billing`` (the terminal set's complement), because a status in neither set —
+#: `STOPPING`, `ERROR` — is invisible to a test written this way round.
 LIVE_STATUSES = ("RUNNING", "PROVISIONING", "STARTING")
 
 #: Statuses that mean the rental is over. A machine in one of these cannot bill again without a new
 #: start, so its ledger row — open or closed — is the whole truth about what it has cost.
 TERMINAL_STATUSES = ("EXITED", "TERMINATED")
+
+
+def is_billing(status: str | None) -> bool:
+    """Whether a machine reporting this status may still be charging money.
+
+    The question is answered by the **terminal** set, not by the live set (Gilbert's ruling,
+    2026-10-16). Written the other way round — ``status in LIVE_STATUSES`` — every status the tool has
+    never heard of fell through as "not billing": `STOPPING` (a stop in flight, still charging),
+    `ERROR` (a pod that failed to start), and anything a provider adds later. Three callers read it
+    that way and a machine in one of those states was invisible to all three: `up`'s
+    untracked-instance refusal, `_pod`'s fallback to the open row, and ``state_findings`` (doctor's
+    drift). See `tests/test_status_polarity.py`.
+
+    A false refusal is loud, bounded and takes one word (``--force``) to override; a silent billing
+    machine is neither. So a status that is missing, empty or unknown is **billing** here — nothing
+    about it says the machine finished.
+    """
+    return str(status if status is not None else "").upper() not in TERMINAL_STATUSES
 
 #: What an instance's **name** says about whose ledger holds it. The ledger is a local file, so a
 #: machine rented by one project root is invisible in another's; the name is the only cross-root
@@ -381,19 +401,21 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
                     message=f"open run {open_run.get('run_id')} names instance "
                             f"{row_instance!r}, which the provider does not show"))
     elif tracked:
-        # Only drift while the machine can still be billing. An EXITED instance with a closed row
-        # is the correct end state after a normal `down`, not a finding.
+        # Only drift while the machine can still be billing. An EXITED or TERMINATED instance with a
+        # closed row is the correct end state after a normal `down`, not a finding — and everything
+        # else is billing, including a status this tool has never heard of (`is_billing`).
         reported = ask(tracked)
         if reported is None:
             status = None  # could not ask: say nothing rather than guess
         else:
             status = str(reported.get("status") or "").upper()
-        if status in LIVE_STATUSES:
-            kind = claim(reported) if (claim is not None and reported) else None
+        if reported is not None and is_billing(status):
+            kind = claim(reported) if claim is not None else None
             if kind == CLAIM_ANOTHER_ROOT:
                 findings.append(Finding(
                     code="tracked-by-another-root", severity="warn",
-                    message=f"instance {tracked} is live ({status}) and this ledger has no open row "
+                    message=f"instance {tracked} reports {status or 'no status'}, which is not "
+                            f"finished, and this ledger has no open row "
                             f"for it, but its name {reported.get('name')!r} belongs to a different "
                             f"rentguard root: that root's ledger is the one recording it. Do not "
                             f"stop it from here and do not `adopt` it here — either would double-count "
@@ -401,7 +423,8 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
             elif kind == CLAIM_THIS_ROOT:
                 findings.append(Finding(
                     code="row-not-in-this-root", severity="warn",
-                    message=f"instance {tracked} is live ({status}) and no row is open for it here, "
+                    message=f"instance {tracked} reports {status or 'no status'}, which is not "
+                            f"finished, and no row is open for it here, "
                             f"but its name {reported.get('name')!r} is this project's: the row may be "
                             f"in another root's ledger (two roots can rent under one name), or it was "
                             f"lost. Check before stopping it; `adopt` here would double-record a "
@@ -409,7 +432,8 @@ def state_findings(state: dict, open_run: dict | None, *, provider_gate=None,
             else:
                 findings.append(Finding(
                     code="recorded-instance-no-open-run", severity="error",
-                    message=f"instance {tracked} is live ({status}) but no ledger row is open, and "
+                    message=f"instance {tracked} reports {status or 'no status'}, which is not "
+                            f"finished, but no ledger row is open, and "
                             f"its name {str(reported.get('name') or '')!r} claims no project — its "
                             f"spend is not being recorded anywhere. `rentguard adopt {tracked} "
                             f"--purpose ...`"))

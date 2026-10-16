@@ -23,7 +23,7 @@ spend crosses the cap. Everything below is about what that does and does not cov
 | Check | When | What it reads | What it does |
 | --- | --- | --- | --- |
 | Recorded spend against the cap | `rentguard up`, before anything is rented | closed rows **plus the accrued cost of the open row** | refuses, exit code 2, unless `--cap N` or `--force` |
-| A live instance with no ledger row **here** | `rentguard up`, before renting | live instances on the account, and the name that says whose they are | refuses an **unclaimed** machine (`adopt` it or stop it); a name another root tags is a warning, because that root's ledger owns it |
+| An instance that may still be billing with no ledger row **here** | `rentguard up`, before renting | every instance on the account whose status is not `EXITED`/`TERMINATED`, and the name that says whose they are | refuses an **unclaimed** machine, naming it (`adopt` it, stop it, or pass `--force` to rent anyway); a name another root tags is a warning, because that root's ledger owns it |
 | An open row naming a missing instance | `rentguard up`, before renting | the ledger and the provider | refuses; `down` closes the row |
 | The choice, without renting | `rentguard up --dry-run` | the GPU choice and the cap check, with no `create` call | prints what it would request and rents nothing (fixed at `ce69cea`; it used to rent behind the flag) |
 | Total cap | every `watch` poll | closed rows plus the live estimate of the open row | stops the instance, closes the row |
