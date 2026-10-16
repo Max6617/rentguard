@@ -1,0 +1,63 @@
+B19 MONEY-PATH FIXES — RE-ATTACK at `4e7f3d3`
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental. Single-file runs only.
+
+FILES
+  tests/test_b19_money_fix_attacks.py   (17 original tests + 8 re-attack tests + 3 subtests)
+  tests/_artefacts/b19_reattack_verdict_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `4e7f3d3`, package path printed)
+  python -m pytest tests/test_b19_money_fix_attacks.py -q
+      -> 3 failed, 24 passed, 3 subtests
+  python -m pytest tests/test_up_arms_the_guard.py -q        x4
+      -> 5 passed, four times (Forge's rate fix: $10/s -> $0.50/s)
+The 3 failures are the two findings below (one test, two sub-cases). No full suite and no gate were
+run: the pilot window is training and these were to be light local runs.
+
+THE FIVE FINDINGS ARE CLOSED
+  All 17 tests that failed at `1b41c1d` now pass, unchanged in requirement:
+  the two-witness gate (a GET saying EXITED, or returning nothing, while the listing shows RUNNING
+  no longer closes the row); the row closes for the machine the open row names, and the other
+  machine is left alone; an unreadable account is named instead of tracebacking; a provider read
+  slower than the (now unbounded) release join writes no heartbeat; a negative estimate is refused;
+  and with no `createdAt` the machine's own positive uptime bounds the estimate.
+
+THE ONE-LINE EDIT TO MY FILE (accepted, verified)
+  `test_a_negative_estimate_...` formatted `started` (None) with `:.2f` in its failure message, so
+  the message raised TypeError on the passing path. Forge's repair is message-only and the
+  requirement is untouched: the diff is one `ahead` expression, and the test passes at `4e7f3d3`.
+  My bug, Forge's repair; recorded so a regeneration of the file keeps it.
+
+FINDING 8 (new, money direction) — a status that is neither live nor terminal closes the row.
+  `_confirm_stopped`'s own docstring: "EXITED, TERMINATED or gone (None) means it can no longer
+  bill, and anything else means it still can." The code is the opposite for every status outside
+  `LIVE_STATUSES`: `if last not in LIVE_STATUSES: return True`.
+  Measured: a pod reporting **STOPPING** (neither live nor terminal) with a stop call that is
+  accepted but leaves it shutting down -> `down` exits 0, `action: "stopped"`, and the row closes,
+  so the machine bills with nothing recording it. The listing gate cannot catch it: `_listed_live`
+  uses the same `LIVE_STATUSES`, so both witnesses agree that a machine in a transitional state has
+  stopped.
+  Reachability: any provider status outside the two sets (a transitional or provider-specific
+  state). Severity: money direction — the closed row for a possibly-billing machine is the shape
+  B19 exists for. The fix is the docstring's rule: only EXITED, TERMINATED or gone may close a row.
+
+FINDING 9 (new, robustness) — `nan` and `inf` crash instead of being refused.
+  `--uptime-hours` takes a float, so `nan` and `inf` parse. `estimate <= 0` cannot see either
+  (every comparison with NaN is False; infinity is not <= 0), and `timedelta(seconds=...)` then
+  raises: ValueError for NaN, OverflowError for infinity. Exit is a traceback, not a named refusal.
+  Reachability: a typo, and the same input class the negative-estimate fix just addressed. Not
+  severe. A named refusal ("not a length of time") already exists for `<= 0` and fits here.
+
+BOUNDARIES RECORDED (passing tests, not defects)
+  `_release_wait_guard` now joins unbounded: with a provider read that does not return, the release
+  (and so `up`) waits for it. Measured with a blocking `get`: the release thread is still joining
+  after 0.5 s, and no heartbeat can land either way. The provider's own request timeout is what
+  bounds it; the trade (a hung read vs a heartbeat surviving `up`) is Forge's stated choice.
+  The residual adopt gap is real and named: with neither `createdAt` nor a positive uptime, any
+  positive estimate is accepted (50 h recorded, asserted as the gap, not as desired behaviour).
+  The 60 s slack behaves: estimate equal to the reported uptime is accepted; 0.52 h against a 0.5 h
+  uptime (1860 s with slack) is refused `uptime-exceeds-life`.
+
+VERDICT
+  The five findings are genuinely closed, and the new code does not reopen them. Two new items: the
+  status-class hole (money direction, worth a ruling) and the NaN/inf crash (robustness). Forge's
+  rate fix is stable over four consecutive runs of its own file.

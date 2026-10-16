@@ -415,5 +415,162 @@ class AdoptEstimateCannotRecordNothing(Base):
                                    f"offset {offset}")
 
 
+class TheReAttackAt4e7f3d3(Base):
+    """The fixes at `4e7f3d3` re-attacked. The five findings are closed (the classes above pass);
+    these are the holes the new code opens or leaves, and the boundaries it now states."""
+
+    def test_a_status_that_is_neither_live_nor_terminal_does_not_close_the_row(self) -> None:
+        """`_confirm_stopped`'s own docstring: "EXITED, TERMINATED or gone means it can no longer
+        bill, and anything else means it still can." The code is the opposite for every status that
+        is neither live nor terminal — `if last not in LIVE_STATUSES: return True` — and the listing
+        gate uses the same set, so both witnesses agree a machine in a transitional state has
+        stopped. `STOPPING` is the concrete case; the class is any status the provider adds outside
+        the two sets."""
+        self.provider.add("pod-A", uptime_seconds=600, status="STOPPING")
+        self.open_row("pod-A")
+        self.record_state("pod-A")
+
+        def action_keeps_it_stopping(instance_id, action):
+            self.provider.actions.append((instance_id, action))   # accepted; still shutting down
+        self.provider.action = action_keeps_it_stopping
+
+        code, document, text = self.down(stop_confirm_s=0.0)
+
+        self.assertIsNotNone(
+            self.ledger.open_run(),
+            f"the row closed on a status that is neither live nor EXITED/TERMINATED/gone: the pod "
+            f"reports STOPPING, which the docstring says still bills, and both witnesses treat it "
+            f"as finished (exit {code}, action {document.get('action')!r})\n{text}")
+
+    def test_a_crash_loop_that_cannot_be_stopped_does_not_close_its_row(self) -> None:
+        """The `is_alive` -> `billing` change is right; this pins that the stopped-half still holds
+        when the stop is refused: a RUNNING pod with no uptime and no ports is billing, and its row
+        must not close under it."""
+        self.provider.add("pod-A", uptime_seconds=0, ports=None, status="RUNNING")
+        self.provider.fail_actions.add("stop")
+        self.open_row("pod-A")
+        self.record_state("pod-A")
+
+        code, document, text = self.down(stop_confirm_s=0.0)
+
+        self.assertIsNotNone(self.ledger.open_run(),
+                             f"the row closed under a crash loop that would not stop:\n{text}")
+        self.assertEqual(code, 1, f"a still-billing crash loop exited 0:\n{text}")
+
+    def test_an_unreadable_listing_does_not_close_the_row(self) -> None:
+        self.provider.add("pod-A", uptime_seconds=600, status="EXITED")
+        self.open_row("pod-A")
+        self.record_state("pod-A")
+
+        def broken_listing():
+            raise ProviderError("the account listing could not be read")
+        self.provider.list_pods = broken_listing
+
+        code, document, text = self.down(stop_confirm_s=0.0)
+
+        self.assertIsNotNone(self.ledger.open_run(),
+                             f"the row closed although the listing was never read:\n{text}")
+        self.assertEqual(code, 1, text)
+
+    def test_down_leaves_the_rows_machine_alone_when_it_is_not_the_states(self) -> None:
+        """The new rule: `down` stops what its own state names and may only close the row when the
+        account also says the *row's* machine has stopped. With both live, pod-A (state) stops,
+        pod-B (row) is untouched, and the row stays open."""
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        self.provider.add("pod-B", uptime_seconds=900, status="RUNNING")
+        self.record_state("pod-A")
+        self.open_row("pod-B")
+
+        code, document, text = self.down(stop_confirm_s=0.0)
+
+        self.assertIn(("pod-A", "stop"), self.provider.actions,
+                      f"the state's machine was not stopped:\n{text}")
+        self.assertNotIn(("pod-B", "stop"), self.provider.actions,
+                         f"the row's machine was stopped although the state names pod-A:\n{text}")
+        self.assertEqual(self.provider.get("pod-B")["status"], "RUNNING", "fixture")
+        self.assertIsNotNone(self.ledger.open_run(),
+                             f"the row closed while the machine it names is still billing:\n{text}")
+        self.assertEqual(code, 1, text)
+
+    def test_nan_and_inf_estimates_are_refused_not_crashed(self) -> None:
+        """`--uptime-hours` takes a float, so `nan` and `inf` parse. Both are neither positive nor
+        caught by `estimate <= 0` (every comparison with NaN is False)."""
+        for value in ("nan", "inf"):
+            with self.subTest(value=value):
+                self.setUp()
+                self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+                try:
+                    code, document, text = self.adopt_(self.provider, [f"--uptime-hours={value}"])
+                except (ValueError, OverflowError) as exc:
+                    self.fail(f"--uptime-hours={value} crashed with {type(exc).__name__}: {exc} "
+                              f"instead of a named refusal; no row should be opened from a value "
+                              f"that is not a length of time")
+                self.assertNotEqual(code, 0,
+                                    f"--uptime-hours={value} was accepted (exit {code}); a row "
+                                    f"opened from a value that is not a length of time\n{text}")
+
+    def adopt_(self, provider, argv_extra: list[str]):
+        self.provider = provider
+        return self.run_cmd(cli.cmd_adopt,
+                            ["adopt", "pod-A", "--purpose", "probe", "--json", *argv_extra])
+
+    def test_the_provider_uptime_bounds_an_estimate_without_created_at(self) -> None:
+        """The bound that narrows finding 6: with no `createdAt`, the machine's own positive uptime
+        is the witness (plus the same 60 s slack), and an estimate inside it is still accepted."""
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=1800, created_at=0, status="RUNNING")   # 0.5 h reported
+
+        code, document, text = self.adopt_(provider, ["--uptime-hours=0.5"])
+        self.assertEqual(code, 0, f"an estimate equal to the reported uptime was refused:\n{text}")
+        self.assertIsNotNone(self.ledger.open_run(), text)
+
+        self.setUp()
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=1800, created_at=0, status="RUNNING")
+        code, document, text = self.adopt_(provider, ["--uptime-hours=0.52"])   # 1872 s > 1860 s
+        self.assertEqual(code, 2, f"an estimate past the reported uptime was accepted:\n{text}")
+        self.assertEqual(document.get("reason"), "uptime-exceeds-life", document)
+
+    def test_the_residual_gap_is_no_created_at_and_no_positive_uptime(self) -> None:
+        """Named in `cmd_adopt` and limitations.md: with neither witness, any positive estimate is
+        accepted. This asserts the gap, not the desired behaviour."""
+        provider = FakeProvider(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=0, created_at=0, status="EXITED")   # no createdAt, 0 up
+
+        code, document, text = self.adopt_(provider, ["--uptime-hours=50"])
+
+        row = self.ledger.open_run()
+        self.assertIsNotNone(row, f"no row:\n{text}")
+        started = datetime.fromisoformat(row["started_at"])
+        self.assertGreater((now_utc() - started).total_seconds(), 49 * 3600,
+                           "fixture: the row is not 50 h back")
+        self.assertEqual(code, 0, text)
+
+    def test_the_release_join_is_unbounded_on_a_read_that_does_not_return(self) -> None:
+        """The trade the new gate buys: `_release_wait_guard` no longer returns while the guard is
+        inside a provider read. Measured, not asserted as a defect — the provider's own request
+        timeout is what bounds it, and no heartbeat can land either way."""
+        unblock = threading.Event()
+
+        class BlockingGet(FakeProvider):
+            def get(self, instance_id):
+                unblock.wait(10.0)
+                return super().get(instance_id)
+
+        provider = BlockingGet(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        pair = cli._start_wait_guard(self.cfg, provider, self.ledger, "pod-A",
+                                     log=lambda *_: None, interval=0.05)
+        time.sleep(0.2)
+        released = threading.Thread(target=lambda: cli._release_wait_guard(pair), daemon=True)
+        released.start()
+        time.sleep(0.5)
+        still_joining = released.is_alive()
+        unblock.set()
+        released.join(10)
+
+        self.assertTrue(still_joining, "the release returned while the guard was still reading")
+
+
 if __name__ == "__main__":
     unittest.main()
