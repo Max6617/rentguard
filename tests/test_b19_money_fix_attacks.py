@@ -493,9 +493,9 @@ class TheReAttackAt4e7f3d3(Base):
         self.assertEqual(code, 1, text)
 
     def test_nan_and_inf_estimates_are_refused_not_crashed(self) -> None:
-        """`--uptime-hours` takes a float, so `nan` and `inf` parse. Both are neither positive nor
-        caught by `estimate <= 0` (every comparison with NaN is False)."""
-        for value in ("nan", "inf"):
+        """The closure of finding 9: `--uptime-hours` takes a float, so nan/inf/-inf parse, and all
+        three are refused by the named reason rather than reaching `timedelta`."""
+        for value in ("nan", "inf", "-inf"):
             with self.subTest(value=value):
                 self.setUp()
                 self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
@@ -508,6 +508,7 @@ class TheReAttackAt4e7f3d3(Base):
                 self.assertNotEqual(code, 0,
                                     f"--uptime-hours={value} was accepted (exit {code}); a row "
                                     f"opened from a value that is not a length of time\n{text}")
+                self.assertEqual(document.get("reason"), "uptime-not-a-length-of-time", document)
 
     def adopt_(self, provider, argv_extra: list[str]):
         self.provider = provider
@@ -570,6 +571,80 @@ class TheReAttackAt4e7f3d3(Base):
         released.join(10)
 
         self.assertTrue(still_joining, "the release returned while the guard was still reading")
+
+
+class TheUnknownStatusBoundary(Base):
+    """The polarity Forge reported rather than changed: the *closure* rule (findings 8) says a status
+    that is not EXITED/TERMINATED is still unfinished, while *visibility* — `_live`, `_pod`'s
+    fallback, `doctor`'s live list, `guard.state_findings` — says only RUNNING/PROVISIONING/STARTING
+    is live. A machine in neither set (`STOPPING`, `ERROR`) is therefore called unfinished when a row
+    is closed and invisible when a bill is looked for.
+
+    Effect required: a machine the tool's own closure rule will not call finished must not be
+    invisible. It need not block the rent — it may be seconds from gone — but `up` may not rent
+    beside it in silence, and `doctor` may not print "nothing is billing" while it exists."""
+
+    UNKNOWN_STATUSES = ("STOPPING", "ERROR")
+
+    def unrecorded(self, status: str):
+        self.provider.add("pod-unfinished", uptime_seconds=600, status=status)   # no row, no state
+        return self.run_cmd(cli.cmd_up, ["up", "--purpose", "probe", "--json"])
+
+    def test_up_does_not_rent_in_silence_beside_an_unfinished_machine(self) -> None:
+        for status in self.UNKNOWN_STATUSES:
+            with self.subTest(status=status):
+                self.setUp()
+                code, document, text = self.unrecorded(status)
+                self.assertTrue(
+                    code != 0 or "pod-unfinished" in text,
+                    f"up rented beside a {status} machine with no ledger row and never named it: "
+                    f"`_live` reads LIVE_STATUSES, so it is not in the untracked list; the closure "
+                    f"rule calls the same machine unfinished (exit {code})\n{text}")
+
+    def test_doctor_does_not_say_nothing_is_billing_beside_an_unfinished_machine(self) -> None:
+        for status in self.UNKNOWN_STATUSES:
+            with self.subTest(status=status):
+                self.setUp()
+                self.provider.add("pod-unfinished", uptime_seconds=600, status=status)
+                code, document, text = self.run_cmd(cli.cmd_doctor, ["doctor", "--json"])
+                named = "pod-unfinished" in text or any(
+                    "pod-unfinished" in json.dumps(f) for f in document.get("findings", []))
+                self.assertTrue(
+                    named,
+                    f"doctor did not name a {status} machine that has no ledger row, so an "
+                    f"unrecorded bill in a status the closure rule calls unfinished is invisible "
+                    f"(exit {code})\n{text}")
+
+    def test_a_running_machine_with_no_row_still_refuses_and_is_reported(self) -> None:
+        """The control: the polarity is right for a genuinely live status."""
+        self.provider.add("pod-running", uptime_seconds=600, status="RUNNING")
+        code, document, text = self.run_cmd(cli.cmd_up, ["up", "--purpose", "probe", "--json"])
+        self.assertEqual(code, 2, f"a live unrecorded machine did not refuse the rent:\n{text}")
+        self.assertEqual(document.get("reason"), "live-untracked-instance", document)
+
+        self.setUp()
+        self.provider.add("pod-running", uptime_seconds=600, status="RUNNING")
+        code, document, text = self.run_cmd(cli.cmd_doctor, ["doctor", "--json"])
+        self.assertIn("pod-running", text, f"doctor did not name the live unrecorded machine:\n{text}")
+        self.assertEqual(code, 1, f"doctor did not fail on a live unrecorded machine:\n{text}")
+
+    def test_a_stopping_machine_with_an_open_row_keeps_it_open(self) -> None:
+        """The closure half of the same machine: with a row, `down` leaves it open (finding 8's fix),
+        which is what bounds the exposure of the invisible case. The stop call is accepted but the
+        machine stays STOPPING, which is the shape the fix was written for."""
+        self.provider.add("pod-unfinished", uptime_seconds=600, status="STOPPING")
+        self.open_row("pod-unfinished")
+        self.record_state("pod-unfinished")
+
+        def action_keeps_it_stopping(instance_id, action):
+            self.provider.actions.append((instance_id, action))
+        self.provider.action = action_keeps_it_stopping
+
+        code, document, text = self.down(stop_confirm_s=0.0)
+
+        self.assertIsNotNone(self.ledger.open_run(),
+                             f"a STOPPING machine's row closed:\n{text}")
+        self.assertEqual(code, 1, text)
 
 
 if __name__ == "__main__":

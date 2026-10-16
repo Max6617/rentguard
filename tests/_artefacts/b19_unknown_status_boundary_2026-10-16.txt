@@ -1,0 +1,55 @@
+B19 RE-ATTACK — CLOSURES VERIFIED, AND THE UNKNOWN-STATUS BOUNDARY ATTACKED at `00472bc`
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental. Single-file runs.
+
+FILES
+  tests/test_b19_money_fix_attacks.py    (29 tests + 6 subtests: 4 failed, 29 passed)
+  tests/_artefacts/b19_unknown_status_boundary_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `00472bc`, package path printed)
+  python -m pytest tests/test_b19_money_fix_attacks.py -q   -> 4 failed, 29 passed, 6 subtests
+
+FINDINGS 8 AND 9 ARE CLOSED (verified)
+  All 25 tests that existed before this re-attack pass at `00472bc`, including the three that were
+  red at `4e7f3d3`: STOPPING no longer closes a row (the closure now ends only on the terminal set),
+  and `--uptime-hours` nan/inf/-inf are refused with `uptime-not-a-length-of-time`, which this file
+  now pins by name as well as by exit code. A valid estimate (>= the 60 s slack inside the machine's
+  life) is still accepted.
+
+THE BOUNDARY FORGE REPORTED — ATTACKED, TWO FINDINGS
+  The closure rule and the visibility rule now use opposite polarities for a status in neither set:
+    closure  (findings 8)      status not in TERMINAL_STATUSES  -> the machine is unfinished
+    visibility (`_live`, `_pod`'s fallback, doctor's live list, `guard.state_findings`)
+                               status in LIVE_STATUSES        -> the machine is live
+  A STOPPING or ERROR machine is therefore called unfinished when a row is closed and invisible when
+  a bill is looked for. Both of Forge's suggested shapes reproduce:
+
+FINDING 10 — `doctor` prints "nothing is billing" beside an unfinished, unrecorded machine.
+  With one pod (STOPPING, or ERROR) and no ledger row at all:
+      account pods   : 1 total, 0 live
+        (nothing is billing)
+      exit 0, no finding naming it
+  `doctor` is the tool that exists to find unrecorded bills ("It cannot stop what it does not know
+  about ... doctor lists those"). A non-terminal machine it cannot name is exactly the bill it was
+  built to surface, and it is silent for every status outside LIVE_STATUSES.
+  Severity: money direction. Bounded for STOPPING (it finishes in seconds or minutes); unbounded for
+  ERROR if the provider keeps billing a failed pod, which is the case the tool cannot see.
+
+FINDING 11 — `up` rents in silence beside the same machine.
+  With the same pod live on the account and no row here: `up` exits 0, `action: "created"`, and the
+  output never names the machine. `_live` reads LIVE_STATUSES, so it is not in `unknown`, and
+  nothing else mentions it.
+  Severity: the same root as finding 10. For `up` the refusal would be over-strict for a machine
+  seconds from gone (Forge's point about ERROR is right: inverting `_live` makes every ERROR pod
+  block a rent). What is owed is the *naming*, not the refusal.
+
+CONTROL THAT HOLDS
+  A RUNNING machine with no row still refuses `up` (exit 2, `live-untracked-instance`) and is named
+  by `doctor` (exit 1): the polarity is right for a genuinely live status.
+  A STOPPING machine *with* an open row keeps that row open on `down` (exit 1), which is what bounds
+  the exposure — the unrecorded case needs such a machine with no row at all.
+
+RECOMMENDATION (a ruling, not a claim)
+  Leave `_live` as it is for refusals; make the *reporting* cover the gap: `doctor` lists a
+  non-terminal, non-live machine with no row here as a warn ("not in a live status; if it still
+  bills, nothing records it"), and `up` prints one line naming it. That surfaces the bill without
+  turning every ERROR pod into a rental blocker.
