@@ -1078,9 +1078,17 @@ def cmd_up(args) -> int:
         # row is not enough: it says the rental it recorded is over, so a live machine whose only row
         # is closed has nothing recording it now. Accepting the closed row made this check pass and
         # `up` rent a second machine beside a billing one, outside the cap (2026-10-15).
+        #
+        # A machine another root is paying for is not this root's business and must not block it:
+        # that root's ledger records it and that root's guard watches it, which is the same
+        # distinction `doctor` draws (a **warn**, "do not stop them from here"). Measured 2026-10-16:
+        # with a sibling root's pod live, `up` from a second root refused with "1 live instance(s)
+        # with no ledger row" and no other root on the account could rent at all.
         recorded = {value for value in (_read_state(cfg).get("instance_id"),
                                         (open_run or {}).get("instance_id")) if value}
-        unknown = [p for p in _live(provider) if p.get("id") not in recorded]
+        unknown = [p for p in _live(provider)
+                   if p.get("id") not in recorded
+                   and instance_claim(cfg, p) != CLAIM_ANOTHER_ROOT]
         if unknown and not args.force:
             ids = ", ".join(str(p.get("id")) for p in unknown)
             note(f"error: {len(unknown)} live instance(s) with no ledger row: {ids}. Renting "
