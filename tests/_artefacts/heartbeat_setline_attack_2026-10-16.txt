@@ -1,0 +1,57 @@
+DOCTOR'S SET LINE AND THE FIXTURE FIX — ATTACKED at `555d4ff` (code `04925b8`, `554d079`)
+Verifier: Assay. 2026-10-16. Offline: in-memory fake, hand-written heartbeat files, no rental.
+
+FILES
+  tests/test_heartbeat_liveness_attack.py    (23 tests + 19 subtests: 1 failed, 22 passed)
+  tests/_artefacts/traced_run_once.py        (one traced pytest run in this process)
+  tests/_artefacts/heartbeat_setline_attack_2026-10-16.txt   (this record)
+
+RUN (clean worktree at `555d4ff`, package path printed)
+  python -m pytest tests/test_heartbeat_liveness_attack.py -q          -> 1 failed, 22 passed
+  python -m pytest tests/test_heartbeat_liveness.py tests/test_money_defects.py -q -> 51 passed
+  10 x python tests/_artefacts/traced_run_once.py tests/test_money_defects.py
+      -> 10 traced runs, 0 failures (the shape the gate caught the flake in)
+The one failure is finding 19 below.
+
+THE SET LINE IS DIAGNOSTIC-ONLY, AS RULED (attacked, holds)
+  * live + crashed set: the line is in the **prose** and the JSON document has no `guard set` text
+    and no new key; doctor's exit code is unchanged (0 with a recorded pod and a crashed guard).
+  * `status` never prints it (the ruling's "never on status").
+  * a file that will not parse is not counted at all — it is not a reading — and a legacy reading
+    with no pid is counted and labelled `no pid`.
+  * trivial labelling note: a heartbeat with `"pid": true` keeps the bool as its pid (`isinstance`),
+    so the line would label it `pid True` while `pid_running` correctly reads it as not running.
+    Nothing is protected by it; only the label is odd.
+
+FINDING 19 — a stale legacy file makes the set line permanent, and the count is files, not guards.
+  `heartbeat_readings` always includes the legacy `heartbeat.json`, and `_prune_finished_heartbeats`
+  globs `heartbeat-*.json` only, so a legacy file is **never pruned**. Any state dir that has one
+  from an earlier revision therefore reports two readings for ever, whatever the guards are doing.
+  Measured, with exactly one live guard and one finished legacy file:
+      2 heartbeats — alive (pid 24248, 0.1 min ago); finished (pid 24248, 30 min ago)
+  Consequences: `doctor` prints a set line on every run in a migrated state dir (the ruling's "only
+  when more than one reading exists" was meant to keep it quiet), and the sentence's own count says
+  "2 heartbeats" when there is one guard. Nothing is mis-verdicted — the best-of reading is still the
+  live guard — so this is noise and a misleading number, not a false protection claim.
+  Worth a ruling, three shapes: exclude the legacy file from the count when any per-guard file is
+  live; or mark/prune the legacy file once a per-guard file exists (it is residue by then); or keep
+  it and accept the line, in which case the words should say "2 heartbeat files" rather than
+  "2 heartbeats".
+
+THE RULING'S LIMIT, STATED PLAINLY
+  A crashed guard is visible only to a human reading `doctor`'s prose: no exit code change and no
+  JSON key, so a script or a Bot gating on either does not see it. That is the "no new machinery"
+  ruling, and it is worth the record that the diagnostic is prose-only.
+
+THE FIXTURE FIX STILL PINS THE DEFECT (checked, not assumed)
+  `tests/test_money_defects.py` passes 10 traced runs out of 10 in fresh processes (the gate's
+  tracer is what produced the reported 1-in-10). The script still pins the one-alive-sample defect:
+  the main-thread samples are `[alive, crash, crash, EXITED]`, so the second reading is the crash
+  that `up` must refuse on; only the main thread advances the cursor, a guard thread sees the last
+  main-thread reading, the last sample holds, and the EXITED tail lets the stop confirmation agree
+  instead of reading a 500. The case is not vacuous: `up` still has to refuse and retire.
+
+VERDICT
+  The set line does what the ruling says and stays in the prose. One new item: the legacy file makes
+  the count a file count and the line permanent in any migrated state dir (19) — noise, worth a
+  ruling. The fixture fix holds under the shape that caught it.

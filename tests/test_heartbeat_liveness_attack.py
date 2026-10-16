@@ -359,5 +359,95 @@ class TheGuardSetAtE230f80(unittest.TestCase):
         self.assertTrue(crashed.exists(), "the crashed guard's evidence was pruned")
 
 
+class TheDoctorSetLineAt04925b8(unittest.TestCase):
+    """`doctor` names the whole set when more than one reading exists. Attacks: what counts as a
+    reading, whether the line can be read as a second verdict, and whether it stays out of the
+    machine-readable surfaces."""
+
+    def setUp(self) -> None:
+        self.root = scratch_dir(self)
+        self.cfg = cfg_for(self.root)
+        self.provider = FakeProvider(rate_usd_per_hour=2.0)
+        self.provider.add("pod-A", uptime_seconds=600, status="RUNNING")
+        # The pod is recorded by the state *and* an open row, so doctor has no drift to report and its
+        # exit code measures the set line rather than an unrecorded machine.
+        self.cfg.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.state_path.write_text(json.dumps({"instance_id": "pod-A"}), encoding="utf-8")
+        Ledger(self.cfg.ledger_path).open(purpose="probe", provider="fake", instance_id="pod-A",
+                                          gpu_id="g", rate_usd_per_hour=2.0)
+
+    def doctor(self, argv=("doctor", "--json")):
+        args = cli.build_parser().parse_args(list(argv))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda c: self.provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.cmd_doctor(args)
+        return code, out.getvalue(), err.getvalue()
+
+    def per_guard(self, name, **kwargs):
+        write_heartbeat(guard.guard_heartbeat_path(self.cfg.heartbeat_path, name), **kwargs)
+
+    def test_a_stale_legacy_file_does_not_make_the_set_line_permanent(self) -> None:
+        """The legacy `heartbeat.json` is read forever and never pruned (`_prune_finished_heartbeats`
+        globs `heartbeat-*.json` only), so a state dir that has one from an older revision counts two
+        readings for ever — one live guard, one piece of residue — and `doctor` prints a set line on
+        every run. The line's own words then overstate the number of guards."""
+        write_heartbeat(self.cfg.heartbeat_path, pid=os.getpid(), ended=True, age_minutes=30.0)
+        self.per_guard("watch-abc", pid=os.getpid(), ended=False, age_minutes=0.1)
+
+        readings = guard.heartbeat_readings(self.cfg.heartbeat_path)
+        line = cli._guard_set_line(readings)
+
+        self.assertIsNone(
+            line,
+            f"one live guard plus an old finished legacy file is reported as a set: {line!r} — the "
+            f"legacy file is never pruned, so this line is permanent and its count is files, not "
+            f"guards")
+
+    def test_the_set_line_stays_out_of_json_and_does_not_change_the_exit(self) -> None:
+        self.per_guard("live", pid=os.getpid(), ended=False, age_minutes=0.1)
+        self.per_guard("crashed", pid=999999, ended=False, age_minutes=8.0)
+
+        code, out, err = self.doctor()
+
+        document = json.loads(out[out.index("{"):]) if "{" in out else {}
+        self.assertIn("guard set", err, f"the set line is not in the prose: {err!r}")
+        self.assertNotIn("guard set", out, "the set line leaked into the JSON document")
+        self.assertNotIn("guard_set", document, f"the document grew a set key: {document}")
+        self.assertNotIn("guard set", json.dumps(document), document)
+        self.assertEqual(code, 0, f"the diagnostic changed doctor's exit code:\n{err}")
+
+    def test_the_set_line_is_not_on_status(self) -> None:
+        self.per_guard("live", pid=os.getpid(), ended=False, age_minutes=0.1)
+        self.per_guard("crashed", pid=999999, ended=False, age_minutes=8.0)
+        args = cli.build_parser().parse_args(["status", "--json"])
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "_config", lambda: self.cfg), \
+                mock.patch.object(cli, "_provider", lambda c: self.provider), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cli.cmd_status(args)
+        self.assertNotIn("guard set", out.getvalue() + err.getvalue(),
+                         "the set line appeared on status")
+
+    def test_a_corrupt_member_is_not_counted_and_a_pid_less_one_is(self) -> None:
+        """A file that will not parse is not a reading at all, so it cannot be counted; a legacy
+        reading with no pid is one, and it says so."""
+        self.per_guard("live", pid=os.getpid(), ended=False, age_minutes=0.1)
+        broken = guard.guard_heartbeat_path(self.cfg.heartbeat_path, "broken")
+        broken.write_text("{not json", encoding="utf-8")
+
+        self.assertIsNone(cli._guard_set_line(guard.heartbeat_readings(self.cfg.heartbeat_path)),
+                          "an unparseable file was counted as a reading")
+
+        legacy = self.cfg.heartbeat_path
+        legacy.write_text(json.dumps({"at": iso(now_utc()), "note": "legacy, no pid"}),
+                          encoding="utf-8")
+        line = cli._guard_set_line(guard.heartbeat_readings(legacy))
+        self.assertIsNotNone(line, "the pid-less legacy reading was not counted")
+        self.assertIn("no pid", line, f"a pid-less reading is labelled some other way: {line!r}")
+        self.assertIn("not running", line, line)
+
+
 if __name__ == "__main__":
     unittest.main()
