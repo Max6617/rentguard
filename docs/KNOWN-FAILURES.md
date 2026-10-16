@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`d8accac`** (2026-10-16).
+say where they stand at the revision this file describes, **`fe38468`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`d8accac` unless the entry says otherwise.
+`fe38468` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -494,3 +494,43 @@ reported, stopped and closed; a resume that never becomes usable is watched (a h
 guard's stop is in `provider.actions`) and reported as `unusable`; no wait-guard thread survives a
 reuse; and the control — reuse of a **usable** machine still succeeds with `action: "reused"` and no
 second rental.
+
+## The reuse path's failure exits: a vanished machine was "reused", and a failed resume was left billing (fixed)
+
+**Found** by Assay's attack on `d8accac` (`0d01d57`, verdict
+`tests/_artefacts/b19_reuse_fix_verdict_2026-10-16.txt`, findings 13 and 14), 2026-10-16 — both inside
+the branch that had just closed finding 12, which is why the fix is a shape rather than two lines.
+
+**Finding 13 — "gone" is the one answer `or` cannot express.** `confirmed = provider.get(id) or pod`
+discarded a second reading that returned nothing and then checked, and reported, the stale first one.
+With pod-A usable and named by the state, and the account no longer showing it:
+
+```console
+$ rentguard up --purpose again
+[action "reused", exit 0]
+[the row opened for it names pod-A, which the account does not show]
+```
+
+**Finding 14 — a resume whose wait fails left the machine it revived billing.** The create path's
+`except BaseException` stops the machine and ends the row; the reuse branch had only a `finally` that
+released the wait guard, so `wait_running` raising — a provider error, an `ERROR` transition during the
+start, or the 12-minute timeout, which is the pilot's own slow-resume shape — propagated with the
+machine `RUNNING`, no ledger row and no guard.
+
+**Fixed at `fe38468`, as a shape.** Both of `up`'s paths now end a rental they will not confirm through
+**one** function, `_retire_machine`, whose invariant is: *the machine is this root's, and it is either
+usable, stopped, or visibly billing in an open row.* It asks the account first (`None` = gone: nothing
+is stopped, and only the row that names this instance is closed), stops a machine that is there unless
+another root's name claims it, and closes the row only when the account agrees the stop —
+`_may_close_the_row`'s two witnesses, the rule `down` follows. An unconfirmed stop leaves the row
+**open**, so the accrual and the cap keep seeing it. The create path's unusable exit and the reuse
+path's are the same code now, and `_abandon_created` is the one deliberate difference, documented in its
+own docstring: the interrupt path closes the row without waiting, because a row that exists is the
+guarantee that survives a dying process (defect 10's ruling, kept).
+
+**The tests that close it.** `tests/test_up_reuse_usability.py` (11 tests): the vanished machine on the
+reuse path **and** on the create path (the same `or` lived in both), the failed resume that stops what
+it revived, the unconfirmable stop that leaves the row open, the unreadable account that leaves it open,
+the interrupt path that closes it anyway, another root's machine that is not stopped and whose row is
+voided, and the controls. `tests/test_cli_paths.py` moves its assertion to the shared message and now
+also pins that the row stays open when the stop was refused.

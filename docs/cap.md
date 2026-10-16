@@ -38,8 +38,10 @@ cap, per-run cap, maximum hours, idle.
 
 A **resume** is held to the same rule as a fresh rent: `up` takes a second liveness reading on a machine
 it already recorded before calling it a rental, and while a resume waits for the machine to answer a
-guard is armed, so a waiting window cannot bill unwatched. Two holes are open in that path at `0d01d57`
-(a machine that vanishes between the readings, and a resume whose wait fails) and are named with their
+guard is armed, so a waiting window cannot bill unwatched. Both of `up`'s paths end a rental they will not
+confirm through one discipline (fixed at `fe38468`): a machine the account no longer shows is not a
+rental, a failed resume stops the machine it revived, and a stop that cannot be confirmed leaves the row
+**open** rather than closed. The two holes that were open here at `0d01d57` are closed, with their
 reproductions in [limitations](limitations.md).
 
 ## The arithmetic
@@ -116,11 +118,12 @@ it the ledger proceeds unlocked rather than refusing to write; in that case the 
 ## Prove the decision without spending
 
 The guard is a pure decision (`rentguard.guard.decide`) fed by a snapshot, and the money paths run
-against an in-memory provider with no network and no spend. At `0d01d57`, `python -m pytest tests -q`
-from the checkout collects **611 tests: 601 passed, 2 failed, 8 skipped, 99 subtests**. The two failures
-are the open reuse-path attacks (`tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`, named in
-[limitations](limitations.md)) — recorded here rather than smoothed over; Forge is mid-fix. These are the
-files this page leans on:
+against an in-memory provider with no network and no spend. At `fe38468`, `python -m pytest tests -q`
+from the checkout collects **610 passed, 0 failed, 8 skipped, 99 subtests** (identical with
+`RENTGUARD_PROVIDER=fake`), and the coverage gate is 3,305 / 3,361 = 98.3%, exit 0. The two failures
+recorded at `0d01d57` (`tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`, the reuse path's
+vanished machine and its failed resume) are green since `fe38468`; the revision-by-revision counts are
+in [VERIFICATION](VERIFICATION.md). These are the files this page leans on:
 
 | Suite | Tests | What it covers |
 | --- | --- | --- |

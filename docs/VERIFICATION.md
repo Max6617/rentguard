@@ -498,14 +498,16 @@ verified inside it:
 | `ddd79c9` | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
 | `a9cffa0` | 485 passed, 0 failed, 54 subtests | 3,013 / 3,054 = 98.7%, exit 0 |
 | `0d01d57` — the money-path pass (2026-10-16) | 601 passed, **2 failed**, 8 skipped, 99 subtests | **not re-measured** — measured modules changed since `be4e7c7`, so the floor figure would be stale here |
+| `fe38468` — the reuse-path failure exits (2026-10-16) | **610 passed**, 0 failed, 8 skipped, 99 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (72.03 s / 68.93 s) | 3,305 / 3,361 = **98.3%, exit 0** — `cli.py` 97.9%, floor 98.0 |
 
 The two failures at `0d01d57` are Assay's attacks on the reuse-path fix —
 `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`: a machine that vanishes between the two
-liveness readings, and a resume whose wait fails. Both are open, named in
-[limitations](limitations.md), and being fixed. The money-path behaviours in [quickstart](quickstart.md)
-§3/§4/§8 and [cap](cap.md) were written at this revision, and the transcripts beside them (`up`
-refusing beside a machine that may still bill, and four `adopt --uptime-hours` refusals) were run there
-against the fake provider.
+liveness readings, and a resume whose wait fails. They are **green since `fe38468`**, which put both of
+`up`'s paths on one exit discipline (`_retire_machine`); the reproductions stay in
+[limitations](limitations.md) and [KNOWN-FAILURES](KNOWN-FAILURES.md). The money-path behaviours in
+[quickstart](quickstart.md) §3/§4/§8 and [cap](cap.md) were written at the earlier revision, and the
+transcripts beside them (`up` refusing beside a machine that may still bill, and four
+`adopt --uptime-hours` refusals) were run there against the fake provider.
 | `042fd21` | 490 passed, 0 failed, 54 subtests | 3,037 / 3,080 = 98.6%, exit 0 |
 | `be4e7c7` — the revision `1ba1198` published | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
 | `605564e` — **published tip**, carrying defects 20 and 21 | **507 passed**, 0 failed, **59 subtests**, identical with and without `RENTGUARD_PROVIDER=fake` (32.04 s / 36.88 s, nothing skipped) | 3,050 / 3,093 = **98.6%, exit 0** — `session.py` **167/167**, and the gate fails a red suite before it compares the floor (defect 21) |

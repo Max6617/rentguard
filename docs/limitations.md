@@ -170,20 +170,23 @@ while it crash-loops. `is_alive` requires a positive uptime *and* a port; `up` �
 rents a new machine and the path that reuses one it already recorded — `run` and `pull` refuse to treat
 anything else as a rental.
 
-**A resume is held to the same rule — and it is not closed yet** (`d8accac`, two holes open at
-`0d01d57`). `up` takes a second liveness reading on a machine it already recorded, stops a machine that
-fails it and closes the row (exit 1, `unusable`), and arms a guard while a resume waits for the machine
-to answer. The two holes, both red and being fixed:
+**A resume is held to the same rule as a fresh rent** (fixed at `fe38468`; two holes were open at
+`0d01d57` and are named below). `up` takes a second liveness reading on a machine it already recorded,
+stops a machine that fails it and ends the row (exit 1, `unusable`), and arms a guard while a resume
+waits for the machine to answer. Both of `up`'s paths — renting a new machine and reusing a recorded one
+— end a rental they will not confirm through the same discipline:
 
-- if the machine **vanishes between the two readings**, the second reading is discarded (`get(...) or
-  pod`) and the stale first one is what gets checked, so `up` reports `reused`, exit 0, and a row is open
-  against a machine the account no longer shows;
-- a resume whose **wait fails** leaves the machine it just revived `RUNNING` with no ledger row and no
-  guard — the command had started it, the wait raised, and nothing stopped it.
+- a machine the account **no longer shows** is not a rental: the second reading is an answer in its own
+  right, not a reason to fall back to the stale first one (`provider.get(...) or pod` used to report
+  `reused`, exit 0, and open a row against a machine that does not exist);
+- a resume whose **wait fails** stops the machine it revived; the failure is still reported with a
+  non-zero exit;
+- when the stop cannot be confirmed the row stays **open**, so the accrual and the cap keep seeing it —
+  the one exception is an interrupt, where the row is closed without waiting because a row that exists
+  is what survives a dying process.
 
-The reproductions are `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac`, two tests. Until they
-are green, treat a `reused` line as a claim about a machine someone should confirm with `rentguard
-status`.
+The reproductions are `tests/test_b19_money_fix_attacks.py::TheReuseFixAtD8accac` (green since
+`fe38468`) and `tests/test_up_reuse_usability.py`.
 
 **Without a network volume, the container disk dies with the instance.** A restart gives you a fresh
 container and none of your results. If you need results to survive, either set `[runpod].volume_id` or
