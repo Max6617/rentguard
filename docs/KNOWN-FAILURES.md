@@ -667,11 +667,11 @@ the freshness bound or the ownership rules.
   permission or ACL refusal) is dropped with the pruned ones and the tool reads *NO GUARD* while a guard
   writes. That is the safe direction — under-reporting protection rather than inventing it — and a tool
   cannot report what it cannot stat.
-- **Ruled twice; the second ruling is the reporting shape (Gilbert, 2026-10-16).** The first — *no new
-  machinery* — was about refusals, and the second supersedes it for reporting: the verdict line stays
-  single, the **set** goes beside it in `facts`, and `doctor` **warns** for any reading whose pid is gone
-  and which never marked itself finished. A protection *redundancy* loss is a warning rather than a stop,
-  because the set's best reading is what `armed` and the cap rest on. Implemented at `266a42d`, red first:
+- **Ruled three times, and the third is the shape (Gilbert, 2026-10-16).** The first — *no new machinery* —
+  was about refusals; the second put the set in `facts` **and** warned; the third stepped back from the
+  schema half: the doctor line as built, one line, never on `status`, never in JSON, *"a schema change for a
+  diagnostic is not worth the surface it adds"*. So what ships is the **line** plus the **warn** in
+  `doctor`'s existing findings channel:
 
   ```
   guard heartbeat: alive (pid 26900, heartbeat 0.0 min ago)
@@ -679,15 +679,18 @@ the freshness bound or the ownership rules.
     WARN  guard-crashed: a guard is gone and never marked its heartbeat finished (pid 2147483647, …)
   ```
 
-  `guard.readings` and `guard.others` carry the same set in `status --json` and `doctor`'s JSON, each
-  reading with its own process facts and its own `stale`; the warns never change `doctor`'s exit code,
-  which turns on errors alone. The limits are named in [limitations](limitations.md): the count is
-  readings rather than guards, a reading carries no file or guard id, and a crashed guard whose file
-  cannot be `stat`-ed is dropped from the set entirely — under-reporting, deliberately.
-- **Assay's finding 19 in the same attack** (`2ffce2e`): the legacy `heartbeat.json` is read for ever and
-  was pruned by nothing, so a migrated state dir reported two readings permanently — one live guard plus
-  residue — and the set line overstated the number of guards on every run. The writer now prunes the legacy
-  path like any other finished sibling, a finished marker older than the window is not counted at all
+  The `facts` version was built at `266a42d` and **reverted at `00199d6`**: `_guard_report` is the one
+  reported reading's facts again, and `_reading_facts`, `guard.readings` and `guard.others` are gone. The
+  warn stays because the second ruling asked for it by name and the third did not retract it — it is a
+  `Finding`, not a new key, and it never changes `doctor`'s exit code, which turns on errors alone. The
+  limits are named in [limitations](limitations.md): the count is readings rather than guards, a reading
+  carries no file or guard id, and a crashed guard whose file cannot be `stat`-ed is dropped from the set
+  entirely — under-reporting, deliberately.
+- **Assay's finding 19 in that attack** (`2ffce2e`) was not only noise, so it did not stay noise. The legacy
+  `heartbeat.json` is read for ever and was pruned by nothing, so a migrated state dir reported two readings
+  permanently — one live guard plus residue — and the set line overstated the number of guards on every run.
+  The **count** being wrong is what made it worth fixing rather than tolerating: the writer now prunes the
+  legacy path like any other finished sibling, a finished marker older than the window is not counted at all
   (residue, by the same rule the writer prunes by), and the line says "N heartbeat files" because the count
   is readings. The attack's labelling note is fixed with it: a bool is an `int`, so a hand-edited
   `"pid": true` survived as a pid and every line called it `pid True` while the probe read it as not
@@ -716,5 +719,5 @@ fixture never implemented a witness the account could agree with. **1 failure in
 **0 in 20** after. The lesson kept: a test that shares mutable script state across threads measures its own
 scheduling.
 
-The revision of record is `266a42d`: 692 passed / 8 skipped / 133 subtests in both provider modes, gate
-3,526 / 3,467 statements = 98.3%, exit 0.
+The revision of record is `00199d6`: 691 passed / 8 skipped / 133 subtests in both provider modes, gate
+3,518 / 3,459 statements = 98.3%, exit 0.
