@@ -42,6 +42,16 @@ from rentguard.ledger import Ledger, now_utc  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 
+class TransitionalStop(FakeProvider):
+    """A stop the provider accepts and leaves `STOPPING` for a while: the real transition."""
+
+    def action(self, instance_id, action):
+        self.actions.append((instance_id, action))
+        if action == "stop":
+            self.instances[instance_id].status = "STOPPING"
+        return None
+
+
 class PolarityCase(unittest.TestCase):
     def setUp(self) -> None:
         self.cfg = Config(budget=Budget(cap_usd=10.0, per_run_cap_usd=5.0),
@@ -76,6 +86,9 @@ class PolarityCase(unittest.TestCase):
 
     def doctor(self, provider) -> tuple[int, str]:
         return self.run_cmd(cli.cmd_doctor, ["doctor"], provider)
+
+    def down(self, provider) -> tuple[int, str]:
+        return self.run_cmd(cli.cmd_down, ["down"], provider)
 
 
 class UpRefusesOverAnythingThatMayBill(PolarityCase):
@@ -148,6 +161,43 @@ class UpRefusesOverAnythingThatMayBill(PolarityCase):
                          f"up rented a second machine beside one the open row names:\n{out}")
         self.assertEqual(self.ledger.open_run().get("run_id"), run["run_id"],
                          f"the machine's own row was replaced:\n{out}")
+
+
+class TheRecordedCloseThenRentIsNotBlocked(PolarityCase):
+    """The routine sequence, measured end to end: `down`, then `up` seconds later.
+
+    This is the case Gilbert asked about, and it is *not* the blocked one. When the machine is recorded
+    — the state file or the open row names it — `up` does not refuse: it reuses the machine it already
+    has (exit 0, `action: "reused"`, no second rental, the same row). The refusal in
+    `UpRefusesOverAnythingThatMayBill` is for the machine nothing here records: a lost state file, a
+    different root's session, or a stop from the provider console.
+
+    The stop itself is the transitional one, so the machine really is `STOPPING` when `up` runs, and
+    the row really is still open — because `down` will not close it while it may still bill.
+    """
+
+    def test_a_recorded_machine_that_is_stopping_is_reused_not_refused(self) -> None:
+        provider = TransitionalStop(rate_usd_per_hour=2.0)
+        provider.add("pod-A", uptime_seconds=1800, status="RUNNING")
+        self.write_state({"instance_id": "pod-A"})
+        row = self.ledger.open(purpose="polarity", provider="fake", instance_id="pod-A",
+                               gpu_id="Fake GPU 24GB", rate_usd_per_hour=2.0,
+                               started_at=now_utc() - timedelta(hours=0.5))
+        self.cfg.budget.stop_confirm_s = 0.0
+
+        down_code, down_out = self.down(provider)
+        self.assertEqual(down_code, 1, f"a stop in flight closed the row:\n{down_out}")
+        self.assertEqual(provider.get("pod-A")["status"], "STOPPING", down_out)
+        self.assertIsNotNone(self.ledger.open_run(),
+                             f"the row closed over a machine that may still bill:\n{down_out}")
+
+        up_code, up_out = self.up(provider)
+
+        self.assertEqual(up_code, 0, f"the routine close-then-rent sequence was blocked:\n{up_out}")
+        self.assertEqual(provider.created, [], f"up rented a second machine:\n{up_out}")
+        self.assertIn("pod-A", up_out, f"the machine it reused is not named:\n{up_out}")
+        self.assertEqual(self.ledger.open_run().get("run_id"), row["run_id"],
+                         f"the machine's own row was replaced:\n{up_out}")
 
 
 class DoctorCountsAnythingThatMayBill(PolarityCase):
