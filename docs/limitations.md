@@ -110,21 +110,28 @@ line in every one of those, as the secondary signal it is — never the verdict.
 the window are pruned by the next guard that writes, so the state dir does not fill with them.) Nothing
 restarts the guard for you.
 
-**The verdict line answers for one guard; `doctor` prints the set beside it.** The reported reading stays
-single on purpose — it answers *is anything watching?*, and with the best-of preference a crashed guard
-beside a live one cannot make `armed` true (Gilbert's ruling, 2026-10-16: no new machinery, the set as
-diagnostics). What that leaves invisible is the crash itself, so when more than one heartbeat file is
-readable, `doctor` adds one line:
+**The verdict line answers for one guard; the set rides beside it.** The reported reading stays single on
+purpose — it answers *is anything watching?*, and with the best-of preference a crashed guard beside a live
+one cannot make `armed` true (Gilbert's ruling, 2026-10-16). The **set** is reported beside it: `status
+--json` and `doctor`'s JSON carry `guard.readings` (how many heartbeat files are readable) and
+`guard.others` (every reading that is not the reported one, each with its own process facts and its own
+`stale`), and `doctor` adds a **warn** (`guard-crashed`) for a reading whose pid is gone and which never
+marked itself finished. That warn is not an error and does not change the exit code: the set's best reading
+is what `armed` and the cap rest on, so a crashed guard beside a live one is a protection *redundancy* loss,
+not a stop. `doctor`'s prose carries one line as well:
 
 ```
 guard heartbeat: alive (pid 26900, heartbeat 0.0 min ago)
-guard set      : 2 heartbeats — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
+guard set      : 2 heartbeat files — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
 ```
 
-Two limits of that line, deliberately: it names each reading's **process fact and age**, not the file or
-guard id the reading came from (the readings carry no identity), and there is no per-guard `stale` field —
-`status --json`'s `guard` block remains the one reported reading. It is a diagnostic, so it appears only
-when there is more than one heartbeat, and never in the JSON.
+Three limits, deliberately. The number is **readings, not guards**: two files can be one guard's past, and
+a finished marker older than the window is residue — not counted, and removed by the next writer along with
+the legacy `heartbeat.json`, which used to be read for ever (Assay's finding 19). A reading carries no file
+or guard id, only its process facts and age. And a **crashed guard whose file cannot be `stat`-ed** (a
+permission or ACL refusal) is dropped from the set entirely, so the count, the `others` list and the warn
+all under-report rather than invent a reading — the same under-reporting direction as the *NO GUARD*
+reading, and named here rather than fixed.
 
 **One measured limit on the pid check**, on Windows only: an exited process whose handle is still held
 elsewhere can be probed successfully, so a guard that was **killed or crashed** can read as running

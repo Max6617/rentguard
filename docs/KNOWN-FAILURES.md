@@ -667,19 +667,31 @@ the freshness bound or the ownership rules.
   permission or ACL refusal) is dropped with the pruned ones and the tool reads *NO GUARD* while a guard
   writes. That is the safe direction — under-reporting protection rather than inventing it — and a tool
   cannot report what it cannot stat.
-- **Ruled and closed (Gilbert, 2026-10-16): no new machinery.** The reported reading stays single — it
-  answers "is anything watching?", and with the best-of preference a crashed guard beside a live one
-  cannot make `armed` true — so the claim never needed the count. What stays invisible without it is the
-  crash itself, so `doctor` prints the **set** as a diagnostic line, implemented at `04925b8`:
+- **Ruled twice; the second ruling is the reporting shape (Gilbert, 2026-10-16).** The first — *no new
+  machinery* — was about refusals, and the second supersedes it for reporting: the verdict line stays
+  single, the **set** goes beside it in `facts`, and `doctor` **warns** for any reading whose pid is gone
+  and which never marked itself finished. A protection *redundancy* loss is a warning rather than a stop,
+  because the set's best reading is what `armed` and the cap rest on. Implemented at `266a42d`, red first:
 
   ```
   guard heartbeat: alive (pid 26900, heartbeat 0.0 min ago)
-  guard set      : 2 heartbeats — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
+  guard set      : 2 heartbeat files — alive (pid 26900, 0 min ago); not running (pid 2147483647, 8 min ago)
+    WARN  guard-crashed: a guard is gone and never marked its heartbeat finished (pid 2147483647, …)
   ```
 
-  It appears only when more than one heartbeat is readable, never on `status` and never in JSON, and its
-  own limits are named in [limitations](limitations.md): no file or guard id per reading, and no
-  per-guard `stale`.
+  `guard.readings` and `guard.others` carry the same set in `status --json` and `doctor`'s JSON, each
+  reading with its own process facts and its own `stale`; the warns never change `doctor`'s exit code,
+  which turns on errors alone. The limits are named in [limitations](limitations.md): the count is
+  readings rather than guards, a reading carries no file or guard id, and a crashed guard whose file
+  cannot be `stat`-ed is dropped from the set entirely — under-reporting, deliberately.
+- **Assay's finding 19 in the same attack** (`2ffce2e`): the legacy `heartbeat.json` is read for ever and
+  was pruned by nothing, so a migrated state dir reported two readings permanently — one live guard plus
+  residue — and the set line overstated the number of guards on every run. The writer now prunes the legacy
+  path like any other finished sibling, a finished marker older than the window is not counted at all
+  (residue, by the same rule the writer prunes by), and the line says "N heartbeat files" because the count
+  is readings. The attack's labelling note is fixed with it: a bool is an `int`, so a hand-edited
+  `"pid": true` survived as a pid and every line called it `pid True` while the probe read it as not
+  running; `_read_one` rejects booleans and floats now, so the facts and the prose agree on **no pid**.
 
 ### The fixture that made the gate red, and the one run that stayed nameless (fixed at `554d079`)
 
@@ -704,5 +716,5 @@ fixture never implemented a witness the account could agree with. **1 failure in
 **0 in 20** after. The lesson kept: a test that shares mutable script state across threads measures its own
 scheduling.
 
-The revision of record is `554d079`: 683 passed / 8 skipped / 130 subtests in both provider modes, gate
-3,506 / 3,446 statements = 98.3%, exit 0.
+The revision of record is `266a42d`: 692 passed / 8 skipped / 133 subtests in both provider modes, gate
+3,526 / 3,467 statements = 98.3%, exit 0.

@@ -504,6 +504,7 @@ verified inside it:
 | `0e43da0` — the pid probe's integer rule, the prune/read race and the ordering's dead tier (2026-10-16) | **680 passed**, 0 failed, 8 skipped, 123 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.92 s / 39.61 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, `session.py` 167/167, floor 98.0 |
 | `aed798f` — Assay's clean re-attack of the heartbeat fixes (2026-10-16) | **681 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (40.07 s / 39.70 s) | 3,430 / 3,489 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
 | `554d079` — `doctor` names the heartbeat set, and the flaky money-defect fixture is fixed (2026-10-16) | **683 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.15 s / 39.38 s) | 3,446 / 3,506 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
+| `266a42d` — the set in `facts`, the crashed-guard warn, and Assay's finding 19 (2026-10-17) | **692 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.72 s / 39.67 s) | 3,467 / 3,526 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.5%, floor 98.0 |
 
 **The one red gate run of the `aed798f` batch is named and fixed.** It was
 `tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`:
