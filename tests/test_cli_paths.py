@@ -105,6 +105,13 @@ class DoctorVolumeReference(CliCase):
 
 class UpUnusableMachine(CliCase):
     def test_up_says_so_when_it_cannot_stop_an_unusable_machine(self):
+        """The refused stop is reported, and the row stays **open** — Gilbert's clause.
+
+        `up`'s unusable exit now runs the same discipline as `down`: stop, confirm against the
+        account, and close the row only when the account agrees. A stop the provider refused is not a
+        stopped machine, so the row keeps accruing where the operator can see it (findings 12-14,
+        2026-10-16). `stop_confirm_s` is pinned small so the test measures the rule, not the bound.
+        """
         class CannotStop(FakeProvider):
             def wait_running(self, instance_id, timeout_minutes=12.0, poll_s=10.0, log=print):
                 pod = self.get(instance_id) or {}
@@ -115,10 +122,14 @@ class UpUnusableMachine(CliCase):
             def action(self, instance_id, action):
                 raise ProviderError("provider refused the stop")
 
+        self.cfg.budget.stop_confirm_s = 0.1
         code, out = self.invoke(cli.cmd_up, ["up", "--purpose", "x"], CannotStop())
 
         self.assertNotEqual(code, 0, f"an unusable machine was reported as a rental.\n{out}")
-        self.assertIn("could not stop it", out, f"the refused stop was not reported:\n{out}")
+        self.assertIn("could not stop", out, f"the refused stop was not reported:\n{out}")
+        self.assertIn("NOT closed", out, f"the open row is not stated:\n{out}")
+        self.assertIsNotNone(Ledger(self.cfg.ledger_path).open_run(),
+                             f"the row closed over a machine whose stop was never confirmed:\n{out}")
 
 
 class PullWithoutConfiguredPatterns(CliCase):

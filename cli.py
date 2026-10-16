@@ -1104,31 +1104,21 @@ def cmd_up(args) -> int:
                     note(f"instance {pod['id']} is already {status}")
                 # Two alive readings, not one, exactly as the create path requires (defect 2, B19).
                 # The reading above is `_pod`'s payload, or `wait_running`'s first one that merely
-                # looked alive, and `is_alive` requires a positive uptime *and* a port. Without this,
-                # a pod stuck at RUNNING with no uptime and null ports — the crash loop `run` refuses
-                # to upload to — was reported as `reused`, exit 0, and billed with nothing watching it
-                # (finding 12, 2026-10-16).
-                confirmed = provider.get(pod["id"]) or pod
-                if not is_alive(confirmed):
+                # looked alive, and `is_alive` requires a positive uptime *and* a port. A second
+                # reading that returns nothing is a machine the account no longer shows — not the
+                # stale first one, which is what `or pod` used to report while opening a row against a
+                # machine that does not exist (findings 12 and 13, 2026-10-16).
+                reading = provider.get(pod["id"])
+                if reading is None or not is_alive(reading):
                     _release_wait_guard(wait_guard)
-                    runtime = confirmed.get("runtime") or {}
-                    note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is "
-                         f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
-                         f"{'set' if runtime.get('ports') else 'NULL'}); that is not a rental, and the "
-                         f"machine is being stopped so it cannot bill with nothing watching it")
-                    stopped_ok, detail = _stop_machine(cfg, provider, pod)
-                    if not stopped_ok:
-                        note(f"  could not stop it ({detail}); it may still be billing — check "
-                             f"`rentguard doctor`")
-                    closed = ledger.close(note="up-unusable", instance_status=confirmed.get("status"))
-                    if closed is not None:
-                        note(f"run closed     : {closed['run_id']}  ${closed['estimated_usd']}  "
-                             f"(the seconds it existed are recorded)")
+                    note(f"error: {_second_reading_reason(reading, str(pod['id']))}; that is not a "
+                         f"rental")
+                    closed = _retire_machine(cfg, provider, ledger, pod["id"], reason="unusable")
                     emit(action="unusable", instance={"id": pod.get("id"),
-                                                      "status": confirmed.get("status")},
+                                                      "status": (reading or {}).get("status")},
                          stopped=True, run=_closed_dict(closed))
                     return 1
-                pod = confirmed
+                pod = reading
                 run = _open_if_needed(cfg, ledger, pod, args.purpose, provider)
                 _print_access(cfg, provider, pod)
                 emit(action="reused", instance={"id": pod.get("id"), "status": pod.get("status"),
@@ -1136,6 +1126,16 @@ def cmd_up(args) -> int:
                      run=_run_dict(run), cap={"cap_usd": cfg.budget.cap_usd,
                                               "per_run_cap_usd": cfg.budget.per_run_cap_usd})
                 return 0
+            except BaseException:
+                # The resume failed — a provider error, an ERROR transition during the start, or the
+                # wait's own timeout — and the machine it just revived must not be left billing with
+                # nothing recording it and nothing watching it (finding 14, 2026-10-16). The create
+                # path answers this on the way out; this is the same discipline, and the exception is
+                # re-raised so the command still reports the failure.
+                _release_wait_guard(wait_guard)
+                wait_guard = None
+                _retire_machine(cfg, provider, ledger, str(pod["id"]), reason="resume-failed")
+                raise
             finally:
                 # Released on every way out, an interrupt during the wait included: no guard may
                 # outlive the command that armed it, and a heartbeat left behind by one nobody can
@@ -1276,33 +1276,24 @@ def cmd_up(args) -> int:
             # Two consecutive alive readings, not one. `wait_running` returns the first payload that
             # merely looks alive; on the real account `up` reported RUNNING with uptime=None and
             # ports=NULL, exited 0, and `run` refused the machine seconds later. A machine that is
-            # not usable is not a rental — so success is declared only once a second reading agrees.
-            # The row already exists by then (it was opened before the machine), and this is the
-            # point the two designs meet: a crash-looping machine is stopped, and the seconds it did
-            # bill are closed out rather than voided or hidden.
-            confirmed = provider.get(pod["id"]) or pod
-            if not is_alive(confirmed):
+            # not usable is not a rental — so success is declared only once a second reading agrees,
+            # and a second reading that returns nothing is a machine the account no longer shows, not
+            # the stale first one (finding 13). The row already exists by then (it was opened before
+            # the machine), and this is the point the two designs meet: a machine that fails the
+            # second reading is retired through the same discipline the reuse path uses.
+            reading = provider.get(pod["id"])
+            if reading is None or not is_alive(reading):
                 _release_wait_guard(wait_guard)
-                runtime = confirmed.get("runtime") or {}
-                note(f"error: instance {pod.get('id')} reported {confirmed.get('status')} but is "
-                     f"not usable on a second read (uptime={runtime.get('uptime')}, ports="
-                     f"{'set' if runtime.get('ports') else 'NULL'}); no rental was confirmed, and "
-                     f"the machine is being stopped so it cannot bill unrecorded")
-                stopped_ok, detail = _stop_machine(cfg, provider, pod)
-                if not stopped_ok:
-                    note(f"  could not stop it ({detail}); it may still be billing — check `rentguard "
-                         f"doctor`")
-                closed = ledger.close(note="up-unusable", instance_status=confirmed.get("status"))
-                if closed is not None:
-                    note(f"run closed     : {closed['run_id']}  "
-                         f"${closed['estimated_usd']}  (the seconds it existed are recorded)")
+                note(f"error: {_second_reading_reason(reading, str(pod['id']))}; no rental was "
+                     f"confirmed")
+                closed = _retire_machine(cfg, provider, ledger, pod["id"], reason="unusable")
                 emit(action="unusable", instance={"id": pod.get("id"),
-                                                  "status": confirmed.get("status")},
+                                                  "status": (reading or {}).get("status")},
                      stopped=True, run=_closed_dict(closed))
                 return 1
             # The machine is usable; the operator arms the real guard from here.
             _release_wait_guard(wait_guard)
-            pod = confirmed
+            pod = reading
         except BaseException:
             # Interrupted, or the wait failed: the row is already open (that is the invariant), and
             # when the process is still alive the better outcome is a machine that stops too. The
@@ -1444,38 +1435,14 @@ def _open_provisional(cfg: Config, ledger: Ledger, provider: Provider, gpu_id: s
 def _abandon_created(cfg: Config, provider: Provider, ledger: Ledger, pod: dict) -> None:
     """The way out of a `create` whose rental will not be confirmed: stop it, and close the row.
 
-    Every step is best-effort and says what it did. Raising here would replace the exception that
-    brought us here, and — the rule the shutdown path learned — a refused stop must not skip the
-    ledger close: the cost is recorded either way, and a machine that is somehow still billing is
-    then visible to `doctor` as a live instance with no open row, which is an error.
-
-    **The machine must be this root's to stop.** A name that belongs to another root is that root's
-    machine, recorded in that root's ledger, which this one cannot see; stopping it because *this*
-    ledger has no row would kill their job on the strength of a missing local file. The row this
-    closes is by construction in this root's ledger (``Ledger`` is built from this root's config), so
-    the only thing left to check is the name.
+    This is the **dying** case of ``_retire_machine``'s discipline, and the one deliberate difference.
+    Every step is best-effort and the row is closed without waiting for the account, because a row that
+    exists is the guarantee that survives a process on its way out (defect 10). Every other "not a
+    rental" exit — an unusable second reading on either path, and a resume whose wait failed — goes
+    through ``_retire_machine`` with ``dying=False``, where the row is closed only against the
+    account's own answer. Raising here would replace the exception that brought us here.
     """
-    instance_id = pod.get("id")
-    if instance_claim(cfg, pod) == CLAIM_ANOTHER_ROOT:
-        note(f"NOT stopping {instance_id}: its name {pod.get('name')!r} belongs to another rentguard "
-             f"root, so that root's ledger is the one recording it, and stopping it here would kill "
-             f"their job. The row opened here is voided below rather than left accruing.")
-        row = ledger.close(note="machine-named-for-another-root", void=True)
-        if row:
-            note(f"row voided     : {row['run_id']} (a machine another root owns)")
-        return
-    stopped_ok, detail = _stop_machine(cfg, provider, pod)
-    if stopped_ok:
-        note(f"stopping {instance_id}: {detail}")
-    else:
-        note(f"could not stop {instance_id}: {detail}")
-        note("the cost is recorded below anyway; the machine may still be billing — check "
-             "`rentguard doctor`")
-    row = ledger.close(note="up-interrupted", instance_status=pod.get("status"))
-    if row:
-        note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
-             f"${row['estimated_usd']}")
-    note(f"total spend    : ${ledger.total_usd():.2f}")
+    _retire_machine(cfg, provider, ledger, str(pod.get("id")), reason="interrupted", dying=True)
 
 
 def _config_mismatch(cfg: Config, pod: dict, state: dict) -> list[str]:
@@ -2179,6 +2146,102 @@ def _may_close_the_row(provider: Provider, instance_ids: list[str], *, bound: fl
             return False, (f"{instance_id} is still {status} in the account listing — the listing "
                            f"decides, so the row stays open until it stops showing it")
     return True, "the account lists none of them as billing"
+
+
+def _second_reading_reason(reading: dict | None, instance_id: str) -> str:
+    """Why a second reading is not a rental, in the words `up` prints. ``None`` means gone.
+
+    The distinction ``or`` erased (finding 13, 2026-10-16): a reading that returns nothing is a machine
+    the account no longer shows, which is not the same answer as a machine that is there and not
+    usable — and neither of them is the stale first reading.
+    """
+    if reading is None:
+        return f"{instance_id} is gone from the account"
+    runtime = reading.get("runtime") or {}
+    return (f"{instance_id} reported {reading.get('status')} but is not usable on a second read "
+            f"(uptime={runtime.get('uptime')}, ports={'set' if runtime.get('ports') else 'NULL'})")
+
+
+def _retire_machine(cfg: Config, provider: Provider, ledger: Ledger, instance_id: str, *,
+                    reason: str, dying: bool = False) -> dict | None:
+    """End a rental `up` will not report as usable: stop the machine, and record the end honestly.
+
+    **One exit discipline for both of `up`'s paths** — the one that creates a machine and the one that
+    reuses one — because three attacks in a row (2026-10-16, findings 12, 13 and 14) found the reuse
+    branch missing one more of the create path's post-conditions. The invariant this owns: *the machine
+    is this root's, and it is either usable, stopped, or visibly billing in an open row.*
+
+    - The account is asked first, and ``None`` (gone) is a real answer: nothing is stopped, and the row
+      that names this instance is closed as a rental that ended. Falling back to a stale payload is
+      what turned a vanished machine into a "reused" one (finding 13).
+    - A machine that is there is stopped, bounded. It is **not** stopped when its name belongs to
+      another root: that root's ledger records it, and killing their job on the strength of a missing
+      local file is worse than a row that accrues.
+    - The row is closed only when the account agrees the machine stopped — the two witnesses
+      ``_may_close_the_row`` reads, the same rule `down` follows. An unconfirmed stop leaves the row
+      **open**, so the accrual keeps being counted, the cap keeps seeing it, and `doctor` shows a
+      billing machine with a row rather than a closed window beside one.
+    - ``dying=True`` is the one deliberate difference, and it is the interrupt path only: when the
+      process is on its way out the row is closed without waiting for the account, because a row that
+      exists is the guarantee that survives the process (defect 10's ruling, kept). Every other exit —
+      an unusable second reading on either path, a resume whose wait failed — confirms first.
+
+    Returns the row it closed, or ``None`` when the row was left open (or voided).
+    """
+    try:
+        pod = provider.get(instance_id)
+    except ProviderError as exc:
+        note(f"the account could not be read about {instance_id} ({exc})")
+        if dying:
+            row = ledger.close(note=f"up-{reason}", instance_status="UNREADABLE")
+            if row:
+                note(f"run closed     : {row['run_id']}  ${row['estimated_usd']}  "
+                     f"(the account could not be read; the row is the guarantee)")
+            return row
+        note("nothing is concluded and the row is left OPEN, so the cost keeps being recorded and "
+             "the cap keeps seeing it")
+        return None
+    if pod is not None and instance_claim(cfg, pod) == CLAIM_ANOTHER_ROOT:
+        note(f"NOT stopping {instance_id}: its name {pod.get('name')!r} belongs to another rentguard "
+             f"root, so that root's ledger is the one recording it, and stopping it here would kill "
+             f"their job. This root's row is voided rather than left accruing.")
+        row = ledger.close(note="machine-named-for-another-root", void=True)
+        if row:
+            note(f"row voided     : {row['run_id']} (a machine another root owns)")
+        return None
+    status = "GONE" if pod is None else str(pod.get("status") or "UNKNOWN")
+    if pod is not None:
+        stopped_ok, detail = _stop_machine(cfg, provider, pod)
+        if stopped_ok:
+            note(f"stopping {instance_id}: {detail}")
+        else:
+            note(f"could not stop {instance_id}: {detail}; it may still be billing — check "
+                 f"`rentguard doctor`")
+        if dying:
+            row = ledger.close(note=f"up-{reason}", instance_status=status)
+            if row:
+                note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
+                     f"${row['estimated_usd']}")
+            return row
+        bound = float(getattr(cfg.budget, "stop_confirm_s", 30.0) or 0.0)
+        confirmed, confirm_detail = _may_close_the_row(provider, [instance_id], bound=bound,
+                                                       polled={instance_id})
+        if not confirmed:
+            note(f"NOT closed     : {confirm_detail}. The ledger row is left OPEN so the cost keeps "
+                 f"being recorded and the cap keeps seeing it; stop the machine from the provider "
+                 f"console, or run `rentguard down` again once it stops.")
+            return None
+    # Gone, or the account agrees the machine stopped: close the row that names it — and only that row.
+    open_row = ledger.open_run()
+    if open_row is not None and str(open_row.get("instance_id") or "") != str(instance_id):
+        note(f"note           : the open row {open_row.get('run_id')} names "
+             f"{open_row.get('instance_id')!r}, not {instance_id}; it is left as it is")
+        return None
+    row = ledger.close(note=f"up-{reason}", instance_status=status)
+    if row:
+        note(f"run closed     : {row['run_id']}  {row['wall_clock_hours']} h  "
+             f"${row['estimated_usd']}")
+    return row
 
 
 def _stop_machine(cfg: Config, provider: Provider, pod: dict) -> tuple[bool, str]:
