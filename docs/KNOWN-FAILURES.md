@@ -2,10 +2,10 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`5356d93`** (2026-10-16).
+say where they stand at the revision this file describes, **`86a260a`** (2026-10-16).
 
 Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`5356d93` unless the entry says otherwise.
+`86a260a` unless the entry says otherwise.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 
@@ -410,3 +410,52 @@ row recording nothing for a machine that is billing.
 **The test that closes it.**
 `tests/test_adopt_estimate.py::AnEstimateThatIsNoLengthOfTime::test_nan_and_infinity_are_refused_rather_than_crashing`
 (`nan`, `inf`, `-inf`, each refused with exit 2 and no row opened).
+
+## A status in neither set was unfinished for the closure and invisible for a bill (fixed)
+
+**Found** by Assay's attack on the unknown-status boundary (`9e00ec4`, verdict
+`tests/_artefacts/b19_unknown_status_boundary_2026-10-16.txt`, findings 10 and 11), 2026-10-16 — the
+boundary Forge named in the report that closed findings 8 and 9, attacked rather than left on trust.
+
+Finding 8 put the closure on the **terminal** set while the visibility rule (`_live`, `_pod`'s fallback,
+doctor's live list, `guard.state_findings`) still read the **live** set, so the two disagreed about
+every status in neither: a `STOPPING` or `ERROR` machine was *unfinished* when a row was closed and
+*invisible* when a bill was looked for. Both shapes reproduced with one pod and no ledger row:
+
+```text
+$ rentguard doctor
+account pods   : 1 total, 0 live
+  (nothing is billing)
+[exit 0, no finding naming it]
+
+$ rentguard up --purpose ...
+[exit 0, action "created", the machine never named]
+```
+
+`doctor` is the tool that exists to find unrecorded bills, and it was silent for exactly the machine it
+was built to surface. Bounded for `STOPPING` (the stop finishes in seconds), unbounded for `ERROR` if
+the provider keeps billing a pod that failed to start.
+
+**Fixed at `86a260a`** by Gilbert's ruling: **terminal is the only state that is not billing;
+everything else is.** One predicate, `guard.is_billing(status)` — the terminal set's complement, with a
+missing, empty or unknown status counting as billing — replaces the live-set test in all of them.
+`up` refuses and names the machine, `doctor` counts and reports it, the drift check fires, `_pod` reuses
+a stopping machine the open row names instead of renting beside it, and the guard may be armed against
+a machine that may still be charging.
+
+Assay's verdict recommended the softer shape — leave `_live` alone and only *report* such a machine, so
+that an `ERROR` pod does not block a rent. Gilbert ruled the other way and accepted the cost: a false
+refusal is loud, names the machine and takes one word (`--force`) to override, while a silent billing
+machine is neither.
+
+**The cost, declared rather than discovered** (`docs/limitations.md`): an `ERROR` pod that never billed
+blocks a rent until it is terminated or `--force` is passed, and a just-stopped machine blocks one for
+the seconds it spends `STOPPING`. Measured as transient, not permanent:
+`tests/test_status_polarity.py::UpRefusesOverAnythingThatMayBill::test_the_block_ends_when_the_provider_says_exited`
+runs the same `up` twice — refused while the pod reports `STOPPING`, renting the moment the provider
+reports `EXITED`.
+
+**The tests that close it.** `tests/test_status_polarity.py` (13 tests, 15 subtests): `up` over
+`STOPPING` and `ERROR` with the `--force` escape, the two-call sequence, the reuse of a stopping machine
+named only by the open row, doctor's count and finding, the drift finding for both statuses with
+`EXITED`/`TERMINATED` as controls, and `is_billing` itself.
