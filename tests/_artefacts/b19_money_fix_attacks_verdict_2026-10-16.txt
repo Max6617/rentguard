@@ -1,0 +1,104 @@
+B19 MONEY-PATH FIXES — INDEPENDENT ATTACK at `1b41c1d` (three fixes)
+Verifier: Assay. 2026-10-16. Offline, in-memory fake, no rental.
+
+FILES
+  tests/test_b19_money_fix_attacks.py                (17 tests + 3 subtests: 7 failed, 10 passed)
+  tests/_artefacts/b19_money_fix_attacks_verdict_2026-10-16.txt   (this record)
+
+RUN
+  clean worktree at `1b41c1d`, package path printed
+  python -m pytest tests/test_b19_money_fix_attacks.py -q      -> 7 failed, 10 passed, 3 subtests
+  python -m pytest tests/test_down_stop_verified.py tests/test_up_arms_the_guard.py \
+      tests/test_adopt_estimate.py -q                          -> 10 passed (Forge's own three files)
+The 7 failures are the findings below; each failure message is the requirement that was violated.
+
+============================================================ 1. `down`'s confirmation
+FINDING 1 — the witness is the single-instance GET, never the account listing.
+  A `provider.get` that says EXITED (or returns None) while `list_pods` still shows the machine
+  RUNNING closes the row. The fix's own sentence is "the account's own listing decides"; the listing
+  is never consulted.
+  Effect: `down` exits 0, the row closes, the machine bills with nothing recording it — the very
+  defect-1 shape, one endpoint over.
+  Reachability: the two endpoints disagreeing (a GET that 404s while the pod is still listed, or a
+  status flip on GET).
+  Severity: money-direction false success; not severe by reachability, but it is the witness the fix
+  names, so it is worth a ruling.
+
+FINDING 2 — `down` stops one machine and closes another's row.
+  State names pod-A, the open row names pod-B, both live. `down` stops and confirms pod-A, then
+  closes the open row — pod-B's — while pod-B is still RUNNING.
+  Effect: a closed row for a machine that is billing; pod-B's spend stops being recorded.
+  Reachability: the state and the row diverge — exactly the sequence this commit fixes a stop for
+  (a stop that did not stop) followed by a later `up` that opens a row for the new machine while the
+  state still names the old one.
+  Severity: money-direction. The confirmation asked about the machine it stopped, not the machine the
+  row names.
+
+FINDING 3 — an unreadable account tracebacks before the confirmation runs.
+  `_confirm_stopped` handles a raising provider and reports it as unverified, but `down` asks the
+  account again first (`_pod`, cli.py:242) and that call has no handler: the command dies with an
+  uncaught ProviderError instead of naming the failure. The row stays open (the safe part).
+  Severity: not money-direction; robustness. A named exit is owed where the fix's docstring promises
+  one.
+
+CONTROLS THAT HOLD (measured)
+  a refused stop leaves the row OPEN, exit 1, action "still-billing";
+  `stop_confirm_s = 0` is one read: a read that says RUNNING leaves the row open, a read that says
+  EXITED closes it — the bound decides patience, not how many witnesses are required;
+  the poll waits until the machine stops.
+
+THE NAMED HALF (`_abandon_created`) — reachable, and visible
+  Reached by the interrupt path (Ctrl-C, or `wait_running` failing) after a refused stop. The row
+  closes for a machine that may still be running, and the state still names it, so `doctor` reports
+  the live machine with no row as an ERROR. That is defect 10's deliberate trade (the row is the
+  guarantee when the process is dying) and the gap is loud rather than hidden.
+
+============================================================ 2. `up`'s wait guard
+FINDING 4 — a wait guard can outlive `up` and write a heartbeat after it.
+  `_release_wait_guard` joins for at most 5 s. A `provider.get` slower than that returns with the
+  thread alive, and `guard.watch` writes its heartbeat *after* the read, so a fresh heartbeat is
+  written after `up` released the guard.
+  Effect: `status` and `doctor` read a fresh heartbeat as "protection armed" while nothing is
+  watching — the shape this project has paid for twice.
+  Reachability: a provider read slower than 5 s (routine network/provider stalls; provider timeouts
+  are 30-60 s). In a long-lived process (the MCP server) the thread survives `up` returning; in a CLI
+  it is a daemon that the process exit ends, but the heartbeat file it wrote outlives it.
+  Severity: a false protection report, not money at risk (a guard that acts stops a machine, the safe
+  direction). Still the failure mode the guard exists to avoid.
+
+CONTROLS THAT HOLD (measured by thread enumeration)
+  no `rentguard-wait-guard-*` thread survives a successful `up`;
+  none survives the unusable-machine path;
+  two guards for two machines are both released.
+
+============================================================ 3. `adopt --uptime-hours`
+FINDING 5 — SEVERE (money direction, cap reads low). A negative estimate is accepted.
+  `--uptime-hours=-2` implies a start in the future; the creation check cannot see it (a future
+  instant does not precede creation). The row opens 2 h in the future, accrues $0.00, and the cap and
+  the guard read nothing for a machine that is billing.
+  Reachability: a typo or a pasted value. Fix shape: refuse an estimate <= 0 (or require it inside
+  the machine's life, which the check already computes).
+
+FINDING 6 — named gap: no `createdAt` lets any estimate through.
+  `--uptime-hours=100` with no `createdAt` opened a row 100 h back and recorded $200. Deliberate
+  ("a check that cannot be made does not invent an answer"), and the consequence is over-recording.
+  The reverse (an estimate far too small, under-recording) is not checked either — that is the
+  direction that would matter.
+
+FINDING 7 — named gap: a provider uptime that contradicts `createdAt` is not cross-checked.
+  3.00 h of provider uptime for a pod created 10 minutes ago backdates the row to before the machine
+  existed; the check runs only for `--uptime-hours`. Direction: over-record (conservative).
+
+BOUNDARIES THAT BEHAVE (measured)
+  an estimate exactly at creation is accepted; 30 s inside the 60 s slack is accepted; 90 s before is
+  refused with `uptime-precedes-creation`;
+  a stamp with no zone is read as UTC, so the check moves with the host's offset (+02:00 here: the
+  machine reads newer than it is, which refuses a legitimate estimate; a negative-offset host would
+  accept an estimate that precedes creation).
+
+VERDICT
+  Fix 1 does not meet its own witness requirement in two ways (single-endpoint witness; the wrong
+  instance's row closed) and tracebacks on an unreadable account. Fix 2's join bound leaves a
+  heartbeat that survives `up`. Fix 3 has one severe hole (a negative estimate records nothing for a
+  billing machine) and two named gaps it already discloses. Nothing else broke: the conservative
+  halves of all three fixes hold under attack.
