@@ -397,6 +397,39 @@ class StatusReadsTheVerdict(HeartbeatCase):
         self.assertNotIn("alive", out.lower(), f"doctor reported a finished guard as alive:\n{out}")
         self.assertIn("finished", out.lower(), f"doctor does not name the marker:\n{out}")
 
+    def test_doctor_lists_the_whole_heartbeat_set_when_a_guard_died(self) -> None:
+        """The reported reading stays single (Gilbert's ruling, 2026-10-16: no new machinery), so a
+        crashed guard beside a live one is invisible in the verdict line — the best-of reading is the
+        live one and nothing says another guard died. `doctor` prints the **set** beside it, as
+        diagnostics: one entry per heartbeat, with each reading's process fact and age.
+        """
+        provider = self.machine()
+        snapshot = guard.snapshot_fallback(self.cfg, Ledger(self.cfg.ledger_path))
+        guard.write_heartbeat(guard.guard_heartbeat_path(self.cfg.heartbeat_path, "live"), snapshot)
+        self.heartbeat(pid=dead_pid(), ended=False,
+                       at=iso(now_utc() - timedelta(minutes=8)))     # crashed: unmarked, gone
+
+        code, out = self.run_cmd(cli.cmd_doctor, ["doctor"], provider)
+
+        set_lines = [line for line in out.splitlines() if "guard set" in line.lower()]
+        self.assertEqual(len(set_lines), 1, f"doctor did not print one line for the set:\n{out}")
+        self.assertIn("2 heartbeats", set_lines[0], set_lines[0])
+        self.assertIn("alive", set_lines[0], f"the live guard is missing from the set: {set_lines[0]}")
+        self.assertIn("not running", set_lines[0],
+                      f"the crashed guard is invisible in the set: {set_lines[0]}")
+        self.assertIn(str(dead_pid()), set_lines[0],
+                      f"the crashed pid is not named, so the evidence is unreadable: {set_lines[0]}")
+
+    def test_doctor_leaves_the_set_line_out_for_a_single_heartbeat(self) -> None:
+        """Diagnostics must not become noise: one heartbeat is already the verdict line above it."""
+        provider = self.machine()
+        self.heartbeat()
+
+        code, out = self.run_cmd(cli.cmd_doctor, ["doctor"], provider)
+
+        self.assertNotIn("guard set", out.lower(),
+                         f"a single heartbeat got a second line saying the same thing:\n{out}")
+
 
 class TheArmedClaimNeedsEveryFact(HeartbeatCase):
     """`armed_before` is a claim about protection: not ended, pid running, **and** fresh.

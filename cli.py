@@ -68,6 +68,7 @@ from .guard import (
     guard_heartbeat_path,
     heartbeat_age_minutes,
     heartbeat_reading,
+    heartbeat_readings,
     is_billing,
     snapshot,
     state_findings,
@@ -542,7 +543,8 @@ def cmd_doctor(args) -> int:
     ledger = Ledger(cfg.ledger_path)
     name = provider_name(cfg)
     open_run = ledger.open_run()
-    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
+    readings = heartbeat_readings(cfg.heartbeat_path)
+    guard_line, guard_facts = _guard_report(readings[0] if readings else None)
     findings: list[Finding] = []
     with json_report(args):
         emit(command="doctor", version=__version__,
@@ -590,6 +592,11 @@ def cmd_doctor(args) -> int:
 
         emit(guard=guard_facts)
         note(f"guard heartbeat: {guard_line}")
+        set_line = _guard_set_line(readings)
+        if set_line is not None:
+            # Diagnostics, not a second verdict: the line above is the reading a caller gates on, and
+            # this one exists because a crashed guard beside a live one is otherwise invisible.
+            note(f"guard set      : {set_line}")
 
         if name != "fake" and not api_key():
             findings.append(Finding(code="no-api-key", severity="error",
@@ -1884,6 +1891,33 @@ def _guard_report(reading) -> tuple[str, dict]:
         return (f"running (pid {reading.pid}) but silent for {reading.age_minutes:.1f} min — probably "
                 f"wedged", facts)
     return f"alive (pid {reading.pid}, heartbeat {reading.age_minutes:.1f} min ago)", facts
+
+
+def _guard_set_line(readings: list) -> str | None:
+    """One line naming **every** heartbeat in the set, or ``None`` when there is only one.
+
+    The reported reading stays single, because it answers one question — *is anything watching?* — and
+    the preference for a live reading already makes `armed` false for every other shape (Gilbert's
+    ruling, 2026-10-16: no new machinery, the set as diagnostics). What that leaves invisible is a
+    crashed guard beside a live one: the best-of reading is the live guard, and nothing said another
+    guard died. This is where `doctor` says it, in one line, with each reading's process fact and age.
+
+    Diagnostics only, deliberately: no `status` line, no JSON key, and nothing at all for the ordinary
+    single-guard case, so the line can never be read as a second verdict.
+    """
+    if len(readings) < 2:
+        return None
+    parts = []
+    for reading in readings:
+        if reading.alive:
+            verdict = "alive"
+        elif reading.ended:
+            verdict = "finished"
+        else:
+            verdict = "not running"
+        pid = "no pid" if reading.pid is None else f"pid {reading.pid}"
+        parts.append(f"{verdict} ({pid}, {reading.age_minutes:g} min ago)")
+    return f"{len(readings)} heartbeats — " + "; ".join(parts)
 
 
 def _instance_created_at(pod: dict) -> datetime | None:
