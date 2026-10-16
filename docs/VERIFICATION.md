@@ -11,9 +11,13 @@ Date: 2026-10-14, between 14:47 and 15:25 local.
 
 **This log is a history, not a snapshot.** The record in this section and the ones under "Exercised at
 `af1ba5a`" was written at `af1ba5a` (2026-10-14) and is kept as it was measured then. The revisions and
-numbers that are current — the published tip `1ba1198`, whose code is `be4e7c7`'s — are in
+numbers that are current — the published tip `605564e`, whose code the last of them measures — are in
 [After `eef6bdb`](#after-eef6bdb-measured-2026-10-15) and
-[Install](#install-the-wheel-into-a-clean-venv).
+[Install](#install-the-wheel-into-a-clean-venv). **Which revision is the published tip is not written
+down here as a value**, because a value in a committed file goes stale the moment anyone pushes; the
+live answer is the run list,
+`https://api.github.com/repos/Max6617/rentguard/actions/runs?per_page=1`, and the fixed verdicts this
+page does carry are for the revisions named beside them.
 
 The pages were re-run against three revisions, each extracted with `git archive` so that a mid-edit
 working tree could not affect the run:
@@ -484,13 +488,22 @@ verified inside it:
 | Revision | Suite | Coverage (Python 3.12), exit |
 | --- | --- | --- |
 | `eef6bdb` | 398 passed, 0 failed, 54 subtests | 2,589 / 2,625 = 98.6%, exit 0 |
-| `7f52cc3` — **published tip** | 418 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 2,697 / 2,747 = 98.2%, exit 0 |
+| `7f52cc3` | 418 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 2,697 / 2,747 = 98.2%, exit 0 |
 | `e53f544` | 425 passed, **9 failed** — the red-first attacks, awaiting the fixes | 2,710 / 2,761 = 98.2%, exit 0 |
 | `1452718` | 456 passed, 0 failed, 54 subtests | 2,809 / 2,863 = 98.1%, exit 0 |
 | `ddd79c9` | 471 passed, 0 failed, 54 subtests | 2,957 / 3,038 = **97.3%, exit 1** — below the 98.0% floor |
 | `a9cffa0` | 485 passed, 0 failed, 54 subtests | 3,013 / 3,054 = 98.7%, exit 0 |
 | `042fd21` | 490 passed, 0 failed, 54 subtests | 3,037 / 3,080 = 98.6%, exit 0 |
-| `be4e7c7` — **the revision the published tip `1ba1198` carries** | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
+| `be4e7c7` — the revision `1ba1198` published | 490 passed, 0 failed, 54 subtests, identical with and without `RENTGUARD_PROVIDER=fake` | 3,037 / 3,080 = **98.6%, exit 0** — floor cleared, no module below 94% |
+| `605564e` — **published tip**, carrying defects 20 and 21 | **507 passed**, 0 failed, **59 subtests**, identical with and without `RENTGUARD_PROVIDER=fake` (32.04 s / 36.88 s, nothing skipped) | 3,050 / 3,093 = **98.6%, exit 0** — `session.py` **167/167**, and the gate fails a red suite before it compares the floor (defect 21) |
+
+The `605564e` row is the worktree measurement described below: the suite was run plain and with
+`RENTGUARD_PROVIDER=fake`, then the coverage gate with CI's own variable, in a clean worktree whose
+package directory is named `rentguard` (the layout trap is in the notes above). Its two code changes
+against `be4e7c7` are the driver fix for defect 20 (`b9447e8`) and the gate fix for defect 21
+(`605564e`), both carried by tests that were red first — so unlike the rows above it, this one measures
+modules that changed. Which revision is the tip now, and what CI says about it, is read from the run
+list rather than from this table.
 
 `be4e7c7` is tests-only on top of `042fd21` (defect 19's fix to the flaky spend assertion), so it
 changes no measured module and the figures carry over; the suite was re-run there, and Gilbert measured
