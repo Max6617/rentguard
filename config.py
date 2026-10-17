@@ -121,7 +121,10 @@ class Artefacts:
                               "second > 0 — a pull bound cannot assume an infinite throughput")
         for pattern in [*self.pull, *self.run_patterns]:
             text = str(pattern)
-            if not text or not _PATTERN_SAFE.match(text):
+            if not text or not _PATTERN_SAFE.fullmatch(text):
+                # `fullmatch`, not `match` with `$`: `$` also matches before a trailing newline, so a
+                # pattern ending in "\n" passed the first version of this check (attack finding,
+                # 2026-10-17) — and a newline in a remote shell command is a second command.
                 raise ConfigError(
                     f"artefacts pattern {text!r} contains characters the remote shell would "
                     f"interpret (whitespace, quotes, ; $ ` < > | & ( ) or a backslash). The inventory "

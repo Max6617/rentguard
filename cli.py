@@ -2953,6 +2953,9 @@ def _pty_pull_command(remote_dir: str, members: list[str]) -> str:
     POSIX shell only, and the tar status still travels by ``rc=$?`` rather than through a pipe. The
     body is base64 with no newlines (``tr -d '\\n'``), so the pty's LF→CRLF rewriting cannot touch it
     and the header's count is the body's actual length.
+
+    ``members`` are the **raw** selected paths; this is the one place they are shell-quoted for this
+    route, so a caller must not quote them first (doing both quoted the quotes, measured 2026-10-17).
     """
     members = " ".join(shlex.quote(path) for path in members)
     tmp = "/tmp/.rentguard-pull-$$.tar.gz"
@@ -3034,14 +3037,16 @@ def _pull_remote_command(remote_dir: str, members: list[str], *, pty: bool) -> s
     reported as a successful pull of nothing. A lost result read as a kept one is the failure this
     whole path exists to avoid.
 
-    ``members`` are **exact paths from the inventory**, shell-quoted and never globs: the run-bounded
-    selection is made from a measurement, and letting the remote shell re-expand the configured pattern
-    is what re-archived every earlier run (measured 2026-10-17).
+    ``members`` are **exact paths from the inventory**, quoted for this route and never globs: the
+    run-bounded selection is made from a measurement, and letting the remote shell re-expand the
+    configured pattern is what re-archived every earlier run (measured 2026-10-17).
     """
-    members = " ".join(shlex.quote(path) for path in members)
     if not pty:
-        return f"cd {remote_dir} && tar czf - -- {members}"
-    return _pty_pull_command(remote_dir, members)
+        quoted = " ".join(shlex.quote(path) for path in members)
+        return f"cd {remote_dir} && tar czf - -- {quoted}"
+    # The PTY builder quotes its own members: quoting here as well quoted the quotes (attack finding,
+    # 2026-10-17 — a path reached tar as its own shell-escaped form).
+    return _pty_pull_command(remote_dir, list(members))
 
 
 def cmd_pull(args) -> int:
