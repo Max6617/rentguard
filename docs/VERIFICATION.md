@@ -507,6 +507,7 @@ verified inside it:
 | `266a42d` — the set in `facts`, the crashed-guard warn, and Assay's finding 19 (2026-10-17) | **692 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.72 s / 39.67 s) | 3,467 / 3,526 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.5%, floor 98.0 |
 | `00199d6` — the set keys reverted: the line and the warn are the shape (2026-10-17) | **691 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.57 s / 40.33 s) | 3,459 / 3,518 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.5%, floor 98.0 |
 | `6f5b16d` — the artefact transport: the pull measures first, one run, a bound from the volume (2026-10-17) | **712 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (41.33 s / 41.43 s) | 3,603 / 3,670 = **98.2%, exit 0** — `cli.py` 97.8%, `config.py` 98.2%, `guard.py` 97.5%, floor 98.0 |
+| `0ebf95b` — declared run collections, the attack's findings closed, the proxy command executed (2026-10-17) | **751 passed**, 0 failed, 11 skipped (3 are the POSIX-shell execution tests, which run on CI), 140 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (49.71 s / 49.65 s) | 3,701 / 3,765 = **98.3%, exit 0** — `cli.py` 98.0%, `config.py` 98.5%, `guard.py` 97.5%, floor 98.0 |
 
 **The one red gate run of the `aed798f` batch is named and fixed.** It was
 `tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`:

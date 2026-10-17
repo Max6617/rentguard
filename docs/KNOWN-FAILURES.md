@@ -782,3 +782,31 @@ when a change is inconvenient is not a floor.
 
 The revision of record is `6f5b16d`: 712 passed / 8 skipped / 133 subtests in both provider modes, gate
 3,670 / 3,603 statements = 98.2%, exit 0.
+
+## The proxy route's archive command named characters, not paths (fixed at `0ebf95b`)
+
+Assay's re-attack on the transport fix (2026-10-17) found two defects in the fix itself, both red first:
+
+- **The PTY/proxy archive command carried characters, not paths (severe).** `_pull_remote_command` joined
+  the selected paths and `_pty_pull_command` joined that string **again**, so tar received
+  `g r o k / r u n s / r u n - 1 6`: measured with a real `tar`, `rc=1` "Couldn't visit directory" while
+  the direct route gave `rc=0`. Every proxied pull would have delivered nothing, and `down` stops the
+  machine by default after a failed pull — one move would have lost a proxied window's artefacts *and* its
+  machine. Introduced at `6f5b16d`; at `555d4ff` the PTY builder received the pattern list. The fix is one
+  join, in the builder that owns the layering.
+- **The test that should have caught it only inspected the string.** `tests/test_pull_command_runs.py`
+  now **executes** the constructed command in a real POSIX shell against a real `tar` on a scratch tree —
+  both routes, the archive's own members checked, a member whose name contains a space, and a member
+  named `-cache` (the `--` separator) — and a shell-free property test pins the same statement (the path
+  reaches the command once, as one word), so it is checkable where the shell cannot run. The executed
+  tests skip here and run on the CI runners.
+- **`_PATTERN_SAFE` ended in `$`**, which matches before a final newline, so a TOML `"\n"` escape in
+  `pull`/`run_patterns` passed validation and reached the remote inventory command, where a newline is a
+  second command. `fullmatch` now.
+
+**The proxy route's hardware proof has been outstanding for weeks** because no proxy-capable card could be
+rented — and the software would have failed first. It is proven in software now: the archive command is
+executed against a real `tar` through a real shell before anyone spends money proving it on hardware.
+
+The revision of record is `0ebf95b`: 751 passed / 11 skipped / 140 subtests in both provider modes, gate
+3,765 / 3,701 statements = 98.3%, exit 0.

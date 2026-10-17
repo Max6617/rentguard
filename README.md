@@ -140,6 +140,8 @@ stop_timeout_s = 45       # a stop slower than this escalates to the provider's 
 
 [artefacts]
 pull = ["results/**/*.json", "logs/*.log"]
+run_patterns = []         # patterns that name ONE DIRECTORY PER RUN, e.g. ["grok/runs/*"]:
+                          # a declared collection carries only its newest directory each pull
 local_dir = "./artefacts"
 remote_dir = "/workspace"
 pull_timeout_s = 120      # the FLOOR of a pull's bound: the volume decides the rest

@@ -279,15 +279,22 @@ expires the child is killed and the pull is reported as `ssh-timeout`, naming th
 does not return within that, it escalates to the provider's own stop endpoint. Both bounds exist for the
 same reason — no socket is worth a machine that keeps billing.
 
-**One pull carries one run, and says what it left behind.** A configured pattern whose entries are
-**directories** is a collection of runs (`grok/runs/*`): the pull measures it, then archives only the
-**newest** entry — the run just finished — and names how many older ones it left on the machine
-(`rentguard pull --all` fetches them while it is up). Re-archiving the root on every pull made each pull
-larger than the last, which is how one window turned sixteen completed trainings into one usable run. A
-pattern of **files** (`results/*.json`) carries every match: that pattern already names one run's outputs
-rather than a collection of runs. The selection is made from a measurement of the machine — an
-**inventory** command that lists what matched and how large it is — so the archive carries exact paths and
-never a re-expanded glob.
+**One pull carries what its patterns declare, never more by inference.** A pattern listed in
+`[artefacts].run_patterns` names a collection of runs — one directory per run, `grok/runs/*` — and carries
+only the **newest** directory each pull, naming the rest with `rentguard pull --all` as the backstop. Every
+**other** pattern carries **everything it matches**: a glob cannot be told apart from a run's contents by
+its shape (`grok/runs/*` and `grok/runs/run-16/*` are the same rule), and carrying the wrong half of a run
+is the loss this tool exists to prevent — with a volume-sized bound, carrying more is a cost, not a
+failure. An undeclared pattern matching several directories says so in the output (count, volume, and the
+declaration that would trim it). `--all` carries every match everywhere.
+
+**Two limits of the "newest directory" rule, named rather than fixed.** The inventory reads `stat -c %Y`
+of the **run directory itself**, so a run that writes into a nested subdirectory does not advance it: a
+preserved or restored mtime on a run directory can make the *previous* run look newest, and the pull then
+carries the wrong cell while naming the just-finished one as skipped — `pull --all` carries both. And equal
+mtimes (two runs finished in the same second) are broken by path, lexicographically, so `run-9` beats
+`run-10`; the loser is named as an older run though the measurement cannot establish that. Both are why the
+rule is opt-in: an undeclared pattern never makes either choice.
 
 **The machine has to answer the inventory, and it is assumed to be Linux.** The measurement uses
 `stat -c`, `du -sb` and a POSIX `sh`, the same family as the GNU `tar` the archive already needed; a

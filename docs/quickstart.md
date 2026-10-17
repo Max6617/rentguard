@@ -97,6 +97,7 @@ stop_timeout_s = 45       # a stop slower than this escalates to the provider's 
 
 [artefacts]
 pull = ["results/**/*.json", "logs/*.log"]
+run_patterns = []         # patterns that name ONE DIRECTORY PER RUN, e.g. ["grok/runs/*"]
 local_dir = "./artefacts"
 remote_dir = "/workspace"
 pull_timeout_s = 120      # the FLOOR of a pull's bound: the volume decides the rest
@@ -115,16 +116,20 @@ stops the machine. A failed pull at `down` does not cancel the stop: it stops an
 prints which patterns were lost, because a machine left running to retry a copy is money spent by
 default. `down --keep-running` is the deliberate opposite. See [limitations](limitations.md).
 
-**A pull carries the run just finished, and its bound is sized from that run's volume** (2026-10-17). A
-pattern whose entries are **directories** — `grok/runs/*`, one directory per run — carries the newest
-one only; pulling the root again on every run is what made each pull larger than the last (measured: 700 MB
-per run, 26 timeouts in one window, one usable run out of sixteen). Older runs stay on the machine and are
-named in the output; `rentguard pull --all` fetches them while the machine is up. A pattern of **files**
-(`results/*.json`) carries every match, because that pattern is already one run's outputs. The pull first
-runs an **inventory** on the machine (a text answer: what matched, how large it is), and the ssh bound is
-then `max(pull_timeout_s, volume / pull_bytes_per_second)` — the floor for a small pull, the volume for a
-large one. A pull that exceeds its bound is a named failure that says the volume and the bound it hit; it
-is never merely logged.
+**A pull carries what its patterns declare, and its bound is sized from that volume** (2026-10-17). A
+pattern listed in **`run_patterns`** names a collection of runs — one directory per run, `grok/runs/*` — and
+carries only the **newest** directory each pull (the run just finished), naming the rest as skipped;
+`rentguard pull --all` fetches them while the machine is up. Every **other** pattern carries **everything it
+matches**, because a glob cannot be told apart from one run's contents by its shape (`grok/runs/*` and
+`grok/runs/run-16/*` are the same rule) and carrying the wrong half of a run is the loss the whole rule
+exists to prevent: with a volume-sized bound, carrying more is a cost, not a failure. An undeclared pattern
+that matches several directories says so in the output — the count, the volume, and the declaration that
+would trim it. Pulling the root again on every run is what made each pull larger than the last (measured:
+700 MB per run, 26 timeouts in one window, one usable run out of sixteen). The pull first runs an
+**inventory** on the machine (a text answer: what matched, how large it is), and the ssh bound is then
+`max(pull_timeout_s, volume / pull_bytes_per_second)` — the floor for a small pull, the volume for a large
+one. A pull that exceeds its bound is a named failure that says the volume and the bound it hit; it is
+never merely logged.
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.
