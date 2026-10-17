@@ -810,3 +810,10 @@ executed against a real `tar` through a real shell before anyone spends money pr
 
 The revision of record is `0ebf95b`: 751 passed / 11 skipped / 140 subtests in both provider modes, gate
 3,765 / 3,701 statements = 98.3%, exit 0.
+
+**Closure (Gilbert, 2026-10-17).** The transport lane is **closed pending Assay's verdict on `cb7153e`** —
+the code, the tests and the numbers above are the evidence, and a clean verdict from the independent attack
+is the last line, as it was for the money and protection paths. And the **proxy route is proven in
+software**, so the only part of it still open is **hardware** — which waits on a proxy-capable card, not on
+code.
+
