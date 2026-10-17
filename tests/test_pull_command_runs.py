@@ -105,8 +105,10 @@ class TheArchiveCommandRuns(unittest.TestCase):
         return ["grok/runs/run-16"]
 
     def members(self, archive: bytes) -> list[str]:
+        """The archive's **files**, sorted: directory entries are a tar flavour's own detail, and what
+        this file is about is which paths were carried."""
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
-            return sorted(tar.getnames())
+            return sorted(member.name for member in tar.getmembers() if member.isfile())
 
     def test_the_direct_archive_command_carries_exactly_the_selected_paths(self) -> None:
         command = cli._pull_remote_command("work", self.selected(), pty=False)
