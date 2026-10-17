@@ -11,7 +11,9 @@ not at 3am when the guard is deciding whether to stop a machine.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +63,25 @@ class Budget:
             raise ConfigError("budget.stop_confirm_s must be >= 0")
 
 
+#: A pull's bound is never shorter than this, whatever the floor and the volume say: a child that is
+#: killed before a connection can complete is a pull that cannot succeed (measured 2026-10-17: a
+#: `pull_timeout_s = 0` floor with a zero-byte selection killed a command that exited 0 in 0.2 s).
+PULL_MIN_BOUND_S = 5.0
+#: And never longer than this: a bound beyond a day is not a bound, it is a pull that outlives the
+#: machine it bills. A volume that would need longer is reported with the bound it was given.
+PULL_MAX_BOUND_S = 86_400.0
+#: The largest inventory size accepted as a measurement. Above this, the bound's arithmetic stops
+#: being meaningful (the integer is not convertible to a float): measured 2026-10-17, a readable
+#: inventory line naming a 10**400-byte file raised `OverflowError` out of `pull`.
+PULL_MAX_BYTES = 1 << 53
+#: The characters a configured artefact pattern may contain. The inventory expands the pattern in the
+#: **remote shell**, so anything the shell would interpret — whitespace, quotes, `;`, `$`, backticks,
+#: `<`, `>`, `|`, `&`, `(`, `)`, backslashes — is refused at load rather than executed on the machine
+#: (measured 2026-10-17: the archive quoted its exact paths while the inventory interpolated the raw
+#: pattern). Globs need only these.
+_PATTERN_SAFE = re.compile(r"^[A-Za-z0-9_./*?\[\]@%+,:=~-]+$")
+
+
 @dataclass
 class Artefacts:
     pull: list[str] = field(default_factory=list)
@@ -83,11 +104,21 @@ class Artefacts:
     #: is accepted and the key ignored — see ``_only``.
 
     def __post_init__(self) -> None:
-        if self.pull_timeout_s < 0:
-            raise ConfigError("artefacts.pull_timeout_s must be >= 0 (0 means: no floor, pure volume)")
-        if self.pull_bytes_per_second <= 0:
-            raise ConfigError("artefacts.pull_bytes_per_second must be > 0 — a pull bound cannot "
-                              "assume an infinite throughput")
+        if not math.isfinite(self.pull_timeout_s) or self.pull_timeout_s < 0:
+            # nan and inf are legal TOML floats and both pass `< 0`; a nan bound makes `wait` never
+            # expire, which is the protection this number exists to provide (attack, 2026-10-17).
+            raise ConfigError("artefacts.pull_timeout_s must be a finite number of seconds >= 0")
+        if not math.isfinite(self.pull_bytes_per_second) or self.pull_bytes_per_second <= 0:
+            raise ConfigError("artefacts.pull_bytes_per_second must be a finite number of bytes per "
+                              "second > 0 — a pull bound cannot assume an infinite throughput")
+        for pattern in self.pull:
+            text = str(pattern)
+            if not text or not _PATTERN_SAFE.match(text):
+                raise ConfigError(
+                    f"artefacts.pull pattern {text!r} contains characters the remote shell would "
+                    f"interpret (whitespace, quotes, ; $ ` < > | & ( ) or a backslash). The inventory "
+                    f"expands the pattern on the machine, so only plain globs are accepted — "
+                    f"[A-Za-z0-9_./*?[]@%+,:=~-]")
 
 
 @dataclass

@@ -386,8 +386,9 @@ class PullTest(ProxyCase):
                         if call[-1].startswith("cd /workspace && tar czf -")]
         self.assertEqual(len(archive_call), 1, f"no archive command ran: {transport.calls}")
         self.assertEqual(archive_call[0][-1],
-                         "cd /workspace && tar czf - results/out.json",
-                         "the archive did not carry the inventory's exact path")
+                         "cd /workspace && tar czf - -- results/out.json",
+                         "the archive did not carry the inventory's exact path, or lost the `--` "
+                         "separator that keeps a leading-dash path from being read as an option")
         landed = Path(self.cfg.artefacts.local_dir) / "results" / "out.json"
         self.assertEqual(landed.read_bytes(), b'{"ok": true}')
 

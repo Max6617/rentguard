@@ -56,7 +56,15 @@ from pathlib import Path
 
 from . import __version__
 from . import session
-from .config import Config, ConfigError, api_key, load
+from .config import (  # noqa: F401 - ConfigError is re-exported for callers of this module
+    PULL_MAX_BOUND_S,
+    PULL_MAX_BYTES,
+    PULL_MIN_BOUND_S,
+    Config,
+    ConfigError,
+    api_key,
+    load,
+)
 from .guard import (
     CLAIM_ANOTHER_ROOT,
     CLAIM_THIS_ROOT,
@@ -2667,13 +2675,56 @@ PULL_INVENTORY_MARKER = "RG_PULL_INVENTORY=1"
 #: entries are stated between these two marks rather than being inferred from every line.
 PULL_INVENTORY_HEADER = "RG-PULL-INVENTORY 1"
 PULL_INVENTORY_END = "RG-PULL-END"
+#: How far a run directory's mtime may predate the open row's start before the pull refuses it. The
+#: comparison is cross-clock (the machine's `stat` against this host's `started_at`), so the allowance
+#: is deliberate: a pod whose clock is behind by more than this makes a *good* run look older, which is
+#: the direction the refusal names with `--all` as the override (attack finding, 2026-10-17).
+PULL_MTIME_SKEW_S = 900.0
+
+
+def _ago(epoch: float) -> str:
+    """A wall-clock instant as "how long ago", for the refusal message a person reads."""
+    seconds = max(0.0, now_utc().timestamp() - epoch)
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
+def _open_run_start_epoch(cfg: Config) -> float | None:
+    """The open ledger row's start as an epoch, or ``None`` when there is no readable one.
+
+    This is the one **local** witness of which run is in flight: the pull's measurement comes from the
+    machine's own clock, while the row was written before the machine existed. A row that cannot be read
+    is not an error here — the cross-check simply does not run.
+    """
+    try:
+        row = Ledger(cfg.ledger_path).open_run() or {}
+    except Exception:  # noqa: BLE001 - a broken ledger must not stop a pull
+        return None
+    raw = row.get("started_at")
+    if not raw:
+        return None
+    try:
+        started = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return started.timestamp()
 
 
 @dataclass(frozen=True)
 class PullEntry:
-    """One top-level entry a pull pattern matched on the machine, measured before any transfer."""
+    """One top-level entry a pull pattern matched on the machine, measured before any transfer.
 
-    pattern: str
+    ``patterns`` is **every** configured pattern that matched this path: two patterns can name one
+    directory (`grok/runs/*` and `grok/runs/run-16`), and counting it once per match made one carried
+    directory look like an older run left behind (attack finding, 2026-10-17).
+    """
+
+    patterns: tuple[str, ...]
     path: str
     kind: str        # "d" for a directory (one run on the measured shape), "f" for a file
     mtime: float
@@ -2734,7 +2785,8 @@ def _parse_pull_inventory(text: str, patterns: list[str]) -> list[PullEntry]:
     except ValueError:
         raise ValueError(f"the inventory has no {PULL_INVENTORY_END!r} terminator: the answer "
                          f"stopped early") from None
-    entries: list[PullEntry] = []
+    order: list[str] = []
+    merged: dict[str, dict] = {}
     for line in lines[start + 1:end]:
         if not line.strip():
             continue
@@ -2748,51 +2800,85 @@ def _parse_pull_inventory(text: str, patterns: list[str]) -> list[PullEntry]:
             raise ValueError(f"an inventory line names pattern {index}, and only "
                              f"{len(patterns)} are configured: {line!r}")
         try:
-            entries.append(PullEntry(pattern=patterns[int(index)], path=path, kind=kind,
-                                     mtime=float(mtime), bytes=int(size)))
+            measured_time = float(mtime)
+            measured_bytes = int(size)
         except ValueError:
             raise ValueError(f"an inventory line has a non-numeric size or time: {line!r}") from None
-    return entries
+        # A non-finite time is not a measuring: `nan` makes every comparison false, so the *first*
+        # listed directory wins, and `inf` makes one directory the newest for ever (attack,
+        # 2026-10-17). A size the bound cannot convert, or a negative one, is not a size either.
+        if not math.isfinite(measured_time):
+            raise ValueError(f"an inventory line has a non-finite time ({mtime!r}): {line!r}")
+        if measured_bytes < 0 or measured_bytes > PULL_MAX_BYTES:
+            raise ValueError(f"an inventory line has a size that is not a measurement ({size!r}): "
+                             f"{line!r}")
+        record = merged.get(path)
+        if record is None:
+            merged[path] = {"patterns": [patterns[int(index)]], "kind": kind,
+                            "mtime": measured_time, "bytes": measured_bytes}
+            order.append(path)
+        else:
+            # One path, several patterns: merge them, so the selection counts the *member* once.
+            record["patterns"].append(patterns[int(index)])
+    return [PullEntry(patterns=tuple(merged[path]["patterns"]), path=path,
+                      kind=merged[path]["kind"], mtime=merged[path]["mtime"],
+                      bytes=merged[path]["bytes"]) for path in order]
 
 
-def _pull_selection(entries: list[PullEntry], *, all_entries: bool) -> tuple[list[PullEntry], list[PullEntry]]:
-    """What this pull carries, and what it deliberately leaves on the machine.
+def _pull_selection(entries: list[PullEntry], *,
+                    all_entries: bool) -> tuple[list[PullEntry], list[PullEntry]]:
+    """What this pull carries, and what it deliberately leaves on the machine — **per pattern**.
 
-    One run is one **directory** (the measured shape: ``grok/runs/<run>``). When the patterns match
-    directories, the archive carries the **newest** one — the run just finished — and not the root,
-    because re-archiving every earlier run makes each pull larger than the last: measured 2026-10-17,
-    the first pull of a window succeeded only because one directory existed, and the pulls after it
-    were re-sends of everything, 26 of them timing out. A pattern that matches **files** is already one
-    run's outputs rather than a collection of runs, so every file is carried. ``all_entries`` is the
-    backfill: every matched entry.
+    One run is one **directory** (the measured shape: ``grok/runs/<run>``), but a config can declare
+    several such collections (``grok/runs/*`` and ``checkpoints/*`` both name a directory this run
+    wrote). The rule is therefore per pattern: each pattern that matches directories contributes its
+    **newest** entry, and every pattern's files are carried. A single global newest would carry one
+    collection and report the other as "an older run", losing part of the run just finished (attack
+    finding, 2026-10-17). ``all_entries`` is the backfill: every matched entry.
+
+    Re-archiving every earlier run is the defect this rule exists to close: measured 2026-10-17, the
+    first pull of a window succeeded only because one directory existed, and the pulls after it were
+    re-sends of everything.
     """
     if all_entries:
         return list(entries), []
-    directories = [entry for entry in entries if entry.kind == "d"]
-    if not directories:
-        return list(entries), []
-    newest = max(directories, key=lambda entry: (entry.mtime, entry.path))
-    selected = [entry for entry in entries if entry.kind != "d"] + [newest]
-    skipped = [entry for entry in directories if entry is not newest]
+    chosen: set[str] = set()
+    seen_patterns: list[str] = []
+    for entry in entries:
+        for pattern in entry.patterns:
+            if pattern not in seen_patterns:
+                seen_patterns.append(pattern)
+    for pattern in seen_patterns:
+        directories = [entry for entry in entries
+                       if entry.kind == "d" and pattern in entry.patterns]
+        if directories:
+            chosen.add(max(directories, key=lambda entry: (entry.mtime, entry.path)).path)
+    selected = [entry for entry in entries if entry.kind != "d" or entry.path in chosen]
+    skipped = [entry for entry in entries if entry.kind == "d" and entry.path not in chosen]
     return selected, skipped
 
 
 def _pull_bound(cfg: Config, total_bytes: int) -> float:
-    """This pull's bound: the configured floor, or the volume at the assumed throughput.
+    """This pull's bound: the floor, the volume at the assumed rate, and never zero or infinite.
 
     The legacy 120 s was a constant unrelated to what was being carried; a ~700 MB run at 1 MB/s is
     ~700 s, and the window's timeouts happened at 120 s on exactly that size. ``pull_timeout_s`` is the
     **floor** (a small pull gets it, and it is also the allowance for connection and tar overhead), and
     ``pull_bytes_per_second`` is the assumed throughput — conservative on purpose, because the only
     consequence of under-estimating it is a pull that is killed while it was still arriving, and the
-    message names both numbers so the fix is one config line. The rate is validated to be positive when
-    the config loads; ``total_bytes`` of zero (a pattern that matched only empty files) leaves the floor.
+    message names both numbers so the fix is one config line.
+
+    It is clamped to `PULL_MIN_BOUND_S < bound <= PULL_MAX_BOUND_S` whatever the config says: a zero
+    bound kills a child before it can exit (measured: a command that exits 0 in 0.2 s was killed at a
+    zero floor with a zero-byte selection), and a bound beyond a day is not a bound.
     """
     floor = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0)
     rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
     if total_bytes <= 0:
-        return floor
-    return max(floor, math.ceil(total_bytes / rate))
+        estimate = 0.0
+    else:
+        estimate = math.ceil(total_bytes / rate)
+    return min(max(floor, estimate, PULL_MIN_BOUND_S), PULL_MAX_BOUND_S)
 
 
 def _human_bytes(count: int) -> str:
@@ -2866,7 +2952,7 @@ def _pty_pull_command(remote_dir: str, members: list[str]) -> str:
     members = " ".join(shlex.quote(path) for path in members)
     tmp = "/tmp/.rentguard-pull-$$.tar.gz"
     b64 = "/tmp/.rentguard-pull-$$.b64"
-    return (f"cd {remote_dir} && tar czf {tmp} {members}; rc=$?; "
+    return (f"cd {remote_dir} && tar czf {tmp} -- {members}; rc=$?; "
             f"if [ $rc -eq 0 ]; then base64 {tmp} | tr -d '\\n' > {b64}; "
             f"printf '{FRAME_HEADER} %s\\n' \"$(wc -c < {b64})\"; cat {b64}; "
             f"printf '\\n{FRAME_END}\\n'; fi; rm -f {tmp} {b64}; exit $rc")
@@ -2949,7 +3035,7 @@ def _pull_remote_command(remote_dir: str, members: list[str], *, pty: bool) -> s
     """
     members = " ".join(shlex.quote(path) for path in members)
     if not pty:
-        return f"cd {remote_dir} && tar czf - {members}"
+        return f"cd {remote_dir} && tar czf - -- {members}"
     return _pty_pull_command(remote_dir, members)
 
 
@@ -3026,7 +3112,7 @@ def cmd_pull(args) -> int:
             return 1
         selected, skipped = _pull_selection(entries, all_entries=bool(getattr(args, "all", False)))
         unmatched_on_machine = [pattern for pattern in patterns
-                                if not any(entry.pattern == pattern for entry in entries)]
+                                if not any(pattern in entry.patterns for entry in entries)]
         if not selected:
             note(f"pull failed: the configured patterns matched nothing on {pod.get('id')} "
                  f"({', '.join(patterns)}); the files may still be on the machine")
@@ -3035,23 +3121,41 @@ def cmd_pull(args) -> int:
             emit(pulled=False, reason="patterns-matched-nothing", files=[],
                  unmatched_patterns=list(patterns), volume_bytes=0)
             return 1
+        # The measurement is the machine's claim, and the machine's clock is not this one's. The one
+        # local witness of which run is in flight is the open ledger row, so a selected run directory
+        # that predates the row's own start by more than the skew allowance is not the run just
+        # finished — refuse it rather than carry a different run as a success (attack finding,
+        # 2026-10-17). The tolerance is the cross-clock allowance; `--all` is the explicit override.
+        run_start = _open_run_start_epoch(cfg)
+        cells = [entry for entry in selected if entry.kind == "d"]
+        if (run_start is not None and cells and not getattr(args, "all", False)
+                and all(entry.mtime < run_start - PULL_MTIME_SKEW_S for entry in cells)):
+            newest = max(cells, key=lambda entry: (entry.mtime, entry.path))
+            note(f"pull refused: the only open run started {_ago(run_start)} ago, and every run "
+                 f"directory the patterns matched predates that by more than "
+                 f"{PULL_MTIME_SKEW_S / 60:.0f} min (newest: {newest.path} at "
+                 f"{_ago(newest.mtime)} ago). The cell this run wrote is not among the matches; "
+                 f"`rentguard pull --all` carries what is there (it may be a different run), and "
+                 f"`rentguard status` shows which run is open.")
+            _pull_summary(pulled=False, reason="no-entry-since-the-run-started", files=[],
+                          unmatched_patterns=list(patterns))
+            emit(pulled=False, reason="no-entry-since-the-run-started", files=[],
+                 run_started_at=iso(datetime.fromtimestamp(run_start, tz=timezone.utc)),
+                 newest_entry_at=iso(datetime.fromtimestamp(newest.mtime, tz=timezone.utc)),
+                 selected=[entry.path for entry in selected], skipped=len(skipped))
+            return 1
         volume = sum(entry.bytes for entry in selected)
         # A pull is bounded: it runs before `down` stops a machine, so a pull that never returns is a
         # bill that never stops. The bound is the configured floor or the volume at the assumed
-        # throughput, whichever is longer.
+        # throughput, whichever is longer, and never zero or infinite.
         timeout = _pull_bound(cfg, volume)
         rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
         note(f"pull scope     : {len(selected)} of {len(entries)} matched entr(y/ies), "
              f"{_human_bytes(volume)} — bound {timeout:.0f}s "
              f"(floor {cfg.artefacts.pull_timeout_s:g}s, {rate:,.0f} B/s)")
-        if skipped:
-            note(f"left on the machine: {len(skipped)} older run entr(y/ies) "
-                 f"({', '.join(entry.path for entry in skipped[:5])}"
-                 + (f", and {len(skipped) - 5} more" if len(skipped) > 5 else "")
-                 + ") — `rentguard pull --all` fetches them while the machine is up")
-        if unmatched_on_machine:
-            note(f"matched nothing : {', '.join(unmatched_on_machine)} (on the machine, before any "
-                 f"transfer)")
+        # The scope is printed before the transfer — the operator rows while waiting. What was
+        # left behind is printed *after* it, as the summary, so the last thing read is what the pull
+        # did not carry rather than a list of files whose paths happen to contain the skipped names.
         with _temp_tar(cfg.state_dir) as (handle, archive):
             remote = _pull_remote_command(cfg.artefacts.remote_dir,
                                          [entry.path for entry in selected], pty=pty)
@@ -3133,7 +3237,15 @@ def cmd_pull(args) -> int:
             # not. The results are in hand, so the pattern is the finding and the pull is not a
             # failure: reading the exit code alone lost a successful run's only copy of its results
             # and then let the container holding them be stopped (measured 2026-10-14).
-            unmatched = _unmatched_patterns(patterns, names)
+            #
+            # A pattern that matched a **directory** is answered by carrying it, not by any member
+            # path: `fnmatch` against `grok/runs/run-16/out.json` never answers the literal
+            # `grok/runs/run-16`, and reporting it as unmatched named a carried run as a miss
+            # (attack finding, 2026-10-17). So the selection's own matches count as answers too.
+            answered_by_selection = {pattern for entry in selected if entry.kind == "d"
+                                     for pattern in entry.patterns}
+            unmatched = [pattern for pattern in _unmatched_patterns(patterns, names)
+                         if pattern not in answered_by_selection]
             _pull_summary(pulled=True, reason=None, files=list(names), unmatched_patterns=unmatched)
             if code != 0:
                 note(f"tar exited {code}: at least one configured pattern matched nothing, and the "
@@ -3145,6 +3257,15 @@ def cmd_pull(args) -> int:
             note(f"  {name}")
         if len(names) > 20:
             note(f"  ... and {len(names) - 20} more")
+        if skipped:
+            # The summary, after the delivery: what this pull deliberately did not carry.
+            note(f"left on the machine: {len(skipped)} older run entr(y/ies) "
+                 f"({', '.join(entry.path for entry in skipped[:5])}"
+                 + (f", and {len(skipped) - 5} more" if len(skipped) > 5 else "")
+                 + ") — `rentguard pull --all` fetches them while the machine is up")
+        if unmatched_on_machine:
+            note(f"matched nothing : {', '.join(unmatched_on_machine)} (on the machine, before any "
+                 f"transfer)")
         emit(pulled=True, files=list(names), unmatched_patterns=unmatched, tar_exit_code=code,
              volume_bytes=volume, timeout_s=timeout, bytes_per_second=rate,
              selected=[entry.path for entry in selected], skipped=len(skipped))
