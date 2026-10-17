@@ -1,0 +1,22 @@
+﻿package: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt715\rentguard\cli.py
+
+== two contracts on one path: pattern 0 declared, pattern 1 not, both match both runs ==
+selected: ['grok/runs/run-16']
+skipped : ['grok/runs/run-15']
+(the note printed beside this says 'matched 2 directories, 20.0 MB - carried all of them')
+
+== a declared pattern whose matches are only files ==
+selected: ['results/latest.json', 'results/older.json'] skipped: []
+
+== a declared collection whose newest match is a file ==
+selected: ['results/latest.json', 'results/run-old'] skipped: []
+
+== one directory named by two patterns: the member is merged, so count and volume are once ==
+grok/runs/*: matched 2 directories, 20.0 MB
+grok/runs/run-*: matched 2 directories, 20.0 MB
+
+== a declaration is held to the config rules ==
+declaration outside pull: refused (ConfigError)
+declaration with a trailing newline: refused (ConfigError)
+declaration with a space: refused (ConfigError)
+valid declaration: accepted

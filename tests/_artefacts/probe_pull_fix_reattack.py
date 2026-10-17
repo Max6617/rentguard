@@ -59,7 +59,7 @@ if tar:
         shutil.rmtree(run, ignore_errors=True)
 print()
 
-print("== the pattern validation: a trailing newline passes ==")
+print("== the pattern validation: a trailing newline ==")
 for text, label in (("grok/runs/*", "plain"), ("grok/runs/*\n", "trailing newline"),
                     ("my results/*", "a space")):
     try:
