@@ -506,6 +506,7 @@ verified inside it:
 | `554d079` — `doctor` names the heartbeat set, and the flaky money-defect fixture is fixed (2026-10-16) | **683 passed**, 0 failed, 8 skipped, 130 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.15 s / 39.38 s) | 3,446 / 3,506 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.2%, floor 98.0 |
 | `266a42d` — the set in `facts`, the crashed-guard warn, and Assay's finding 19 (2026-10-17) | **692 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.72 s / 39.67 s) | 3,467 / 3,526 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.5%, floor 98.0 |
 | `00199d6` — the set keys reverted: the line and the warn are the shape (2026-10-17) | **691 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (39.57 s / 40.33 s) | 3,459 / 3,518 = **98.3%, exit 0** — `cli.py` 98.1%, `guard.py` 97.5%, floor 98.0 |
+| `6f5b16d` — the artefact transport: the pull measures first, one run, a bound from the volume (2026-10-17) | **712 passed**, 0 failed, 8 skipped, 133 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (41.33 s / 41.43 s) | 3,603 / 3,670 = **98.2%, exit 0** — `cli.py` 97.8%, `config.py` 98.2%, `guard.py` 97.5%, floor 98.0 |
 
 **The one red gate run of the `aed798f` batch is named and fixed.** It was
 `tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`:

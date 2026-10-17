@@ -721,3 +721,57 @@ scheduling.
 
 The revision of record is `00199d6`: 691 passed / 8 skipped / 133 subtests in both provider modes, gate
 3,518 / 3,459 statements = 98.3%, exit 0.
+
+## The artefact transport: a bound that was a constant, and a pattern that re-sent everything (fixed)
+
+Measured 2026-10-17 in the grid window — Cadence's numbers, verified against the ledger: **sixteen completed
+trainings turned into one usable run**, in a **$14.693806** window. Two defects in `pull`, both of them
+silent in the direction that loses data:
+
+**The bound was a legacy constant.** `[artefacts] pull_timeout_s` defaulted to 120 s while a run directory
+is ~700 MB (527 MB cache + 172 MB step-named checkpoints + the rest), so one run's pull sat on the edge and
+the window logged **26 timeouts**. A timeout is a failure the caller must act on, and the bound was answering
+a question nobody had asked: *how long may a transfer take* — with a number unrelated to *how much it
+carries*.
+
+**The pattern re-archived everything ever written.** `grok/runs/*` matched every run directory, so each
+pull re-sent every earlier run as well: each pull was larger than the last, the failure compounded, and the
+first pull of the window succeeded only because one directory existed.
+
+**The fix is one design: measure, then transfer.** An **inventory** command runs before the archive — a
+framed text answer listing, per matched entry, its pattern index, kind (`d`/`f`), mtime, size and path
+(`stat -c`, `du -sb`, POSIX `sh`: the same family as the GNU `tar` the archive already needed). From it:
+
+- **One run per pull.** When a pattern matches directories, only the **newest** entry — the run just
+  finished — goes into the archive, and the output names how many older runs were left behind and that
+  `rentguard pull --all` fetches them. A pattern of **files** carries every match, because it already names
+  one run's outputs rather than a collection of runs.
+- **The bound is sized from that volume**: `max(pull_timeout_s, volume / pull_bytes_per_second)` — the
+  configured 120 s stays as the **floor** for a small pull, and the new `pull_bytes_per_second` (default
+  1 MB/s, validated positive) is the assumed throughput. A 700 MB run now gets ~700 s instead of 120.
+- **A timeout is a named failure**: `ssh-timeout` with `volume_bytes`, `timeout_s`, `bytes_per_second`,
+  `selected`/`skipped`, and the next step (`down --keep-running` keeps the machine for a retry). `pull`,
+  `run` and `down` all exit non-zero on it — the timeout can no longer be a log line a window closes over.
+- **An unreadable inventory is a named failure** (`inventory-unreadable`, or `ssh-timeout` when the
+  measurement itself hung), and nothing is transferred. Falling back to archiving the root when the
+  measurement fails would be the defect itself, silently.
+- The archive carries **exact, shell-quoted paths** from the measurement, so the remote shell can no longer
+  re-expand the configured glob.
+
+**Red first** in `tests/test_pull_transport.py` (21 tests): the volume-derived bound and its floor, the
+timeout's named failure with the volume and the next step, one-run selection with the skipped count,
+`--all`, file and mixed patterns, an empty inventory starting no transfer, an unreadable inventory starting
+none, an inventory that hangs or exits non-zero, the protocol's five malformed-line shapes, the size
+formatter and the config's two validations, and a real child killed by `_ssh_capture`'s bound. The existing
+pull tests' fake ssh answers the inventory too (`tests/_pull_ssh.py`); a fake that answered only the
+archive would now fail as `inventory-unreadable` — the safe direction, but not what those tests are about.
+
+**Boundaries kept named rather than fixed.** The inventory assumes a Linux container (`stat -c`, `du -sb`,
+POSIX `sh`); a machine that cannot answer names the failure instead of transferring. Entry paths are
+tab-separated, so a filename containing a tab or newline is not supported by the inventory. And the
+"newest directory is the run just finished" rule is the tool's reading of the shape `grok/runs/*` declares:
+a config whose directories are not runs would pull only the newest — `rentguard pull --all` is the
+backstop, and the `pull` line names what it skipped.
+
+The revision of record is `6f5b16d`: 712 passed / 8 skipped / 133 subtests in both provider modes, gate
+3,670 / 3,603 statements = 98.2%, exit 0.
