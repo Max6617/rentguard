@@ -1,0 +1,181 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.6, pytest-9.0.2, pluggy-1.6.0 -- C:\Python312\python.exe
+rootdir: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt288\rentguard
+configfile: pyproject.toml
+plugins: anyio-4.9.0
+collecting ... collected 108 items
+
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_a_pull_that_exceeds_its_bound_fails_and_names_the_volume_and_the_next_step PASSED [  0%]
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_a_small_pull_still_gets_the_configured_floor PASSED [  1%]
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_the_archive_bound_comes_from_this_pulls_volume PASSED [  2%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_a_file_pattern_is_not_run_bounded PASSED [  3%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_a_mixed_selection_takes_the_newest_run_and_the_files PASSED [  4%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_all_fetches_every_run PASSED [  5%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_only_the_newest_run_is_archived PASSED [  6%]
+tests/test_pull_transport.py::TheRunCollectionIsDeclared::test_a_declaration_that_names_a_pattern_not_in_pull_is_refused PASSED [  7%]
+tests/test_pull_transport.py::TheRunCollectionIsDeclared::test_a_declared_collection_carries_the_newest_and_names_the_rest PASSED [  8%]
+tests/test_pull_transport.py::TheRunCollectionIsDeclared::test_a_run_pattern_is_held_to_the_same_shell_safety PASSED [  9%]
+tests/test_pull_transport.py::TheRunCollectionIsDeclared::test_all_carries_every_match_even_for_a_declared_collection PASSED [ 10%]
+tests/test_pull_transport.py::TheRunCollectionIsDeclared::test_an_undeclared_directory_pattern_carries_every_match PASSED [ 11%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_command_that_fails_is_a_named_failure PASSED [ 12%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_that_matches_nothing_starts_no_transfer PASSED [ 12%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_that_never_returns_is_a_named_timeout PASSED [ 13%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_unreadable_inventory_is_a_named_failure_not_a_wild_archive PASSED [ 14%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_line_that_is_not_five_fields_is_a_failure PASSED [ 15%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_malformed_line_is_a_failure PASSED [ 16%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_missing_terminator_is_a_failure PASSED [ 17%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_non_numeric_size_is_a_failure PASSED [ 18%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_pattern_index_that_does_not_exist_is_a_failure PASSED [ 19%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_blank_lines_inside_the_frame_are_ignored PASSED [ 20%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_a_zero_volume_leaves_the_floor PASSED [ 21%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_sizes_are_shown_in_units_a_person_can_check PASSED [ 22%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_the_config_refuses_a_bound_it_cannot_size PASSED [ 23%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_the_measurement_call_is_itself_bounded PASSED [ 24%]
+tests/test_ssh_proxy_paths.py::ArgvTest::test_a_direct_endpoint_is_a_plain_byte_channel PASSED [ 25%]
+tests/test_ssh_proxy_paths.py::ArgvTest::test_a_provider_with_no_ssh_at_all_has_no_pty_claim PASSED [ 25%]
+tests/test_ssh_proxy_paths.py::ArgvTest::test_a_proxy_endpoint_forces_a_pty PASSED [ 26%]
+tests/test_ssh_proxy_paths.py::ArgvTest::test_the_known_hosts_null_device_is_the_local_platforms_name PASSED [ 27%]
+tests/test_ssh_proxy_paths.py::ArgvTest::test_the_normalised_payload_keeps_the_route_readable PASSED [ 28%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_direct_pull_still_streams_the_tar PASSED [ 29%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_pull_that_gets_a_sentence_instead_of_an_archive_says_so PASSED [ 30%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_pull_through_the_proxy_lands_the_artefacts PASSED [ 31%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_pull_whose_remote_tar_failed_is_not_reported_as_a_kept_result PASSED [ 32%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_stream_that_decodes_to_something_that_is_not_an_archive_is_reported PASSED [ 33%]
+tests/test_ssh_proxy_paths.py::PullTest::test_a_truncated_base64_stream_is_reported PASSED [ 34%]
+tests/test_ssh_proxy_paths.py::RunTest::test_run_on_a_direct_pod_is_unchanged PASSED [ 35%]
+tests/test_ssh_proxy_paths.py::RunTest::test_run_reaches_a_proxy_pod PASSED [ 36%]
+tests/test_pull_unmatched.py::AnEmptyArchiveIsAFailure::test_an_archive_with_no_members_still_fails PASSED [ 37%]
+tests/test_pull_unmatched.py::MembersAreDeliveredAndTheGapIsNamed::test_a_matched_member_is_extracted_even_when_another_pattern_matched_nothing PASSED [ 37%]
+tests/test_pull_unmatched.py::MembersAreDeliveredAndTheGapIsNamed::test_a_pattern_that_matched_nothing_never_claims_a_file_that_does_not_exist PASSED [ 38%]
+tests/test_pull_unmatched.py::ThePrefixRuleOverClaims::test_a_sibling_file_under_the_prefix_hides_an_unanswered_pattern PASSED [ 39%]
+tests/test_pull_unmatched.py::ThePrefixRuleOverClaims::test_the_helper_names_a_pattern_with_no_prefix_match PASSED [ 40%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_leading_recursive_wildcard_answers_a_top_level_member PASSED [ 41%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_nested_member_is_not_answered_by_a_prefix_wildcard_pattern PASSED [ 42%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_star_crossing_a_directory_is_a_deliberate_boundary_not_an_over_claim PASSED [ 43%]
+tests/test_pull_unmatched.py::AOneSidedMissStaysAFinding::test_members_arriving_while_one_pattern_missed_stays_a_named_finding PASSED [ 44%]
+tests/test_pull_unmatched.py::AOneSidedMissStaysAFinding::test_no_pattern_missed_means_no_finding PASSED [ 45%]
+tests/test_pull_unmatched.py::DownNamesWhatItIsAboutToLose::test_the_sentence_names_the_patterns_the_failed_pull_could_not_deliver PASSED [ 46%]
+tests/test_pull_unmatched.py::DownWithAPartialDelivery::test_a_partial_delivery_stops_the_machine_and_names_the_gap_without_claiming_a_loss PASSED [ 47%]
+tests/test_pull_unmatched.py::DownWithAPartialDelivery::test_an_empty_archive_through_down_still_stops_closes_and_names_the_patterns PASSED [ 48%]
+tests/test_pull_unmatched.py::TheSummaryIsNotFromAPreviousPull::test_a_pull_that_crashes_does_not_borrow_the_previous_pulls_delivery PASSED [ 49%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_body_that_disagrees_with_its_header_is_named PASSED [ 50%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_frame_without_its_terminator_is_named PASSED [ 50%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_good_frame_extracts_the_archive PASSED [ 51%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_an_empty_archive_never_reads_as_a_result PASSED [ 52%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_the_21_byte_prompt_text_pull_is_named PASSED [ 53%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_down_whose_pull_delivered_nothing_names_patterns_not_paths PASSED [ 54%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_down_whose_pull_delivered_something_surfaces_the_unmatched_pattern PASSED [ 55%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_pattern_that_cannot_match_does_not_lose_the_result PASSED [ 56%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_pull_that_matched_nothing_at_all_still_fails PASSED [ 57%]
+tests/test_run_pull_nothing.py::ANothingMatchedPullDoesNotFailTheRun::test_a_command_that_delivered_nothing_exits_with_the_commands_status PASSED [ 58%]
+tests/test_run_pull_nothing.py::ANothingMatchedPullDoesNotFailTheRun::test_a_failing_command_still_reports_its_own_status PASSED [ 59%]
+tests/test_run_pull_nothing.py::ABrokenPullStillFailsTheRun::test_a_timed_out_pull_is_a_failed_run PASSED [ 60%]
+tests/test_run_pull_nothing.py::RequireArtefactsIsTheStrictOptIn::test_the_flag_is_invisible_when_artefacts_arrived PASSED [ 61%]
+tests/test_run_pull_nothing.py::RequireArtefactsIsTheStrictOptIn::test_the_flag_makes_a_matched_nothing_pull_fail_the_run PASSED [ 62%]
+tests/test_pull_and_stop_bounds.py::ThePullIsBounded::test_a_pull_that_never_returns_still_stops_the_machine_and_names_the_lost_paths PASSED [ 62%]
+tests/test_pull_and_stop_bounds.py::ThePullIsBounded::test_the_pull_bound_is_the_config_value_not_a_constant PASSED [ 63%]
+tests/test_pull_and_stop_bounds.py::TheStopIsBounded::test_a_refused_stop_leaves_the_row_open_and_the_spend_visible PASSED [ 64%]
+tests/test_pull_and_stop_bounds.py::TheStopIsBounded::test_a_stop_that_blocks_escalates_to_the_provider_endpoint PASSED [ 65%]
+tests/test_pull_and_stop_bounds.py::TheBoundsAreConfigurable::test_both_bounds_arrive_from_the_config_file_a_user_writes PASSED [ 66%]
+tests/test_down_keep_running.py::DownWithFailedPull::test_a_pull_that_raises_still_stops_the_machine PASSED [ 67%]
+tests/test_down_keep_running.py::DownWithFailedPull::test_a_successful_pull_stops_the_machine_and_exits_zero PASSED [ 68%]
+tests/test_down_keep_running.py::DownWithFailedPull::test_keep_running_leaves_the_machine_up_so_the_copy_can_be_retried PASSED [ 69%]
+tests/test_down_keep_running.py::DownWithFailedPull::test_the_machine_stops_and_the_exit_is_non_zero_when_the_pull_fails PASSED [ 70%]
+tests/test_pull_selection_attack.py::TheSelectionTrustsTheMachine::test_a_preserved_old_mtime_hides_the_run_just_finished PASSED [ 71%]
+tests/test_pull_selection_attack.py::TheSelectionTrustsTheMachine::test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success PASSED [ 72%]
+tests/test_pull_selection_attack.py::TheTieIsBrokenByPath::test_equal_mtimes_let_run_9_beat_run_10 PASSED [ 73%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_byte_count_the_bound_cannot_convert_is_a_named_failure PASSED [ 74%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_duplicate_member_is_not_an_older_run PASSED [ 75%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_nan_mtime_lets_the_first_listed_directory_win PASSED [ 75%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_negative_byte_count_leaves_the_floor PASSED [ 76%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_an_infinity_mtime_always_wins PASSED [ 77%]
+tests/test_pull_selection_attack.py::TheRunCollectionIsDeclared::test_a_declared_collection_carries_its_newest_and_all_fetches_the_rest PASSED [ 78%]
+tests/test_pull_selection_attack.py::TheRunCollectionIsDeclared::test_two_undeclared_directory_patterns_carry_every_match PASSED [ 79%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_mixed_carries_every_directory_and_file PASSED [ 80%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_when_every_pattern_matched_nothing_starts_no_transfer PASSED [ 81%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_with_a_pattern_that_matched_nothing_still_transfers_the_rest PASSED [ 82%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused 
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused PASSED [ 83%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_rate_that_is_not_finite_is_refused PASSED [ 84%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run PASSED [ 85%]
+tests/test_pull_selection_attack.py::TheTransportFailureCannotCostMoney::test_a_timed_out_pull_is_not_a_clean_stop PASSED [ 86%]
+tests/test_pull_selection_attack.py::TheTransportFailureCannotCostMoney::test_keep_running_keeps_the_machine_up_and_says_so PASSED [ 87%]
+tests/test_pull_selection_attack.py::TheArchiveCannotWriteOutsideLocalDir::test_a_parent_member_is_refused_and_writes_nothing_outside PASSED [ 87%]
+tests/test_pull_fix_reattack.py::ThePtyArchiveNamesPathsNotCharacters::test_the_direct_archive_members_are_the_selected_path_the_control PASSED [ 88%]
+tests/test_pull_fix_reattack.py::ThePtyArchiveNamesPathsNotCharacters::test_the_pty_archive_members_are_the_selected_path FAILED [ 89%]
+tests/test_pull_fix_reattack.py::ThePatternValidationHasAWholeStringHole::test_a_trailing_newline_in_a_pattern_is_refused_at_load FAILED [ 90%]
+tests/test_pull_fix_reattack.py::TheDeclaredRunPatterns::test_a_declaration_outside_pull_is_refused PASSED [ 91%]
+tests/test_pull_fix_reattack.py::TheDeclaredRunPatterns::test_an_undeclared_directory_pattern_is_not_trimmed PASSED [ 92%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_a_directory_inside_the_skew_allowance_is_carried PASSED [ 93%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_a_literal_directory_pattern_is_not_reported_unmatched PASSED [ 94%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_a_non_finite_mtime_is_inventory_unreadable 
+tests/test_pull_fix_reattack.py::TheNewControls::test_a_non_finite_mtime_is_inventory_unreadable PASSED [ 95%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_a_refused_pull_in_down_still_stops_the_machine PASSED [ 96%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_an_oversized_size_is_inventory_unreadable PASSED [ 97%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_the_archive_has_an_end_of_options_marker_on_both_routes 
+tests/test_pull_fix_reattack.py::TheNewControls::test_the_archive_has_an_end_of_options_marker_on_both_routes PASSED [ 98%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_the_ledger_cross_check_refuses_a_pre_dating_directory_and_all_overrides PASSED [ 99%]
+tests/test_pull_fix_reattack.py::TheNewControls::test_two_run_collections_each_contribute_their_newest PASSED [100%]
+
+================================== FAILURES ===================================
+_ ThePtyArchiveNamesPathsNotCharacters.test_the_pty_archive_members_are_the_selected_path _
+
+self = <test_pull_fix_reattack.ThePtyArchiveNamesPathsNotCharacters testMethod=test_the_pty_archive_members_are_the_selected_path>
+
+    def test_the_pty_archive_members_are_the_selected_path(self) -> None:
+        """The effect that matters: what tar receives. The PTY command's member list must be the
+        exact selected path, so `tar` can stat it. Today the list is its characters."""
+        tar = shutil.which("tar")
+        if tar is None:
+            self.skipTest("no tar on this host to execute the member list")
+    
+        run = self.root / "remote"
+        (run / "grok" / "runs" / "run-16").mkdir(parents=True)
+        (run / "grok" / "runs" / "run-16" / "out.json").write_text("{}", encoding="utf-8")
+        command = cli._pull_remote_command(str(run), ["grok/runs/run-16"], pty=True)
+        members = member_list(command)
+    
+        archive = self.root / "pty.tar.gz"
+        result = subprocess.run([tar, "czf", str(archive), "--", *members],
+                                cwd=run, capture_output=True, text=True)
+>       self.assertEqual(result.returncode, 0,
+                         f"the PTY archive asks tar for {members!r}, and tar cannot stat them: "
+                         f"{result.stderr.strip()}")
+E       AssertionError: 1 != 0 : the PTY archive asks tar for ['g', 'r', 'o', 'k', '/', 'r', 'u', 'n', 's', '/', 'r', 'u', 'n', '-', '1', '6'], and tar cannot stat them: tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: : Couldn't visit directory: No such file or directory
+E       tar.EXE: Error exit delayed from previous errors
+
+tests\test_pull_fix_reattack.py:185: AssertionError
+_ ThePatternValidationHasAWholeStringHole.test_a_trailing_newline_in_a_pattern_is_refused_at_load _
+
+self = <test_pull_fix_reattack.ThePatternValidationHasAWholeStringHole testMethod=test_a_trailing_newline_in_a_pattern_is_refused_at_load>
+
+    def test_a_trailing_newline_in_a_pattern_is_refused_at_load(self) -> None:
+        """`_PATTERN_SAFE` ends in `$`, which matches before a final newline; a TOML `\\n` escape in
+        a basic string produces exactly that, so a pattern with trailing whitespace reaches the
+        remote shell � the thing the validation says it refuses."""
+        path = self.root / "newline.toml"
+        path.write_text('[artefacts]\npull = ["grok/runs/*\\n"]\n', encoding="utf-8")
+>       with self.assertRaises(ConfigError, msg="a pattern with a trailing newline was accepted"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: ConfigError not raised : a pattern with a trailing newline was accepted
+
+tests\test_pull_fix_reattack.py:208: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_pull_fix_reattack.py::ThePtyArchiveNamesPathsNotCharacters::test_the_pty_archive_members_are_the_selected_path
+FAILED tests/test_pull_fix_reattack.py::ThePatternValidationHasAWholeStringHole::test_a_trailing_newline_in_a_pattern_is_refused_at_load
+============== 2 failed, 106 passed, 7 subtests passed in 15.19s ==============

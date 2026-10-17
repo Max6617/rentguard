@@ -184,7 +184,7 @@ class TheSelectionTrustsTheMachine(PullAttackCase):
         the pull must not carry it as a success — the cell the run just wrote is the one that is
         missing. (Forge's named direction: prefer entries with ``mtime >=`` the open row's start.)
 
-        Red today: exit 0, ``pulled: true``, and ``grok/runs/run-14`` extracted into local_dir.
+        Red at f873f00: exit 0, ``pulled: true``, and ``grok/runs/run-14`` extracted into local_dir. Refused since 339544f.
         """
         self.open_row(started_hours_ago=1)
         now = time.time()
@@ -199,13 +199,15 @@ class TheSelectionTrustsTheMachine(PullAttackCase):
             f"started an hour ago and every matched directory is older than that:\n{err}")
 
     def test_a_preserved_old_mtime_hides_the_run_just_finished(self) -> None:
-        """Shape 1, recorded rather than demanded: with a preserved/restored mtime on the run that
-        just finished, the newest-by-mtime directory is an earlier cell, and nothing names the fact.
+        """Shape 1, recorded rather than demanded, **for a declared collection** (the only case where
+        the newest-entry rule runs at all under the declaration rule): with a preserved/restored mtime
+        on the run that just finished, the newest-by-mtime directory is an earlier cell, and nothing
+        names the fact.
 
-        This pins the effect (and is green while the rule is "newest mtime wins"): the pull carries
-        ``grok/runs/run-15`` and reports ``grok/runs/run-16`` — the run the fixture just finished —
-        as an *older* run left on the machine.
+        This pins the effect: the pull carries ``grok/runs/run-15`` and reports ``grok/runs/run-16``
+        — the run the fixture just finished — as an *older* run left on the machine.
         """
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
         self.open_row(started_hours_ago=5)
         now = time.time()
         self.inventory_of(
@@ -232,6 +234,7 @@ class TheTieIsBrokenByPath(PullAttackCase):
         Pinned here so the shape and its wording are in the record; the tie is the smallest window
         in the rule, not a silent absence of one.
         """
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
         self.inventory_of(
             self.line(0, "d", 300, 10 * MB, "grok/runs/run-9"),
             self.line(0, "d", 300, 10 * MB, "grok/runs/run-10"),
@@ -255,7 +258,7 @@ class TheArithmeticTrustsTheMeasurement(PullAttackCase):
         against it is false, so ``max`` keeps the *first* directory the shell listed. A machine (or a
         broken ``stat`` wrapper) that reports ``nan`` for an older run makes that run the newest.
 
-        The safe effect: the pull does not carry the older directory as a success. Red today.
+        The safe effect: the pull does not carry the older directory as a success. Red at f873f00; refused since 339544f.
         """
         self.inventory_of(
             self.line(0, "d", "nan", 10 * MB, "grok/runs/run-a-old"),
@@ -293,7 +296,7 @@ class TheArithmeticTrustsTheMeasurement(PullAttackCase):
         crashes the command that sizes the pull — and `down` calls this command before it stops a
         machine. It must be a named failure, not a traceback.
 
-        Red today: ``OverflowError`` escapes ``cmd_pull``.
+        Red at f873f00: ``OverflowError`` escaped ``cmd_pull``. Refused by the parser since 339544f.
         """
         self.inventory_of(self.line(0, "f", 900, 10 ** 400, "results/huge.bin"))
         self.cfg.artefacts.pull = ["results/*"]
@@ -322,9 +325,10 @@ class TheArithmeticTrustsTheMeasurement(PullAttackCase):
         twice. The selection keeps one object, so the other is counted and named as an *older run
         entry* which is carried anyway: ``skipped`` says 1 while nothing was left behind.
 
-        Red today: ``skipped`` is 2 and the prose names the delivered run among the left-behind.
+        Red at f873f00: ``skipped`` was 2 and the prose named the delivered run among the left-behind.
         """
         self.cfg.artefacts.pull = ["grok/runs/*", "grok/runs/run-16"]
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
         self.inventory_of(
             self.line(0, "d", 800, 10 * MB, "grok/runs/run-15"),
             self.line(0, "d", 900, 10 * MB, "grok/runs/run-16"),
@@ -343,40 +347,43 @@ class TheArithmeticTrustsTheMeasurement(PullAttackCase):
                          f"the delivered run is named as left on the machine:\n{err}")
 
 
-class TheOneRunRuleAcrossPatterns(PullAttackCase):
-    """A directory pattern is read as "a collection of runs", and the rule picks one directory
-    **globally**. That is right for ``grok/runs/*`` and wrong for every other directory pattern."""
+class TheRunCollectionIsDeclared(PullAttackCase):
+    """Gilbert's ruling (2026-10-17): a directory pattern is a collection of runs only when the config
+    **declares** it in ``[artefacts] run_patterns``. ``grok/runs/*`` and ``grok/runs/run-16/*`` are
+    the same glob shape, so the tool no longer infers the difference; an undeclared pattern carries
+    everything it matches, which is the direction that cannot lose half a run."""
 
-    def test_two_directory_patterns_carry_only_one_directory_in_total(self) -> None:
-        """``grok/runs/*`` and ``checkpoints/*`` each name a directory the just-finished run wrote.
-        The global newest is ``grok/runs/run-16``; ``checkpoints/step-100`` is skipped and described
-        as an older run entry, though it is part of the same run and was written seconds earlier.
-
-        Red today: the second pattern's newest directory is not in the archive command at all.
-        """
+    def test_two_undeclared_directory_patterns_carry_every_match(self) -> None:
+        """The global "newest directory" rule this attack found dropped the second collection (and,
+        inside one run, half its outputs). Undeclared, every match is now carried and nothing is left
+        behind; the ambiguity is named rather than silently trimmed."""
         self.cfg.artefacts.pull = ["grok/runs/*", "checkpoints/*"]
         self.inventory_of(
             self.line(0, "d", 900, 30 * MB, "grok/runs/run-16"),
+            self.line(0, "d", 800, 30 * MB, "grok/runs/run-15"),
             self.line(1, "d", 899, 700 * MB, "checkpoints/step-100"),
+            self.line(1, "d", 700, 650 * MB, "checkpoints/step-99"),
         )
         self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
 
         code, err, document = self.pull()
 
         self.assertEqual(code, 0, err)
+        self.assertEqual(set(document.get("selected")),
+                         {"grok/runs/run-16", "grok/runs/run-15",
+                          "checkpoints/step-100", "checkpoints/step-99"}, document)
+        self.assertEqual(document.get("skipped"), 0, document)
         archive = self.archive_remote()
-        self.assertIn("checkpoints/step-100", archive,
-                      f"the second pattern's newest directory is not carried: {archive}")
-        self.assertEqual(document.get("skipped"), 0,
-                         f"a directory of the same run was left behind: {document}")
+        for wanted in ("grok/runs/run-16", "grok/runs/run-15",
+                       "checkpoints/step-100", "checkpoints/step-99"):
+            self.assertIn(wanted, archive, f"an undeclared match was dropped: {archive}")
+        self.assertIn("run_patterns", err, f"the ambiguity is not named with its fix:\n{err}")
 
-    def test_a_directory_pattern_inside_one_run_carries_one_subdirectory(self) -> None:
-        """``grok/runs/run-16/*`` names the run's own output directories. Both belong to the run that
-        just finished; the rule still carries only the newest and calls the other an older run.
-
-        Red today for the same reason one level down.
-        """
+    def test_a_declared_collection_carries_its_newest_and_all_fetches_the_rest(self) -> None:
+        """Declared, the collection is run-bounded: the newest directory is carried and the rest is
+        named as skipped with ``--all`` as the backstop; ``--all`` carries every entry."""
         self.cfg.artefacts.pull = ["grok/runs/run-16/*"]
+        self.cfg.artefacts.run_patterns = ["grok/runs/run-16/*"]
         self.inventory_of(
             self.line(0, "d", 900, 527 * MB, "grok/runs/run-16/cache"),
             self.line(0, "d", 899, 172 * MB, "grok/runs/run-16/checkpoints"),
@@ -386,10 +393,23 @@ class TheOneRunRuleAcrossPatterns(PullAttackCase):
         code, err, document = self.pull()
 
         self.assertEqual(code, 0, err)
+        self.assertEqual(document.get("selected"), ["grok/runs/run-16/cache"], document)
+        self.assertEqual(document.get("skipped"), 1, document)
+        self.assertNotIn("checkpoints", self.archive_remote(),
+                         f"a declared collection carried more than its newest: {self.archive_remote()}")
+        self.assertIn("checkpoints", err, f"the skipped entry is not named:\n{err}")
+        self.assertIn("--all", err, f"the backstop is not named:\n{err}")
+
+        self.commands.clear()
+        self.tar_members = {"grok/runs/run-16/cache/blob.bin": b"x",
+                            "grok/runs/run-16/checkpoints/step.pt": b"w"}
+        code, err, document = self.pull("--all")
+
+        self.assertEqual(code, 0, err)
         archive = self.archive_remote()
         self.assertIn("grok/runs/run-16/cache", archive, archive)
-        self.assertIn("grok/runs/run-16/checkpoints", archive,
-                      f"a directory of the finished run was left behind: {archive}")
+        self.assertIn("grok/runs/run-16/checkpoints", archive, f"--all left one behind: {archive}")
+        self.assertEqual(document.get("skipped"), 0, document)
 
 
 class TheAllBackfill(PullAttackCase):
@@ -482,7 +502,7 @@ class TheBoundCannotBeSizedFromNothing(PullAttackCase):
         files measures zero bytes, so the bound is zero and the child is killed the instant it is
         started: a pull that would have succeeded cannot. The bound must still allow a transfer.
 
-        Red today: ``_pull_bound(cfg, 0)`` is 0.0.
+        Red at f873f00: ``_pull_bound(cfg, 0)`` was 0.0; the bound is clamped to PULL_MIN_BOUND_S since 339544f.
         """
         cfg = Config(artefacts=Artefacts(pull_timeout_s=0.0, pull_bytes_per_second=1_000_000.0))
         bound = cli._pull_bound(cfg, 0)
@@ -511,7 +531,9 @@ class TheTransportFailureCannotCostMoney(PullAttackCase):
         self.cfg.artefacts.pull_bytes_per_second = 1_000_000.0
 
     def test_a_timed_out_pull_is_not_a_clean_stop(self) -> None:
-        self.inventory_of(self.line(0, "d", 900, 700 * MB, "grok/runs/run-16"))
+        # The directory is measured as current, so this exercises the *transport* bound rather than
+        # the ledger cross-check (a pre-dating directory would be refused before a byte moves).
+        self.inventory_of(self.line(0, "d", int(time.time()), 700 * MB, "grok/runs/run-16"))
         self.timed_out = True
 
         code, err, document = self.down()
@@ -520,10 +542,11 @@ class TheTransportFailureCannotCostMoney(PullAttackCase):
         self.assertFalse(document.get("pulled"), document)
         self.assertEqual(self.provider.instances["pod-A"].status, "EXITED",
                          "the pull failed and the machine was left billing")
+        self.assertIn("did not return within", err, f"the transport bound was not the failure:\n{err}")
         self.assertIn("keep-running", err, f"the failure names no way to retry:\n{err}")
 
     def test_keep_running_keeps_the_machine_up_and_says_so(self) -> None:
-        self.inventory_of(self.line(0, "d", 900, 700 * MB, "grok/runs/run-16"))
+        self.inventory_of(self.line(0, "d", int(time.time()), 700 * MB, "grok/runs/run-16"))
         self.timed_out = True
 
         code, err, document = self.down("--keep-running")
@@ -531,6 +554,7 @@ class TheTransportFailureCannotCostMoney(PullAttackCase):
         self.assertNotEqual(code, 0, document)
         self.assertEqual(self.provider.instances["pod-A"].status, "RUNNING",
                          "--keep-running did not keep the machine running")
+        self.assertIn("did not return within", err, f"the transport bound was not the failure:\n{err}")
         self.assertIn("BILLING", err, err)
 
 
