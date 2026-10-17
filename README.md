@@ -142,7 +142,8 @@ stop_timeout_s = 45       # a stop slower than this escalates to the provider's 
 pull = ["results/**/*.json", "logs/*.log"]
 local_dir = "./artefacts"
 remote_dir = "/workspace"
-pull_timeout_s = 120      # one ssh pull may take this long, then it is killed and reported
+pull_timeout_s = 120      # the FLOOR of a pull's bound: the volume decides the rest
+pull_bytes_per_second = 1000000   # assumed throughput (a 700 MB run gets ~700 s, not 120)
 
 [runpod]
 cloud = "SECURE"

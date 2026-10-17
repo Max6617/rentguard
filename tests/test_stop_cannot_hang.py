@@ -43,6 +43,7 @@ from rentguard import cli  # noqa: E402
 from rentguard.config import Artefacts, Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 PATTERN = "results/*.json"
@@ -59,7 +60,13 @@ def gzip_tar(members: dict[str, bytes]) -> bytes:
 
 
 class ScriptedSsh:
-    """Stands in for ``subprocess.Popen`` on the pull path, and records how it was started."""
+    """Stands in for ``subprocess.Popen`` on the pull path, and records how it was started.
+
+    It answers **both** commands a pull now runs: the inventory (a framed text answer built from the
+    archive's own members, so the selection and the volume are consistent with what the archive will
+    deliver) and then the archive. ``hang`` hangs the archive, not the measurement — a test about the
+    transfer's bound must not be satisfied by the inventory's.
+    """
 
     def __init__(self, archive: bytes = b"", *, exit_code: int = 0, hang: bool = False):
         self.archive = archive
@@ -70,17 +77,31 @@ class ScriptedSsh:
         self.timeout: float | None = None
         self.started = 0
         self.killed = False
+        self.inventory_call = False
+        self.archive_call = False
 
     def __call__(self, argv, **kwargs):
         self.started += 1
         self.argv = list(argv)
         self.stdin = kwargs.get("stdin")
         sink = kwargs.get("stdout")
+        self.inventory_call = pull_ssh.is_inventory(self.argv)
+        self.archive_call = not self.inventory_call
+        if self.inventory_call:
+            names = (tarfile.open(fileobj=io.BytesIO(self.archive)).getnames()
+                     if self.archive else [])
+            if sink is not None:
+                sink.write(pull_ssh.inventory_text(
+                    *[(0, "f", 100.0 + index, 1, name) for index, name in enumerate(names)]
+                ).encode())
+            return self
         if sink is not None and self.archive and not self.hang:
             sink.write(self.archive)
         return self
 
     def wait(self, timeout=None):
+        if self.inventory_call:
+            return 0
         self.timeout = timeout
         if self.hang and not self.killed:
             raise subprocess.TimeoutExpired(self.argv, timeout)
@@ -148,17 +169,20 @@ class PullIsBounded(StopCase):
         configured bound — the two things whose absence held `down` open for ten minutes — and a
         real archive still lands.
         """
-        self.cfg.artefacts.pull_timeout_s = 7.5
+        self.cfg.artefacts.pull_timeout_s = 75.0
         scripted = ScriptedSsh(gzip_tar({"results/out.json": b'{"ok": true}'}))
 
         with mock.patch.object(cli.subprocess, "Popen", scripted):
             code, out = self.invoke(cli.cmd_pull, ["pull"], self.ssh_provider())
 
         self.assertEqual(code, 0, f"the bounded pull failed.\n{out}")
-        self.assertEqual(scripted.started, 1, f"the pull did not go through the bounded child.\n{out}")
+        self.assertEqual(scripted.started, 2,
+                         f"the pull did not run through the bounded child twice (inventory, then "
+                         f"archive).\n{out}")
+        self.assertTrue(scripted.archive_call, "the second call was not the archive")
         self.assertEqual(scripted.stdin, subprocess.DEVNULL,
                          "the child inherited a stdin a stuck session can wait on")
-        self.assertEqual(scripted.timeout, 7.5, f"the wait was not the configured bound.\n{out}")
+        self.assertEqual(scripted.timeout, 75.0, f"the wait was not the configured floor.\n{out}")
         landed = Path(self.cfg.artefacts.local_dir) / "results" / "out.json"
         self.assertEqual(landed.read_bytes(), b'{"ok": true}')
 
@@ -169,7 +193,7 @@ class PullIsBounded(StopCase):
         pull that cannot end is a machine that cannot stop.
         """
         self.cfg.artefacts.pull_timeout_s = 3.0
-        scripted = ScriptedSsh(hang=True)
+        scripted = ScriptedSsh(gzip_tar({"results/out.json": b"x"}), hang=True)
 
         with mock.patch.object(cli.subprocess, "Popen", scripted):
             code, out = self.invoke(cli.cmd_pull, ["pull"], self.ssh_provider())
@@ -188,7 +212,7 @@ class PullIsBounded(StopCase):
         self.cfg.artefacts.pull_timeout_s = 3.0
         self.ledger.open(purpose="hanging pull", provider="fake", instance_id="pod-A",
                          gpu_id="Fake GPU 24GB", rate_usd_per_hour=0.18)
-        scripted = ScriptedSsh(hang=True)
+        scripted = ScriptedSsh(gzip_tar({"results/out.json": b"x"}), hang=True)
         provider = self.ssh_provider()
 
         with mock.patch.object(cli.subprocess, "Popen", scripted):

@@ -100,13 +100,21 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "rentguard_pull",
         "description": (
-            "Pull the artefacts configured in [artefacts].pull from the instance now. The result "
-            "carries `files`, and `unmatched_patterns` for configured patterns that no delivered "
-            "member matched (the pattern is a glob and is matched against each member path; a "
-            "literal-prefix reading is only a hint, never the answer). An unmatched pattern beside "
-            "delivered files is a finding and the pull still succeeds, with `tar_exit_code` "
-            "recording the remote tar's own status; a pull that delivered no member at all fails "
-            "with reason `patterns-matched-nothing`, because the files may still be on the machine."),
+            "Pull the artefacts configured in [artefacts].pull from the instance now. The pull "
+            "**measures the machine first** and carries **one run**: when a configured pattern "
+            "matches directories (one directory per run, e.g. `grok/runs/*`) it archives the newest "
+            "entry only — the run just finished — and the result names how many older runs it left "
+            "there; a pattern of files carries every match. The ssh bound is sized from the carried "
+            "volume (`[artefacts].pull_timeout_s` is its floor, `pull_bytes_per_second` the assumed "
+            "throughput), and a timeout is a failure naming the volume and the bound. The result "
+            "carries `files`, `volume_bytes`, `selected`, `skipped`, and `unmatched_patterns` for "
+            "configured patterns that no delivered member matched (the pattern is a glob and is "
+            "matched against each member path; a literal-prefix reading is only a hint, never the "
+            "answer). An unmatched pattern beside delivered files is a finding and the pull still "
+            "succeeds, with `tar_exit_code` recording the remote tar's own status; a pull that "
+            "delivered no member at all fails with reason `patterns-matched-nothing`, because the "
+            "files may still be on the machine. `rentguard pull --all` (CLI only) is the backfill "
+            "that carries every matched entry."),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {

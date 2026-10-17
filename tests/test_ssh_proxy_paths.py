@@ -44,6 +44,7 @@ from rentguard import cli  # noqa: E402
 from rentguard.config import Artefacts, Budget, Config  # noqa: E402
 from rentguard.provider import Provider  # noqa: E402
 from rentguard.runpod import RunPod  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 KEY = "test-key"
@@ -101,6 +102,11 @@ class SshTransport:
         target, remote = argv[-2], argv[-1]
         sink = kwargs.get("stdout")
         self.stdin = kwargs.get("stdin", self.stdin)
+        if pull_ssh.is_inventory(argv):
+            # The measurement, on the direct route: a text answer, no archive.
+            self.executed.append(remote)
+            self._bytes(sink, self.inventory_answer().encode())
+            return self
         proxy = PROXY_HOST in target
         if proxy and "-tt" not in argv:
             # Observed: without a PTY the proxy answers with this line and exits 0. The command
@@ -127,6 +133,19 @@ class SshTransport:
 
     def kill(self):
         self.killed = True
+
+    def inventory_answer(self) -> str:
+        """What the machine says when the pull measures it, before the archive.
+
+        The pull measures before it transfers (2026-10-17), on **both** routes: an argv exec on the
+        direct channel and a session line on the PTY. The answer names the archive's own members, and
+        falls back to one synthetic entry when the test's archive is empty, so a test about the
+        *transfer's* failure still reaches the transfer.
+        """
+        names = tarfile.open(fileobj=io.BytesIO(self.archive)).getnames() if self.archive else []
+        names = names or ["results/out.json"]
+        return pull_ssh.inventory_text(*[(0, "f", 100.0 + index, 1, name)
+                                         for index, name in enumerate(names)])
 
     def _text(self, sink, text: str) -> None:
         """A PTY session: LF becomes CRLF on the way back to the client."""
@@ -185,9 +204,14 @@ class DriverStdin:
         inner = after.split("); rc=$?")[0].split("( ", 1)
         command = (inner[1] if len(inner) > 1 else after).strip()
         self.transport.executed.append(command)
+        # The measurement travels as a session line too, and its answer is text; everything else is
+        # the archive test's stand-in output.
+        output = (self.transport.inventory_answer() if cli.PULL_INVENTORY_MARKER in command
+                  else "ran")
         self.transport.stdout.feed(
             ("Welcome to the proxy\r\n" + line.replace("\n", "\r\n") + "\r\n"
-             + cli.session.BEGIN + "\r\nran\r\n"
+             + cli.session.BEGIN + "\r\n"
+             + output.replace("\n", "\r\n") + "\r\n"
              + f"{cli.session.EXIT_SENTINEL} 0\r\n").encode())
 
 
@@ -327,8 +351,9 @@ class PullTest(ProxyCase):
         self.assertEqual(landed.read_bytes(), b'{"ok": true}')
         self.assertTrue(transport.calls, "no ssh was attempted")
         self.assertIn("-tt", transport.calls[0])
-        self.assertIn("base64", transport.executed[0],
-                      "binary was pushed through a PTY instead of being encoded")
+        self.assertTrue(any("base64" in command for command in transport.executed),
+                        f"binary was pushed through a PTY instead of being encoded: "
+                        f"{transport.executed}")
 
     def test_a_pull_that_gets_a_sentence_instead_of_an_archive_says_so(self):
         """Sequence: ssh exits 0 but the stream is the endpoint's own text, which is exactly what
@@ -355,8 +380,14 @@ class PullTest(ProxyCase):
         code, out = self.invoke(cli.cmd_pull, ["pull"], transport)
 
         self.assertEqual(code, 0, f"the direct pull failed.\noutput:\n{out}")
-        self.assertNotIn("-tt", transport.calls[0])
-        self.assertEqual(transport.calls[0][-1], "cd /workspace && tar czf - results/*.json")
+        self.assertFalse(any("-tt" in call for call in transport.calls),
+                         f"a direct route was made into a PTY: {transport.calls}")
+        archive_call = [call for call in transport.calls
+                        if call[-1].startswith("cd /workspace && tar czf -")]
+        self.assertEqual(len(archive_call), 1, f"no archive command ran: {transport.calls}")
+        self.assertEqual(archive_call[0][-1],
+                         "cd /workspace && tar czf - results/out.json",
+                         "the archive did not carry the inventory's exact path")
         landed = Path(self.cfg.artefacts.local_dir) / "results" / "out.json"
         self.assertEqual(landed.read_bytes(), b'{"ok": true}')
 

@@ -36,8 +36,18 @@ from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, now_utc  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
-#: A real child that hangs: what a stuck ssh route looks like from `_ssh_to_file`'s side.
-HANG = [sys.executable, "-c", "import time; time.sleep(30)"]
+#: A real child that hangs on the **archive**: what a stuck ssh route looks like from `_ssh_to_file`.
+#: It answers the pull's inventory first (the measurement is cheap and must not be what hangs), so these
+#: cases keep exercising the transfer's bound rather than the measurement's.
+HANG = [sys.executable, "-c",
+        "import sys, time\n"
+        "remote = sys.argv[-1]\n"
+        "if remote.startswith('RG_PULL_INVENTORY=1'):\n"
+        "    print('RG-PULL-INVENTORY 1')\n"
+        "    print('0\\tf\\t100.0\\t1000\\tresults/out.json')\n"
+        "    print('RG-PULL-END')\n"
+        "    sys.exit(0)\n"
+        "time.sleep(30)\n"]
 PATTERN = "results/*.json"
 
 TOML = """provider = "fake"

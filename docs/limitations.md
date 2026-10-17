@@ -270,11 +270,30 @@ the stop — it stops anyway, exits non-zero, and prints which patterns were los
 keeps billing. The stop is the default because a machine that keeps billing is the worse loss. Call
 `rentguard pull` yourself between runs if you want a copy at any other moment.
 
-**A pull cannot hold a machine open, and a stop cannot hang.** An ssh pull is bounded by
-`[artefacts].pull_timeout_s` (120 s by default): when the bound expires the child is killed and the pull
-is reported as `ssh-timeout`, and `down` stops anyway. A stop is bounded by `[budget].stop_timeout_s`
-(45 s by default): if the ordinary call does not return within that, it escalates to the provider's own
-stop endpoint. Both bounds exist for the same reason — no socket is worth a machine that keeps billing.
+**A pull cannot hold a machine open, and a stop cannot hang.** An ssh pull is bounded by the **volume it
+carries**: `max([artefacts].pull_timeout_s, volume / [artefacts].pull_bytes_per_second)`. The 120 s
+`pull_timeout_s` is a **floor**, not the whole bound — a ~700 MB run directory got 120 s and produced 26
+timeouts in one window (measured 2026-10-17), while at the default 1 MB/s it gets ~700 s. When the bound
+expires the child is killed and the pull is reported as `ssh-timeout`, naming the volume and the bound, and
+`down` stops anyway. A stop is bounded by `[budget].stop_timeout_s` (45 s by default): if the ordinary call
+does not return within that, it escalates to the provider's own stop endpoint. Both bounds exist for the
+same reason — no socket is worth a machine that keeps billing.
+
+**One pull carries one run, and says what it left behind.** A configured pattern whose entries are
+**directories** is a collection of runs (`grok/runs/*`): the pull measures it, then archives only the
+**newest** entry — the run just finished — and names how many older ones it left on the machine
+(`rentguard pull --all` fetches them while it is up). Re-archiving the root on every pull made each pull
+larger than the last, which is how one window turned sixteen completed trainings into one usable run. A
+pattern of **files** (`results/*.json`) carries every match: that pattern already names one run's outputs
+rather than a collection of runs. The selection is made from a measurement of the machine — an
+**inventory** command that lists what matched and how large it is — so the archive carries exact paths and
+never a re-expanded glob.
+
+**The machine has to answer the inventory, and it is assumed to be Linux.** The measurement uses
+`stat -c`, `du -sb` and a POSIX `sh`, the same family as the GNU `tar` the archive already needed; a
+heartbeat-style container without them fails the pull as `inventory-unreadable` **before** anything is
+transferred, never by falling back to archiving the root. Entry paths are tab-separated in that answer, so
+a filename containing a tab or a newline is not supported by the inventory.
 
 **A pull says what it did not get.** Three cases are reported rather than passed off as a clean copy: a
 configured pattern that no archived member matches is a finding (`matched nothing`), with the match tested

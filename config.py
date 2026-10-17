@@ -66,14 +66,28 @@ class Artefacts:
     pull: list[str] = field(default_factory=list)
     local_dir: str = "./artefacts"
     remote_dir: str = "/workspace"
-    #: How long one ssh pull may take before its child is killed and the failure reported. The pull
-    #: runs before `down` stops a machine, so an unbounded pull is an unbounded bill.
+    #: The **floor** of one ssh pull's bound, in seconds. It is no longer the whole bound: a pull is
+    #: bounded by the **volume it will carry** divided by ``pull_bytes_per_second`` (plus a slack), and
+    #: this value is what a small pull still gets. Measured 2026-10-17: a run directory is ~700 MB and
+    #: the 120 s default produced 26 timeouts in one window — the bound was a legacy constant, not a
+    #: size. The pull runs before `down` stops a machine, so an unbounded pull is an unbounded bill.
     pull_timeout_s: float = 120.0
+    #: The throughput the bound assumes, in bytes per second. Conservative on purpose: the community
+    #: route measured far slower than a direct endpoint, and a bound that is too generous only makes a
+    #: stuck pull cost more time, while one that is too tight loses a result that was still arriving.
+    pull_bytes_per_second: float = 1_000_000.0
     #: There is deliberately no switch here. If ``pull`` is non-empty, `run` pulls when each run
     #: finishes and `down` pulls before it stops. The old ``on_run`` setting selected between those
     #: and doing nothing; it is deleted rather than defaulted, because a tool whose promise is "no
     #: surprises" cannot carry a setting that turns the promise off. A config that still has the key
     #: is accepted and the key ignored — see ``_only``.
+
+    def __post_init__(self) -> None:
+        if self.pull_timeout_s < 0:
+            raise ConfigError("artefacts.pull_timeout_s must be >= 0 (0 means: no floor, pure volume)")
+        if self.pull_bytes_per_second <= 0:
+            raise ConfigError("artefacts.pull_bytes_per_second must be > 0 — a pull bound cannot "
+                              "assume an infinite throughput")
 
 
 @dataclass

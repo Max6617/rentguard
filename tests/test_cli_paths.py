@@ -24,6 +24,7 @@ from rentguard.config import Budget, Config, ConfigError  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, now_utc  # noqa: E402
 from rentguard.provider import Provider, ProviderError  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 from datetime import timedelta  # noqa: E402
 
@@ -174,6 +175,15 @@ class PullOverSsh(CliCase):
             def __init__(self, argv, stdout=None, **kwargs):
                 case.pull_argv = list(argv)
                 case.pull_stdin = kwargs.get("stdin")
+                # A pull now runs two commands: the inventory first (a framed text answer), then the
+                # archive. The inventory always succeeds here — it is a measurement — so `exit_code`
+                # is about the transfer, which is what the tests around it assert.
+                if pull_ssh.is_inventory(argv):
+                    if stdout is not None:
+                        stdout.write(pull_ssh.inventory_text((0, "f", 100.0, len(data), member))
+                                     .encode())
+                        stdout.flush()
+                    return
                 if exit_code == 0:
                     buffer = io.BytesIO()
                     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
@@ -186,7 +196,7 @@ class PullOverSsh(CliCase):
 
             def wait(self, timeout=None):
                 case.pull_timeout = timeout
-                return exit_code
+                return 0 if pull_ssh.is_inventory(case.pull_argv) else exit_code
 
             def kill(self):  # pragma: no cover - the bounded path is tested elsewhere
                 pass

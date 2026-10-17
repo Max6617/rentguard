@@ -99,7 +99,8 @@ stop_timeout_s = 45       # a stop slower than this escalates to the provider's 
 pull = ["results/**/*.json", "logs/*.log"]
 local_dir = "./artefacts"
 remote_dir = "/workspace"
-pull_timeout_s = 120      # one ssh pull may take this long, then it is killed and reported
+pull_timeout_s = 120      # the FLOOR of a pull's bound: the volume decides the rest
+pull_bytes_per_second = 1000000   # assumed throughput; a 700 MB run gets ~700 s, not 120
 
 [runpod]
 gpu_preference = ["NVIDIA GeForce RTX 4090", "NVIDIA L40S", "NVIDIA RTX A6000"]
@@ -113,6 +114,17 @@ pulls those patterns when each run finishes — whatever its exit code — and `
 stops the machine. A failed pull at `down` does not cancel the stop: it stops anyway, exits non-zero, and
 prints which patterns were lost, because a machine left running to retry a copy is money spent by
 default. `down --keep-running` is the deliberate opposite. See [limitations](limitations.md).
+
+**A pull carries the run just finished, and its bound is sized from that run's volume** (2026-10-17). A
+pattern whose entries are **directories** — `grok/runs/*`, one directory per run — carries the newest
+one only; pulling the root again on every run is what made each pull larger than the last (measured: 700 MB
+per run, 26 timeouts in one window, one usable run out of sixteen). Older runs stay on the machine and are
+named in the output; `rentguard pull --all` fetches them while the machine is up. A pattern of **files**
+(`results/*.json`) carries every match, because that pattern is already one run's outputs. The pull first
+runs an **inventory** on the machine (a text answer: what matched, how large it is), and the ssh bound is
+then `max(pull_timeout_s, volume / pull_bytes_per_second)` — the floor for a small pull, the volume for a
+large one. A pull that exceeds its bound is a named failure that says the volume and the bound it hit; it
+is never merely logged.
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.

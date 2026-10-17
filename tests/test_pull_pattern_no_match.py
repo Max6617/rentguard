@@ -31,6 +31,7 @@ from rentguard import cli  # noqa: E402
 from rentguard.config import Artefacts, Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 MATCH = "results/declared-timing-3080ti/out.json"
@@ -48,20 +49,35 @@ def gzip_tar(members: dict[str, bytes]) -> bytes:
 
 
 class SshDouble:
-    """``subprocess.Popen``-shaped: writes a body, then is waited on."""
+    """``subprocess.Popen``-shaped: answers the pull's inventory, then writes the archive body.
+
+    The pull measures before it transfers (2026-10-17), so this double gets two calls. The inventory it
+    answers is built from the archive's own members, so the selection and the volume match what the
+    archive will deliver; an empty archive answers an empty inventory, which the tool reports as
+    ``patterns-matched-nothing`` before it transfers anything.
+    """
 
     def __init__(self, body: bytes, exit_code: int):
         self.body = body
         self.exit_code = exit_code
+        self.inventory_call = False
 
     def __call__(self, argv, stdout=None, **kwargs):
-        if stdout is not None and self.body:
-            stdout.write(self.body)
+        self.inventory_call = pull_ssh.is_inventory(argv)
+        if stdout is not None:
+            if self.inventory_call:
+                names = (tarfile.open(fileobj=io.BytesIO(self.body)).getnames()
+                         if self.body else [])
+                stdout.write(pull_ssh.inventory_text(
+                    *[(0, "f", 100.0 + index, 1, name) for index, name in enumerate(names)]
+                ).encode())
+            elif self.body:
+                stdout.write(self.body)
             stdout.flush()
         return self
 
     def wait(self, timeout=None):
-        return self.exit_code
+        return 0 if self.inventory_call else self.exit_code
 
     def kill(self):
         pass

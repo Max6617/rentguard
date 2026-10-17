@@ -34,6 +34,7 @@ sys.path.insert(0, str(WS))
 from rentguard import cli  # noqa: E402
 from rentguard.config import Artefacts, Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
 PATTERNS = ["results/*.json"]
@@ -98,9 +99,15 @@ class FrameCase(unittest.TestCase):
             def kill(self):
                 pass
 
+        def inventory(provider, argv, target, remote, **kwargs):
+            """The measurement on a PTY route goes through the session driver; its answer is the
+            archive's own member, so the pull reaches the frame this file is about."""
+            return 0, pull_ssh.file_entries({"results/out.json": b"x"}), ""
+
         out = io.StringIO()
         with mock.patch.object(cli, "_config", lambda: self.cfg), \
                 mock.patch.object(cli, "_provider", lambda cfg: self.provider()), \
+                mock.patch.object(cli, "_run_remote", inventory), \
                 mock.patch.object(cli.subprocess, "Popen", Child()), \
                 contextlib.redirect_stdout(out):
             code = cli.cmd_pull(cli.build_parser().parse_args(["pull", "--json"]))

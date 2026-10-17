@@ -51,6 +51,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
@@ -494,8 +495,10 @@ def _template(cfg: Config) -> str:
         'pull = ["results/**/*.json", "logs/*.log"]',
         f"local_dir = {_toml_str(a.local_dir)}",
         f"remote_dir = {_toml_str(a.remote_dir)}",
-        f"pull_timeout_s = {a.pull_timeout_s:g}    # one ssh pull may take this long, then it is killed",
-        "#                                and reported; the pull runs before a stop, so it is bounded",
+        f"pull_timeout_s = {a.pull_timeout_s:g}    # the FLOOR of one pull's bound; the bound is the",
+        f"#                                volume of what the pull carries at pull_bytes_per_second",
+        f"pull_bytes_per_second = {a.pull_bytes_per_second:g}  # assumed throughput: a 700 MB run",
+        "#                                gets ~700 s, not the 120 s legacy default",
         "",
         "[runpod]",
         f'cloud = {_toml_str(rp.get("cloud", DEFAULTS["cloud"]))}              # SECURE or COMMUNITY',
@@ -2657,15 +2660,210 @@ def _unmatched_patterns(patterns: list[str], names: list[str]) -> list[str]:
 FRAME_HEADER = "RENTGUARD-ARCHIVE"
 FRAME_END = "RENTGUARD-END"
 
+#: The first token of the inventory command, so a machine (and a test's fake ssh) can tell the two
+#: commands apart: the inventory is a *text* answer, the archive is the transfer.
+PULL_INVENTORY_MARKER = "RG_PULL_INVENTORY=1"
+#: And the frame around the inventory's own lines: a PTY route folds prompt text into stdout, so the
+#: entries are stated between these two marks rather than being inferred from every line.
+PULL_INVENTORY_HEADER = "RG-PULL-INVENTORY 1"
+PULL_INVENTORY_END = "RG-PULL-END"
 
-def _pty_pull_command(remote_dir: str, patterns: list[str]) -> str:
+
+@dataclass(frozen=True)
+class PullEntry:
+    """One top-level entry a pull pattern matched on the machine, measured before any transfer."""
+
+    pattern: str
+    path: str
+    kind: str        # "d" for a directory (one run on the measured shape), "f" for a file
+    mtime: float
+    bytes: int
+
+
+def _pull_inventory_command(remote_dir: str, patterns: list[str]) -> str:
+    """The remote command that measures what the patterns match, before a byte is transferred.
+
+    One line per matched entry, tab-separated: ``pattern index, kind, mtime, bytes, path``. ``du -sb``
+    for a directory is its whole tree (the run's real size), ``stat -c %s`` for a file. A pattern that
+    matches nothing simply contributes no line — the tool then names it as unmatched *before* it
+    starts an archive, which is the difference between "the pull failed" and "there was nothing to
+    pull".
+
+    Both this and the archive assume a Linux container: GNU ``tar`` was already required, and
+    ``stat -c``/``du -sb`` are its siblings. The frame is what makes the answer readable on a PTY
+    route, where prompt text and the command's echo share the stream.
+    """
+    members = " ".join(patterns)
+    return (
+        f"{PULL_INVENTORY_MARKER}; cd {remote_dir} || exit 3; "
+        f"printf '{PULL_INVENTORY_HEADER}\\n'; i=0; "
+        f"for pattern in {members}; do "
+        f"  for entry in $pattern; do "
+        f"    [ -e \"$entry\" ] || continue; "
+        f"    if [ -d \"$entry\" ]; then "
+        f"      printf '%s\\td\\t%s\\t%s\\t%s\\n' \"$i\" \"$(stat -c %Y -- \"$entry\")\" "
+        f"\"$(du -sb -- \"$entry\" | cut -f1)\" \"$entry\"; "
+        f"    else "
+        f"      printf '%s\\tf\\t%s\\t%s\\t%s\\n' \"$i\" \"$(stat -c %Y -- \"$entry\")\" "
+        f"\"$(stat -c %s -- \"$entry\")\" \"$entry\"; "
+        f"    fi; "
+        f"  done; "
+        f"  i=$((i + 1)); "
+        f"done; "
+        f"printf '{PULL_INVENTORY_END}\\n'"
+    )
+
+
+def _parse_pull_inventory(text: str, patterns: list[str]) -> list[PullEntry]:
+    """The entries between the inventory's frame, or a named ``ValueError``.
+
+    Strict inside the frame and blind outside it: a PTY route echoes the command before the answer, so
+    "every line must parse" would fail on the echo, and "skip the lines that do not parse" would drop a
+    member and under-report the volume — the direction that makes a bound too small. A missing frame is
+    therefore a failure, not an empty inventory: the tool must never fall back to archiving the root
+    because it could not read its own measurement.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    try:
+        start = lines.index(PULL_INVENTORY_HEADER)
+    except ValueError:
+        raise ValueError(f"no {PULL_INVENTORY_HEADER!r} marker in the inventory answer "
+                         f"({len(text)} characters came back)") from None
+    try:
+        end = lines.index(PULL_INVENTORY_END, start + 1)
+    except ValueError:
+        raise ValueError(f"the inventory has no {PULL_INVENTORY_END!r} terminator: the answer "
+                         f"stopped early") from None
+    entries: list[PullEntry] = []
+    for line in lines[start + 1:end]:
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) != 5:
+            raise ValueError(f"an inventory line is not five tab-separated fields: {line!r}")
+        index, kind, mtime, size, path = fields
+        if not index.isdigit() or kind not in ("d", "f") or not path:
+            raise ValueError(f"an inventory line is malformed: {line!r}")
+        if int(index) >= len(patterns):
+            raise ValueError(f"an inventory line names pattern {index}, and only "
+                             f"{len(patterns)} are configured: {line!r}")
+        try:
+            entries.append(PullEntry(pattern=patterns[int(index)], path=path, kind=kind,
+                                     mtime=float(mtime), bytes=int(size)))
+        except ValueError:
+            raise ValueError(f"an inventory line has a non-numeric size or time: {line!r}") from None
+    return entries
+
+
+def _pull_selection(entries: list[PullEntry], *, all_entries: bool) -> tuple[list[PullEntry], list[PullEntry]]:
+    """What this pull carries, and what it deliberately leaves on the machine.
+
+    One run is one **directory** (the measured shape: ``grok/runs/<run>``). When the patterns match
+    directories, the archive carries the **newest** one — the run just finished — and not the root,
+    because re-archiving every earlier run makes each pull larger than the last: measured 2026-10-17,
+    the first pull of a window succeeded only because one directory existed, and the pulls after it
+    were re-sends of everything, 26 of them timing out. A pattern that matches **files** is already one
+    run's outputs rather than a collection of runs, so every file is carried. ``all_entries`` is the
+    backfill: every matched entry.
+    """
+    if all_entries:
+        return list(entries), []
+    directories = [entry for entry in entries if entry.kind == "d"]
+    if not directories:
+        return list(entries), []
+    newest = max(directories, key=lambda entry: (entry.mtime, entry.path))
+    selected = [entry for entry in entries if entry.kind != "d"] + [newest]
+    skipped = [entry for entry in directories if entry is not newest]
+    return selected, skipped
+
+
+def _pull_bound(cfg: Config, total_bytes: int) -> float:
+    """This pull's bound: the configured floor, or the volume at the assumed throughput.
+
+    The legacy 120 s was a constant unrelated to what was being carried; a ~700 MB run at 1 MB/s is
+    ~700 s, and the window's timeouts happened at 120 s on exactly that size. ``pull_timeout_s`` is the
+    **floor** (a small pull gets it, and it is also the allowance for connection and tar overhead), and
+    ``pull_bytes_per_second`` is the assumed throughput — conservative on purpose, because the only
+    consequence of under-estimating it is a pull that is killed while it was still arriving, and the
+    message names both numbers so the fix is one config line. The rate is validated to be positive when
+    the config loads; ``total_bytes`` of zero (a pattern that matched only empty files) leaves the floor.
+    """
+    floor = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0)
+    rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
+    if total_bytes <= 0:
+        return floor
+    return max(floor, math.ceil(total_bytes / rate))
+
+
+def _human_bytes(count: int) -> str:
+    """A size a person can check against what they expected the run to weigh."""
+    value = float(count)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1000.0 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{count} B"
+        value /= 1000.0
+    return f"{count} B"
+
+
+def _ssh_capture(argv: list[str], target: str, remote: str, *, timeout: float) -> tuple[int, str]:
+    """Run one **short** ssh command and return ``(exit code, stdout)``, bounded by ``timeout``.
+
+    ``Popen`` with a file for stdout, exactly like `_ssh_to_file`, so the wait can be bounded and the
+    bound can kill the child. It is separate from `_run_remote` because this is the pull's
+    *measurement*, and it must be bounded on the direct route too: a text session that hangs before any
+    bytes move cannot be caught by a bound sized from an inventory that never arrived. ``-1`` is "the
+    bound expired", the same convention `_ssh_to_file` uses. On a PTY route the caller uses the session
+    driver instead, because a command passed as an ssh argument is dropped there.
+    """
+    import tempfile
+
+    with tempfile.TemporaryFile() as sink:
+        proc = subprocess.Popen([*argv, target, remote], stdout=sink, stdin=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return -1, ""
+        sink.seek(0)
+        return code, sink.read().decode("utf-8", "replace")
+
+
+def _pull_inventory(cfg: Config, provider: Provider, argv: list[str], target: str, *,
+                    pty: bool, patterns: list[str]) -> tuple[list[PullEntry] | None, int, str]:
+    """Ask the machine what the patterns match: ``(entries or None, exit code, why)``.
+
+    ``None`` is "no measurement", and it is never treated as "nothing matched" — that distinction is
+    what keeps a failed measurement from becoming a wild archive of the root, and what keeps it from
+    becoming a clean empty pull. The call is bounded by the configured floor: the volume-sized bound
+    cannot exist until this answer does.
+    """
+    command = _pull_inventory_command(cfg.artefacts.remote_dir, patterns)
+    bound = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0) or 120.0
+    if pty:
+        code, out, _ = _run_remote(provider, argv, target, command, capture=True, pty=True,
+                                   timeout=bound)
+    else:
+        code, out = _ssh_capture(argv, target, command, timeout=bound)
+    if code != 0:
+        why = (f"the inventory did not return within {bound:g}s" if code == -1
+               else f"the inventory command exited {code}")
+        return None, code, why
+    try:
+        return _parse_pull_inventory(out, patterns), 0, ""
+    except ValueError as exc:
+        return None, code, str(exc)
+
+
+def _pty_pull_command(remote_dir: str, members: list[str]) -> str:
     """The remote command for a PTY route: the archive inside a byte-counted, terminated frame.
 
     POSIX shell only, and the tar status still travels by ``rc=$?`` rather than through a pipe. The
     body is base64 with no newlines (``tr -d '\\n'``), so the pty's LF→CRLF rewriting cannot touch it
     and the header's count is the body's actual length.
     """
-    members = " ".join(patterns)
+    members = " ".join(shlex.quote(path) for path in members)
     tmp = "/tmp/.rentguard-pull-$$.tar.gz"
     b64 = "/tmp/.rentguard-pull-$$.b64"
     return (f"cd {remote_dir} && tar czf {tmp} {members}; rc=$?; "
@@ -2729,7 +2927,7 @@ def _decode_framed_archive(archive: Path) -> Path:
     return decoded
 
 
-def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> str:
+def _pull_remote_command(remote_dir: str, members: list[str], *, pty: bool) -> str:
     """The command the remote shell runs to hand the archive back.
 
     A direct endpoint is a plain byte channel, so the tar stream goes straight down it: that is the
@@ -2744,11 +2942,15 @@ def _pull_remote_command(remote_dir: str, patterns: list[str], *, pty: bool) -> 
     failed on a missing member still exits 0 overall, and the empty archive that arrives would be
     reported as a successful pull of nothing. A lost result read as a kept one is the failure this
     whole path exists to avoid.
+
+    ``members`` are **exact paths from the inventory**, shell-quoted and never globs: the run-bounded
+    selection is made from a measurement, and letting the remote shell re-expand the configured pattern
+    is what re-archived every earlier run (measured 2026-10-17).
     """
-    members = " ".join(patterns)
+    members = " ".join(shlex.quote(path) for path in members)
     if not pty:
         return f"cd {remote_dir} && tar czf - {members}"
-    return _pty_pull_command(remote_dir, patterns)
+    return _pty_pull_command(remote_dir, members)
 
 
 def cmd_pull(args) -> int:
@@ -2805,21 +3007,72 @@ def cmd_pull(args) -> int:
 
         argv, target = _ssh_argv(cfg, provider, pod)
         pty = _ssh_pty(provider, pod)
+        # Measure **before** transferring: whatever the patterns match, one run per directory, and the
+        # bytes the pull will actually carry. The bound is then sized from that volume instead of from
+        # the legacy constant (measured 2026-10-17: 26 timeouts on ~700 MB runs), and the archive
+        # carries the run just finished rather than everything ever written.
+        entries, inv_code, inv_why = _pull_inventory(cfg, provider, argv, target, pty=pty,
+                                                     patterns=patterns)
+        if entries is None:
+            reason = "ssh-timeout" if inv_code == -1 else "inventory-unreadable"
+            floor = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0)
+            note(f"pull failed: {inv_why}. Nothing was transferred — the inventory is what decides "
+                 f"which run is pulled and how large a bound it needs, so pulling blind would be the "
+                 f"re-archive-everything defect. The machine is untouched; retry, or run "
+                 f"`rentguard down --keep-running` to keep it for one.")
+            _pull_summary(pulled=False, reason=reason, files=[], unmatched_patterns=list(patterns))
+            emit(pulled=False, reason=reason, exit_code=inv_code, files=[],
+                 detail=inv_why, timeout_s=floor)
+            return 1
+        selected, skipped = _pull_selection(entries, all_entries=bool(getattr(args, "all", False)))
+        unmatched_on_machine = [pattern for pattern in patterns
+                                if not any(entry.pattern == pattern for entry in entries)]
+        if not selected:
+            note(f"pull failed: the configured patterns matched nothing on {pod.get('id')} "
+                 f"({', '.join(patterns)}); the files may still be on the machine")
+            _pull_summary(pulled=False, reason="patterns-matched-nothing", files=[],
+                          unmatched_patterns=list(patterns))
+            emit(pulled=False, reason="patterns-matched-nothing", files=[],
+                 unmatched_patterns=list(patterns), volume_bytes=0)
+            return 1
+        volume = sum(entry.bytes for entry in selected)
         # A pull is bounded: it runs before `down` stops a machine, so a pull that never returns is a
-        # bill that never stops. See `_ssh_to_file`.
-        timeout = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 120.0)
+        # bill that never stops. The bound is the configured floor or the volume at the assumed
+        # throughput, whichever is longer.
+        timeout = _pull_bound(cfg, volume)
+        rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
+        note(f"pull scope     : {len(selected)} of {len(entries)} matched entr(y/ies), "
+             f"{_human_bytes(volume)} — bound {timeout:.0f}s "
+             f"(floor {cfg.artefacts.pull_timeout_s:g}s, {rate:,.0f} B/s)")
+        if skipped:
+            note(f"left on the machine: {len(skipped)} older run entr(y/ies) "
+                 f"({', '.join(entry.path for entry in skipped[:5])}"
+                 + (f", and {len(skipped) - 5} more" if len(skipped) > 5 else "")
+                 + ") — `rentguard pull --all` fetches them while the machine is up")
+        if unmatched_on_machine:
+            note(f"matched nothing : {', '.join(unmatched_on_machine)} (on the machine, before any "
+                 f"transfer)")
         with _temp_tar(cfg.state_dir) as (handle, archive):
-            remote = _pull_remote_command(cfg.artefacts.remote_dir, patterns, pty=pty)
+            remote = _pull_remote_command(cfg.artefacts.remote_dir,
+                                         [entry.path for entry in selected], pty=pty)
             code, timed_out = _ssh_to_file(argv, target, remote, sink=handle, timeout=timeout)
             handle.flush()
             if timed_out:
-                note(f"pull failed: ssh did not return within {timeout:.0f}s "
-                     f"([artefacts] pull_timeout_s), so the pull was killed — a pull must never be "
-                     f"able to hold a billing machine open")
+                # A timeout is a failure the caller must act on: it names the volume the bound was
+                # sized from, the bound it hit, and the next step. A pull that is merely logged and
+                # overtaken is how a window loses fifteen trainings and still reads as closed.
+                note(f"pull failed: ssh did not return within {timeout:.0f}s for "
+                     f"{_human_bytes(volume)} — the bound is [artefacts] pull_timeout_s "
+                     f"({cfg.artefacts.pull_timeout_s:g}s) as a floor, or the volume at "
+                     f"{rate:,.0f} B/s (pull_bytes_per_second). The pull was killed; retry with the "
+                     f"machine still up (`rentguard down --keep-running`) or raise "
+                     f"pull_bytes_per_second only if the link is slower than that.")
                 _pull_summary(pulled=False, reason="ssh-timeout", files=[],
                               unmatched_patterns=list(patterns))
                 emit(pulled=False, reason="ssh-timeout", exit_code=None, files=[],
-                     timeout_s=timeout)
+                     timeout_s=timeout, volume_bytes=volume,
+                     bytes_per_second=rate, selected=[entry.path for entry in selected],
+                     skipped=len(skipped))
                 return 1
             if pty:
                 # The frame is parsed and checked before anything is called an archive: the header's
@@ -2892,7 +3145,9 @@ def cmd_pull(args) -> int:
             note(f"  {name}")
         if len(names) > 20:
             note(f"  ... and {len(names) - 20} more")
-        emit(pulled=True, files=list(names), unmatched_patterns=unmatched, tar_exit_code=code)
+        emit(pulled=True, files=list(names), unmatched_patterns=unmatched, tar_exit_code=code,
+             volume_bytes=volume, timeout_s=timeout, bytes_per_second=rate,
+             selected=[entry.path for entry in selected], skipped=len(skipped))
     return 0
 
 
@@ -2953,8 +3208,11 @@ def build_parser() -> argparse.ArgumentParser:
     structured(sp).set_defaults(func=cmd_down)
     structured(sub.add_parser("ledger", help="every rental with its cost")).set_defaults(
         func=cmd_ledger)
-    structured(sub.add_parser("pull", help="pull the configured artefacts now")).set_defaults(
-        func=cmd_pull)
+    sp = sub.add_parser("pull", help="pull the configured artefacts now (one run by default)")
+    sp.add_argument("--all", action="store_true",
+                    help="every matched entry, not only the newest run directory — a backfill; it "
+                         "transfers everything ever written and can be very large")
+    structured(sp).set_defaults(func=cmd_pull)
 
     sp = sub.add_parser("adopt", help="record an instance that is already running, backdated")
     sp.add_argument("instance_id")

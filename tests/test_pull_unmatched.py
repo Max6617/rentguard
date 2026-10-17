@@ -34,11 +34,23 @@ from rentguard import cli  # noqa: E402
 from rentguard.config import Budget, Config  # noqa: E402
 from rentguard.fake import FakeProvider  # noqa: E402
 from rentguard.ledger import Ledger, now_utc  # noqa: E402
+from rentguard.tests import _pull_ssh as pull_ssh  # noqa: E402
 from rentguard.tests._scratch import scratch_dir  # noqa: E402
 
-#: Runs in a child: write the archive whose hex is argv[1] to stdout, then exit with argv[2].
-WRITER = ("import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1])); "
-          "sys.stdout.buffer.flush(); sys.exit(int(sys.argv[2]))")
+#: Runs in a child. The pull measures before it transfers, so the last argv (the remote command) decides
+#: what this child answers: the **inventory** (a framed text answer, hex-encoded in argv[3]) or the
+#: scripted **archive** (hex in argv[1], exit code in argv[2]).
+WRITER = (
+    "import sys\n"
+    "remote = sys.argv[-1]\n"
+    "if remote.startswith('RG_PULL_INVENTORY=1'):\n"
+    "    sys.stdout.write(bytes.fromhex(sys.argv[3]).decode())\n"
+    "    sys.stdout.flush()\n"
+    "    sys.exit(0)\n"
+    "sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))\n"
+    "sys.stdout.buffer.flush()\n"
+    "sys.exit(int(sys.argv[2]))\n"
+)
 
 
 def tar_hex(members: dict[str, bytes]) -> str:
@@ -50,6 +62,11 @@ def tar_hex(members: dict[str, bytes]) -> str:
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
     return buffer.getvalue().hex()
+
+
+def inventory_hex(members: dict[str, bytes]) -> str:
+    """The inventory that matches the archive this child will write: its members, as file entries."""
+    return pull_ssh.file_entries(members).encode().hex()
 
 
 def cli_args(*argv: str):
@@ -81,7 +98,8 @@ class PullCase(unittest.TestCase):
     def pull(self, patterns: list[str], *, tar_members: dict[str, bytes],
              tar_exit: int) -> tuple[int, dict]:
         self.cfg.artefacts.pull = patterns
-        child = [sys.executable, "-c", WRITER, tar_hex(tar_members), str(tar_exit)]
+        child = [sys.executable, "-c", WRITER, tar_hex(tar_members), str(tar_exit),
+                 inventory_hex(tar_members)]
         out = io.StringIO()
         with mock.patch.object(cli, "_config", lambda: self.cfg), \
                 mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
@@ -243,7 +261,7 @@ class AOneSidedMissStaysAFinding(PullCase):
 class DownNamesWhatItIsAboutToLose(PullCase):
     def down(self) -> tuple[int, str]:
         self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
-        child = [sys.executable, "-c", WRITER, tar_hex({}), "2"]   # an empty archive, tar exit 2
+        child = [sys.executable, "-c", WRITER, tar_hex({}), "2", inventory_hex({})]   # an empty archive, tar exit 2
         out = io.StringIO()
         with mock.patch.object(cli, "_config", lambda: self.cfg), \
                 mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
@@ -304,8 +322,8 @@ class DownWithAPartialDelivery(PullCase):
         nothing arrived.
         """
         self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
-        child = [sys.executable, "-c", WRITER,
-                 tar_hex({"results/out.json": b'{"ok": true}'}), "2"]
+        members = {"results/out.json": b'{"ok": true}'}
+        child = [sys.executable, "-c", WRITER, tar_hex(members), "2", inventory_hex(members)]
 
         code, out = self.down(child=child)
 
@@ -325,7 +343,7 @@ class DownWithAPartialDelivery(PullCase):
         """The other side of the same branch: nothing delivered at all. Effect: a non-zero exit, the
         machine stopped, the row closed with its cost, and the sentence naming what may be lost."""
         self.cfg.artefacts.pull = ["results/*.json", "logs/*.log"]
-        child = [sys.executable, "-c", WRITER, tar_hex({}), "2"]
+        child = [sys.executable, "-c", WRITER, tar_hex({}), "2", inventory_hex({})]
 
         code, out = self.down(child=child)
 
@@ -349,7 +367,7 @@ class TheSummaryIsNotFromAPreviousPull(PullCase):
         from it can be true of an earlier command and false of this one.
         """
         self.cfg.artefacts.pull = ["results/*.json"]
-        good_child = [sys.executable, "-c", WRITER, tar_hex({"results/out.json": b"x"}), "0"]
+        good_child = [sys.executable, "-c", WRITER, tar_hex({"results/out.json": b"x"}), "0", inventory_hex({"results/out.json": b"x"})]
         with mock.patch.object(cli, "_config", lambda: self.cfg), \
                 mock.patch.object(cli, "_provider", lambda cfg: self.provider), \
                 mock.patch.object(cli, "_ssh_argv", lambda cfg, pod, provider=None: (good_child, "x")), \
