@@ -72,6 +72,9 @@ class TransportCase(unittest.TestCase):
                           state_dir=self.root / ".rentguard")
         self.cfg.provider = "fake"
         self.cfg.artefacts.pull = ["grok/runs/*"]
+        # Declared as a collection of runs, so the cases about "the run just finished" keep their
+        # meaning; the declaration's own behaviour has its own class below.
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
         self.cfg.artefacts.local_dir = str(self.root / "artefacts")
         self.cfg.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.state_path.write_text(json.dumps({"instance_id": "pod-A"}), encoding="utf-8")
@@ -256,6 +259,74 @@ class ThePullCarriesOneRun(TransportCase):
         self.assertNotIn("grok/runs/run-15", archive, f"an older run was carried: {archive}")
         self.assertIn("results/final.json", archive, archive)
         self.assertEqual(document.get("skipped"), 1, document)
+
+
+class TheRunCollectionIsDeclared(TransportCase):
+    """`[artefacts] run_patterns` declares which patterns are **collections of runs** (Gilbert's ruling,
+    2026-10-17). A declared collection carries the newest entry and names the rest; an **undeclared**
+    pattern carries everything it matches, because a pattern cannot be told apart from one run's
+    contents by its shape — `grok/runs/*` and `grok/runs/run-16/*` are the same glob — and carrying the
+    wrong half of a run is the loss this whole exercise exists to prevent.
+    """
+
+    def test_a_declared_collection_carries_the_newest_and_names_the_rest(self) -> None:
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
+        self.inventory = self.runs(("run-15", 200.0, 20 * MB), ("run-16", 300.0, 30 * MB))
+        self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
+
+        code, err, document = self.pull()
+
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+        self.assertIn("grok/runs/run-16", archive, archive)
+        self.assertNotIn("grok/runs/run-15", archive, archive)
+        self.assertEqual(document.get("skipped"), 1, document)
+        self.assertIn("left on the machine", err, err)
+
+    def test_an_undeclared_directory_pattern_carries_every_match(self) -> None:
+        """The default cannot silently skip: two directories under one pattern are carried, and the
+        output says how many and how large they are, and how to opt into the one-run rule."""
+        self.cfg.artefacts.pull = ["grok/runs/run-16/*"]
+        self.inventory = framed("\n".join([
+            inventory_line(0, "d", 900, 527 * MB, "grok/runs/run-16/cache"),
+            inventory_line(0, "d", 899, 172 * MB, "grok/runs/run-16/checkpoints"),
+        ]))
+        self.tar_members = {"grok/runs/run-16/cache/blob.bin": b"x",
+                            "grok/runs/run-16/checkpoints/step-100.pt": b"y"}
+
+        code, err, document = self.pull()
+
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+        self.assertIn("grok/runs/run-16/cache", archive, archive)
+        self.assertIn("grok/runs/run-16/checkpoints", archive,
+                      f"an undeclared pattern dropped half a run: {archive}")
+        self.assertEqual(document.get("skipped"), 0, document)
+        self.assertIn("grok/runs/run-16/cache", err, err)
+        self.assertIn("run_patterns", err, f"the declaration is not offered:\n{err}")
+
+    def test_all_carries_every_match_even_for_a_declared_collection(self) -> None:
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
+        self.inventory = self.runs(("run-15", 200.0, 20 * MB), ("run-16", 300.0, 30 * MB))
+        self.tar_members = {"grok/runs/run-15/a.json": b"{}", "grok/runs/run-16/b.json": b"{}"}
+
+        code, err, document = self.pull("--all")
+
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+        for run in ("run-15", "run-16"):
+            self.assertIn(f"grok/runs/{run}", archive, archive)
+        self.assertEqual(document.get("skipped"), 0, document)
+        self.assertNotIn("left on the machine", err, err)
+
+    def test_a_declaration_that_names_a_pattern_not_in_pull_is_refused(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            Artefacts(pull=["results/*.json"], run_patterns=["grok/runs/*"])
+        self.assertIn("run_patterns", str(caught.exception))
+
+    def test_a_run_pattern_is_held_to_the_same_shell_safety(self) -> None:
+        with self.assertRaises(ConfigError):
+            Artefacts(pull=["grok/runs/*"], run_patterns=["grok/runs/*; rm -rf /"])
 
 
 class TheInventoryDecidesBeforeAnythingIsTransferred(TransportCase):

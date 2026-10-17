@@ -97,6 +97,14 @@ class Artefacts:
     #: route measured far slower than a direct endpoint, and a bound that is too generous only makes a
     #: stuck pull cost more time, while one that is too tight loses a result that was still arriving.
     pull_bytes_per_second: float = 1_000_000.0
+    #: Patterns that name a **collection of runs** — one directory per run, `grok/runs/*`. A declared
+    #: collection carries only its **newest** entry each pull (the run just finished) and names the rest
+    #: as skipped, with `rentguard pull --all` as the backstop. **Undeclared patterns carry everything
+    #: they match**, because a glob cannot be told apart from one run's contents by its shape — and
+    #: carrying the wrong half of a run is the loss this whole tool exists to prevent (Gilbert's ruling,
+    #: 2026-10-17). Every entry must also be in ``pull``; a declaration naming nothing to pull is a
+    #: config error rather than a silent no-op.
+    run_patterns: list[str] = field(default_factory=list)
     #: There is deliberately no switch here. If ``pull`` is non-empty, `run` pulls when each run
     #: finishes and `down` pulls before it stops. The old ``on_run`` setting selected between those
     #: and doing nothing; it is deleted rather than defaulted, because a tool whose promise is "no
@@ -111,14 +119,20 @@ class Artefacts:
         if not math.isfinite(self.pull_bytes_per_second) or self.pull_bytes_per_second <= 0:
             raise ConfigError("artefacts.pull_bytes_per_second must be a finite number of bytes per "
                               "second > 0 — a pull bound cannot assume an infinite throughput")
-        for pattern in self.pull:
+        for pattern in [*self.pull, *self.run_patterns]:
             text = str(pattern)
             if not text or not _PATTERN_SAFE.match(text):
                 raise ConfigError(
-                    f"artefacts.pull pattern {text!r} contains characters the remote shell would "
+                    f"artefacts pattern {text!r} contains characters the remote shell would "
                     f"interpret (whitespace, quotes, ; $ ` < > | & ( ) or a backslash). The inventory "
                     f"expands the pattern on the machine, so only plain globs are accepted — "
                     f"[A-Za-z0-9_./*?[]@%+,:=~-]")
+        for pattern in self.run_patterns:
+            if pattern not in self.pull:
+                raise ConfigError(
+                    f"artefacts.run_patterns names {pattern!r}, which is not in artefacts.pull: a "
+                    f"declaration that nothing is pulled for would be a silent no-op. Add it to pull, "
+                    f"or drop it from run_patterns.")
 
 
 @dataclass

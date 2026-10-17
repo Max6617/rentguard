@@ -501,6 +501,11 @@ def _template(cfg: Config) -> str:
         "# Pulled when each `run` finishes and again on `down`, before the machine stops. An",
         "# instance with no network volume is a container: restart it and these files are gone.",
         'pull = ["results/**/*.json", "logs/*.log"]',
+        "# Patterns that name ONE DIRECTORY PER RUN, e.g. grok/runs/*. A declared collection",
+        "# carries only its newest directory each pull (the run just finished) and names the",
+        "# rest; `rentguard pull --all` fetches them. Undeclared patterns carry every match,",
+        "# because a glob cannot be told apart from a run's contents by its shape.",
+        "run_patterns = []",
         f"local_dir = {_toml_str(a.local_dir)}",
         f"remote_dir = {_toml_str(a.remote_dir)}",
         f"pull_timeout_s = {a.pull_timeout_s:g}    # the FLOOR of one pull's bound; the bound is the",
@@ -2825,36 +2830,36 @@ def _parse_pull_inventory(text: str, patterns: list[str]) -> list[PullEntry]:
                       bytes=merged[path]["bytes"]) for path in order]
 
 
-def _pull_selection(entries: list[PullEntry], *,
-                    all_entries: bool) -> tuple[list[PullEntry], list[PullEntry]]:
-    """What this pull carries, and what it deliberately leaves on the machine — **per pattern**.
+def _pull_selection(entries: list[PullEntry], *, all_entries: bool,
+                    run_patterns: list[str] | None = None) -> tuple[list[PullEntry], list[PullEntry]]:
+    """What this pull carries, and what it deliberately leaves on the machine.
 
-    One run is one **directory** (the measured shape: ``grok/runs/<run>``), but a config can declare
-    several such collections (``grok/runs/*`` and ``checkpoints/*`` both name a directory this run
-    wrote). The rule is therefore per pattern: each pattern that matches directories contributes its
-    **newest** entry, and every pattern's files are carried. A single global newest would carry one
-    collection and report the other as "an older run", losing part of the run just finished (attack
-    finding, 2026-10-17). ``all_entries`` is the backfill: every matched entry.
+    **Declared** run collections (`[artefacts] run_patterns`) carry only the **newest** entry — the run
+    just finished — and their older entries are named as skipped, with `pull --all` as the backstop.
+    **Undeclared** patterns carry everything they match: a glob cannot be told apart from one run's
+    contents by its shape (`grok/runs/*` and `grok/runs/run-16/*` are the same rule), and carrying the
+    wrong half of a run is the loss this tool exists to prevent (Gilbert's ruling, 2026-10-17). The
+    volume-sized bound makes carrying everything a cost rather than a failure.
 
-    Re-archiving every earlier run is the defect this rule exists to close: measured 2026-10-17, the
-    first pull of a window succeeded only because one directory existed, and the pulls after it were
-    re-sends of everything.
+    Re-archiving every earlier run was the defect this rule closes: measured 2026-10-17, the first pull
+    of a window succeeded only because one directory existed, and the pulls after it were re-sends of
+    everything. What made that safe to fix by declaration rather than by inference is that the default
+    now cannot skip anything: only a pattern the operator wrote down as a collection of runs is trimmed.
     """
+    declared = tuple(run_patterns or ())
     if all_entries:
         return list(entries), []
     chosen: set[str] = set()
-    seen_patterns: list[str] = []
-    for entry in entries:
-        for pattern in entry.patterns:
-            if pattern not in seen_patterns:
-                seen_patterns.append(pattern)
-    for pattern in seen_patterns:
+    for pattern in declared:
         directories = [entry for entry in entries
                        if entry.kind == "d" and pattern in entry.patterns]
         if directories:
             chosen.add(max(directories, key=lambda entry: (entry.mtime, entry.path)).path)
-    selected = [entry for entry in entries if entry.kind != "d" or entry.path in chosen]
-    skipped = [entry for entry in entries if entry.kind == "d" and entry.path not in chosen]
+    selected = [entry for entry in entries
+                if entry.kind != "d"
+                or entry.path in chosen
+                or not (set(entry.patterns) & set(declared))]
+    skipped = [entry for entry in entries if entry.kind == "d" and entry not in selected]
     return selected, skipped
 
 
@@ -3110,9 +3115,26 @@ def cmd_pull(args) -> int:
             emit(pulled=False, reason=reason, exit_code=inv_code, files=[],
                  detail=inv_why, timeout_s=floor)
             return 1
-        selected, skipped = _pull_selection(entries, all_entries=bool(getattr(args, "all", False)))
+        run_patterns = list(getattr(cfg.artefacts, "run_patterns", []) or [])
+        selected, skipped = _pull_selection(entries, all_entries=bool(getattr(args, "all", False)),
+                                            run_patterns=run_patterns)
         unmatched_on_machine = [pattern for pattern in patterns
                                 if not any(pattern in entry.patterns for entry in entries)]
+        # A pattern the operator did not declare as a collection of runs carries everything it
+        # matched. When that is several directories, say so where the ambiguity is created, with the
+        # count, the volume and the declaration that would trim it: silence here is how half a run's
+        # artefacts go missing later (Gilbert's ruling, 2026-10-17).
+        if not getattr(args, "all", False):
+            for pattern in patterns:
+                if pattern in run_patterns:
+                    continue
+                matched_dirs = [entry for entry in entries
+                                if entry.kind == "d" and pattern in entry.patterns]
+                if len(matched_dirs) > 1:
+                    note(f"pattern        : {pattern} matched {len(matched_dirs)} directories, "
+                         f"{_human_bytes(sum(entry.bytes for entry in matched_dirs))} — carried all "
+                         f"of them; declare it in [artefacts] run_patterns to carry only the newest "
+                         f"each pull")
         if not selected:
             note(f"pull failed: the configured patterns matched nothing on {pod.get('id')} "
                  f"({', '.join(patterns)}); the files may still be on the machine")
