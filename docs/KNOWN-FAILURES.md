@@ -773,5 +773,12 @@ tab-separated, so a filename containing a tab or newline is not supported by the
 a config whose directories are not runs would pull only the newest — `rentguard pull --all` is the
 backstop, and the `pull` line names what it skipped.
 
+**The ratchet, measured.** The first gate run after this change came in at **97.7%, under the 98.0% floor**
+(`cli.py` 97.0%, `config.py` 96.5%): the new code added failure branches faster than its tests reached them.
+It was closed with **tests, not by moving the floor** — the parser's five malformed-line shapes, the
+inventory timeout and non-zero exit, a real child killed by the measure's own bound, the config's two
+validations — and the gate then read 98.2%. That is the ratchet doing its job: a floor that is argued down
+when a change is inconvenient is not a floor.
+
 The revision of record is `6f5b16d`: 712 passed / 8 skipped / 133 subtests in both provider modes, gate
 3,670 / 3,603 statements = 98.2%, exit 0.
