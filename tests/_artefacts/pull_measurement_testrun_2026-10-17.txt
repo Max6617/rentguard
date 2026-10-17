@@ -1,0 +1,501 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.6, pytest-9.0.2, pluggy-1.6.0 -- C:\Python312\python.exe
+rootdir: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\rentguard
+configfile: pyproject.toml
+plugins: anyio-4.9.0
+collecting ... collected 73 items
+
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_a_pull_that_exceeds_its_bound_fails_and_names_the_volume_and_the_next_step PASSED [  1%]
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_a_small_pull_still_gets_the_configured_floor PASSED [  2%]
+tests/test_pull_transport.py::TheBoundIsSizedFromTheVolume::test_the_archive_bound_comes_from_this_pulls_volume PASSED [  4%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_a_file_pattern_is_not_run_bounded PASSED [  5%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_a_mixed_selection_takes_the_newest_run_and_the_files PASSED [  6%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_all_fetches_every_run PASSED [  8%]
+tests/test_pull_transport.py::ThePullCarriesOneRun::test_only_the_newest_run_is_archived PASSED [  9%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_command_that_fails_is_a_named_failure PASSED [ 10%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_that_matches_nothing_starts_no_transfer PASSED [ 12%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_inventory_that_never_returns_is_a_named_timeout PASSED [ 13%]
+tests/test_pull_transport.py::TheInventoryDecidesBeforeAnythingIsTransferred::test_an_unreadable_inventory_is_a_named_failure_not_a_wild_archive PASSED [ 15%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_line_that_is_not_five_fields_is_a_failure PASSED [ 16%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_malformed_line_is_a_failure PASSED [ 17%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_missing_terminator_is_a_failure PASSED [ 19%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_non_numeric_size_is_a_failure PASSED [ 20%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_a_pattern_index_that_does_not_exist_is_a_failure PASSED [ 21%]
+tests/test_pull_transport.py::TheInventoryProtocolIsChecked::test_blank_lines_inside_the_frame_are_ignored PASSED [ 23%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_a_zero_volume_leaves_the_floor PASSED [ 24%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_sizes_are_shown_in_units_a_person_can_check PASSED [ 26%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_the_config_refuses_a_bound_it_cannot_size PASSED [ 27%]
+tests/test_pull_transport.py::TheBoundAndItsUnits::test_the_measurement_call_is_itself_bounded PASSED [ 28%]
+tests/test_pull_unmatched.py::AnEmptyArchiveIsAFailure::test_an_archive_with_no_members_still_fails PASSED [ 30%]
+tests/test_pull_unmatched.py::MembersAreDeliveredAndTheGapIsNamed::test_a_matched_member_is_extracted_even_when_another_pattern_matched_nothing PASSED [ 31%]
+tests/test_pull_unmatched.py::MembersAreDeliveredAndTheGapIsNamed::test_a_pattern_that_matched_nothing_never_claims_a_file_that_does_not_exist PASSED [ 32%]
+tests/test_pull_unmatched.py::ThePrefixRuleOverClaims::test_a_sibling_file_under_the_prefix_hides_an_unanswered_pattern PASSED [ 34%]
+tests/test_pull_unmatched.py::ThePrefixRuleOverClaims::test_the_helper_names_a_pattern_with_no_prefix_match PASSED [ 35%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_leading_recursive_wildcard_answers_a_top_level_member PASSED [ 36%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_nested_member_is_not_answered_by_a_prefix_wildcard_pattern PASSED [ 38%]
+tests/test_pull_unmatched.py::TheMatcherInBothDirections::test_a_star_crossing_a_directory_is_a_deliberate_boundary_not_an_over_claim PASSED [ 39%]
+tests/test_pull_unmatched.py::AOneSidedMissStaysAFinding::test_members_arriving_while_one_pattern_missed_stays_a_named_finding PASSED [ 41%]
+tests/test_pull_unmatched.py::AOneSidedMissStaysAFinding::test_no_pattern_missed_means_no_finding PASSED [ 42%]
+tests/test_pull_unmatched.py::DownNamesWhatItIsAboutToLose::test_the_sentence_names_the_patterns_the_failed_pull_could_not_deliver PASSED [ 43%]
+tests/test_pull_unmatched.py::DownWithAPartialDelivery::test_a_partial_delivery_stops_the_machine_and_names_the_gap_without_claiming_a_loss PASSED [ 45%]
+tests/test_pull_unmatched.py::DownWithAPartialDelivery::test_an_empty_archive_through_down_still_stops_closes_and_names_the_patterns PASSED [ 46%]
+tests/test_pull_unmatched.py::TheSummaryIsNotFromAPreviousPull::test_a_pull_that_crashes_does_not_borrow_the_previous_pulls_delivery PASSED [ 47%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_body_that_disagrees_with_its_header_is_named PASSED [ 49%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_frame_without_its_terminator_is_named PASSED [ 50%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_a_good_frame_extracts_the_archive PASSED [ 52%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_an_empty_archive_never_reads_as_a_result PASSED [ 53%]
+tests/test_pull_frame.py::TheFrameIsCheckableOffline::test_the_21_byte_prompt_text_pull_is_named PASSED [ 54%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_down_whose_pull_delivered_nothing_names_patterns_not_paths PASSED [ 56%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_down_whose_pull_delivered_something_surfaces_the_unmatched_pattern PASSED [ 57%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_pattern_that_cannot_match_does_not_lose_the_result PASSED [ 58%]
+tests/test_pull_pattern_no_match.py::PullNoMatch::test_a_pull_that_matched_nothing_at_all_still_fails PASSED [ 60%]
+tests/test_run_pull_nothing.py::ANothingMatchedPullDoesNotFailTheRun::test_a_command_that_delivered_nothing_exits_with_the_commands_status PASSED [ 61%]
+tests/test_run_pull_nothing.py::ANothingMatchedPullDoesNotFailTheRun::test_a_failing_command_still_reports_its_own_status PASSED [ 63%]
+tests/test_run_pull_nothing.py::ABrokenPullStillFailsTheRun::test_a_timed_out_pull_is_a_failed_run PASSED [ 64%]
+tests/test_run_pull_nothing.py::RequireArtefactsIsTheStrictOptIn::test_the_flag_is_invisible_when_artefacts_arrived PASSED [ 65%]
+tests/test_run_pull_nothing.py::RequireArtefactsIsTheStrictOptIn::test_the_flag_makes_a_matched_nothing_pull_fail_the_run PASSED [ 67%]
+tests/test_pull_and_stop_bounds.py::ThePullIsBounded::test_a_pull_that_never_returns_still_stops_the_machine_and_names_the_lost_paths PASSED [ 68%]
+tests/test_pull_and_stop_bounds.py::ThePullIsBounded::test_the_pull_bound_is_the_config_value_not_a_constant PASSED [ 69%]
+tests/test_pull_and_stop_bounds.py::TheStopIsBounded::test_a_refused_stop_leaves_the_row_open_and_the_spend_visible PASSED [ 71%]
+tests/test_pull_and_stop_bounds.py::TheStopIsBounded::test_a_stop_that_blocks_escalates_to_the_provider_endpoint PASSED [ 72%]
+tests/test_pull_and_stop_bounds.py::TheBoundsAreConfigurable::test_both_bounds_arrive_from_the_config_file_a_user_writes PASSED [ 73%]
+tests/test_pull_selection_attack.py::TheSelectionTrustsTheMachine::test_a_preserved_old_mtime_hides_the_run_just_finished PASSED [ 75%]
+tests/test_pull_selection_attack.py::TheSelectionTrustsTheMachine::test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success FAILED [ 76%]
+tests/test_pull_selection_attack.py::TheTieIsBrokenByPath::test_equal_mtimes_let_run_9_beat_run_10 PASSED [ 78%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_byte_count_the_bound_cannot_convert_is_a_named_failure FAILED [ 79%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_duplicate_member_is_not_an_older_run FAILED [ 80%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_nan_mtime_lets_the_first_listed_directory_win FAILED [ 82%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_negative_byte_count_leaves_the_floor PASSED [ 83%]
+tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_an_infinity_mtime_always_wins FAILED [ 84%]
+tests/test_pull_selection_attack.py::TheOneRunRuleAcrossPatterns::test_a_directory_pattern_inside_one_run_carries_one_subdirectory FAILED [ 86%]
+tests/test_pull_selection_attack.py::TheOneRunRuleAcrossPatterns::test_two_directory_patterns_carry_only_one_directory_in_total FAILED [ 87%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_mixed_carries_every_directory_and_file PASSED [ 89%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_when_every_pattern_matched_nothing_starts_no_transfer PASSED [ 90%]
+tests/test_pull_selection_attack.py::TheAllBackfill::test_all_with_a_pattern_that_matched_nothing_still_transfers_the_rest PASSED [ 91%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused 
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused PASSED [ 93%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_rate_that_is_not_finite_is_refused FAILED [ 94%]
+tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run FAILED [ 95%]
+tests/test_pull_selection_attack.py::TheTransportFailureCannotCostMoney::test_a_timed_out_pull_is_not_a_clean_stop PASSED [ 97%]
+tests/test_pull_selection_attack.py::TheTransportFailureCannotCostMoney::test_keep_running_keeps_the_machine_up_and_says_so PASSED [ 98%]
+tests/test_pull_selection_attack.py::TheArchiveCannotWriteOutsideLocalDir::test_a_parent_member_is_refused_and_writes_nothing_outside PASSED [100%]
+
+================================== FAILURES ===================================
+_ TheSelectionTrustsTheMachine.test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success _
+
+self = <test_pull_selection_attack.TheSelectionTrustsTheMachine testMethod=test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success>
+
+    def test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success(self) -> None:
+        """Shape 3. The only open row began an hour ago; the machine's newest directory predates it
+        by two hours. That is a readable inventory naming a different run than the one in flight, and
+        the pull must not carry it as a success � the cell the run just wrote is the one that is
+        missing. (Forge's named direction: prefer entries with ``mtime >=`` the open row's start.)
+    
+        Red today: exit 0, ``pulled: true``, and ``grok/runs/run-14`` extracted into local_dir.
+        """
+        self.open_row(started_hours_ago=1)
+        now = time.time()
+        self.inventory_of(self.line(0, "d", int(now - 3 * 3600), 10 * MB, "grok/runs/run-14"))
+        self.tar_members = {"grok/runs/run-14/old.json": b"{}"}
+    
+        code, err, document = self.pull()
+    
+>       self.assertFalse(
+            code == 0 and document.get("pulled") is True,
+            f"the pull reported success carrying {document.get('selected')} while the only open run "
+            f"started an hour ago and every matched directory is older than that:\n{err}")
+E       AssertionError: True is not false : the pull reported success carrying ['grok/runs/run-14'] while the only open run started an hour ago and every matched directory is older than that:
+E       pull scope     : 1 of 1 matched entr(y/ies), 10.0 MB � bound 120s (floor 120s, 1,000,000 B/s)
+E       pulled 1 file(s) into C:\Users\besen\AppData\Local\Temp\dsh-xkRXSB\rentguard-tests\run-23100-54d6072c\30d72589a5b1428bbf640913698b3a77\artefacts
+E         grok/runs/run-14/old.json
+
+tests\test_pull_selection_attack.py:196: AssertionError
+_ TheArithmeticTrustsTheMeasurement.test_a_byte_count_the_bound_cannot_convert_is_a_named_failure _
+
+self = <test_pull_selection_attack.TheArithmeticTrustsTheMeasurement testMethod=test_a_byte_count_the_bound_cannot_convert_is_a_named_failure>
+
+    def test_a_byte_count_the_bound_cannot_convert_is_a_named_failure(self) -> None:
+        """``int(size)`` accepts an arbitrary number of digits, and the bound divides it by a float:
+        ``10**400 / 1_000_000.0`` raises ``OverflowError``. One readable inventory line therefore
+        crashes the command that sizes the pull � and `down` calls this command before it stops a
+        machine. It must be a named failure, not a traceback.
+    
+        Red today: ``OverflowError`` escapes ``cmd_pull``.
+        """
+        self.inventory_of(self.line(0, "f", 900, 10 ** 400, "results/huge.bin"))
+        self.cfg.artefacts.pull = ["results/*"]
+    
+        try:
+>           code, err, document = self.pull()
+                                  ^^^^^^^^^^^
+
+tests\test_pull_selection_attack.py:302: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\test_pull_selection_attack.py:129: in pull
+    code = cli.cmd_pull(args)
+           ^^^^^^^^^^^^^^^^^^
+cli.py:3042: in cmd_pull
+    timeout = _pull_bound(cfg, volume)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cfg = Config(provider='fake', budget=Budget(cap_usd=10.0, per_run_cap_usd=5.0, max_hours_per_run=6.0, idle_minutes=10.0, bal...ta/Local/Temp/dsh-xkRXSB/rentguard-tests/run-23100-54d6072c/ac4feb6ca9024f04ad0e489de0c368b0/.rentguard'), source=None)
+total_bytes = 100000000000000000...0000000000000000000
+
+    def _pull_bound(cfg: Config, total_bytes: int) -> float:
+        """This pull's bound: the configured floor, or the volume at the assumed throughput.
+    
+        The legacy 120 s was a constant unrelated to what was being carried; a ~700 MB run at 1 MB/s is
+        ~700 s, and the window's timeouts happened at 120 s on exactly that size. ``pull_timeout_s`` is the
+        **floor** (a small pull gets it, and it is also the allowance for connection and tar overhead), and
+        ``pull_bytes_per_second`` is the assumed throughput � conservative on purpose, because the only
+        consequence of under-estimating it is a pull that is killed while it was still arriving, and the
+        message names both numbers so the fix is one config line. The rate is validated to be positive when
+        the config loads; ``total_bytes`` of zero (a pattern that matched only empty files) leaves the floor.
+        """
+        floor = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0)
+        rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
+        if total_bytes <= 0:
+            return floor
+>       return max(floor, math.ceil(total_bytes / rate))
+                                    ^^^^^^^^^^^^^^^^^^
+E       OverflowError: int too large to convert to float
+
+cli.py:2795: OverflowError
+
+During handling of the above exception, another exception occurred:
+
+self = <test_pull_selection_attack.TheArithmeticTrustsTheMeasurement testMethod=test_a_byte_count_the_bound_cannot_convert_is_a_named_failure>
+
+    def test_a_byte_count_the_bound_cannot_convert_is_a_named_failure(self) -> None:
+        """``int(size)`` accepts an arbitrary number of digits, and the bound divides it by a float:
+        ``10**400 / 1_000_000.0`` raises ``OverflowError``. One readable inventory line therefore
+        crashes the command that sizes the pull � and `down` calls this command before it stops a
+        machine. It must be a named failure, not a traceback.
+    
+        Red today: ``OverflowError`` escapes ``cmd_pull``.
+        """
+        self.inventory_of(self.line(0, "f", 900, 10 ** 400, "results/huge.bin"))
+        self.cfg.artefacts.pull = ["results/*"]
+    
+        try:
+            code, err, document = self.pull()
+        except OverflowError as exc:
+>           self.fail(f"the bound arithmetic escaped cmd_pull as {type(exc).__name__}: {exc}")
+E           AssertionError: the bound arithmetic escaped cmd_pull as OverflowError: int too large to convert to float
+
+tests\test_pull_selection_attack.py:304: AssertionError
+_ TheArithmeticTrustsTheMeasurement.test_a_duplicate_member_is_not_an_older_run _
+
+self = <test_pull_selection_attack.TheArithmeticTrustsTheMeasurement testMethod=test_a_duplicate_member_is_not_an_older_run>
+
+    def test_a_duplicate_member_is_not_an_older_run(self) -> None:
+        """Two patterns matching the same directory (``grok/runs/*`` and the run by name) list it
+        twice. The selection keeps one object, so the other is counted and named as an *older run
+        entry* which is carried anyway: ``skipped`` says 1 while nothing was left behind.
+    
+        Red today: ``skipped`` is 2 and the prose names the delivered run among the left-behind.
+        """
+        self.cfg.artefacts.pull = ["grok/runs/*", "grok/runs/run-16"]
+        self.inventory_of(
+            self.line(0, "d", 800, 10 * MB, "grok/runs/run-15"),
+            self.line(0, "d", 900, 10 * MB, "grok/runs/run-16"),
+            self.line(1, "d", 900, 10 * MB, "grok/runs/run-16"),
+        )
+        self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
+    
+        code, err, document = self.pull()
+    
+        self.assertEqual(code, 0, err)
+        self.assertEqual(document.get("selected"), ["grok/runs/run-16"], document)
+        left_behind = err.split("left on the machine:", 1)[-1]
+>       self.assertEqual(document.get("skipped"), 1,
+                         f"one directory was carried twice and counted as skipped: {document}")
+E       AssertionError: 2 != 1 : one directory was carried twice and counted as skipped: {'command': 'pull', 'patterns': ['grok/runs/*', 'grok/runs/run-16'], 'local_dir': 'C:\\Users\\besen\\AppData\\Local\\Temp\\dsh-xkRXSB\\rentguard-tests\\run-23100-54d6072c\\b21205c778d848a19c9fae027166762f\\artefacts', 'pulled': True, 'files': ['grok/runs/run-16/out.json'], 'unmatched_patterns': ['grok/runs/run-16'], 'tar_exit_code': 0, 'volume_bytes': 10000000, 'timeout_s': 120.0, 'bytes_per_second': 1000000.0, 'selected': ['grok/runs/run-16'], 'skipped': 2}
+
+tests\test_pull_selection_attack.py:340: AssertionError
+_ TheArithmeticTrustsTheMeasurement.test_a_nan_mtime_lets_the_first_listed_directory_win _
+
+self = <test_pull_selection_attack.TheArithmeticTrustsTheMeasurement testMethod=test_a_nan_mtime_lets_the_first_listed_directory_win>
+
+    def test_a_nan_mtime_lets_the_first_listed_directory_win(self) -> None:
+        """A non-finite mtime is not a measurement, but ``float("nan")`` parses and every comparison
+        against it is false, so ``max`` keeps the *first* directory the shell listed. A machine (or a
+        broken ``stat`` wrapper) that reports ``nan`` for an older run makes that run the newest.
+    
+        The safe effect: the pull does not carry the older directory as a success. Red today.
+        """
+        self.inventory_of(
+            self.line(0, "d", "nan", 10 * MB, "grok/runs/run-a-old"),
+            self.line(0, "d", 900, 10 * MB, "grok/runs/run-z-new"),
+        )
+        self.tar_members = {"grok/runs/run-a-old/old.json": b"{}"}
+    
+        code, err, document = self.pull()
+    
+>       self.assertFalse(
+            code == 0 and document.get("pulled") is True
+            and document.get("selected") == ["grok/runs/run-a-old"],
+            f"a nan mtime selected the first-listed directory and reported success: {document}\n{err}")
+E       AssertionError: True is not false : a nan mtime selected the first-listed directory and reported success: {'command': 'pull', 'patterns': ['grok/runs/*'], 'local_dir': 'C:\\Users\\besen\\AppData\\Local\\Temp\\dsh-xkRXSB\\rentguard-tests\\run-23100-54d6072c\\a4bdbbb8b9cf4f9ba7ad5368a52a68b9\\artefacts', 'pulled': True, 'files': ['grok/runs/run-a-old/old.json'], 'unmatched_patterns': [], 'tar_exit_code': 0, 'volume_bytes': 10000000, 'timeout_s': 120.0, 'bytes_per_second': 1000000.0, 'selected': ['grok/runs/run-a-old'], 'skipped': 1}
+E       pull scope     : 1 of 2 matched entr(y/ies), 10.0 MB � bound 120s (floor 120s, 1,000,000 B/s)
+E       left on the machine: 1 older run entr(y/ies) (grok/runs/run-z-new) � `rentguard pull --all` fetches them while the machine is up
+E       pulled 1 file(s) into C:\Users\besen\AppData\Local\Temp\dsh-xkRXSB\rentguard-tests\run-23100-54d6072c\a4bdbbb8b9cf4f9ba7ad5368a52a68b9\artefacts
+E         grok/runs/run-a-old/old.json
+
+tests\test_pull_selection_attack.py:268: AssertionError
+____ TheArithmeticTrustsTheMeasurement.test_an_infinity_mtime_always_wins _____
+
+self = <test_pull_selection_attack.TheArithmeticTrustsTheMeasurement testMethod=test_an_infinity_mtime_always_wins>
+
+    def test_an_infinity_mtime_always_wins(self) -> None:
+        """``inf`` is the opposite polarity of the same defect: it parses, and it makes whichever
+        directory reports it the newest for ever, even when a run finished later with a real mtime.
+        """
+        self.inventory_of(
+            self.line(0, "d", "inf", 10 * MB, "grok/runs/run-boom"),
+            self.line(0, "d", 900, 10 * MB, "grok/runs/run-z-new"),
+        )
+        self.tar_members = {"grok/runs/run-boom/old.json": b"{}"}
+    
+        code, err, document = self.pull()
+    
+>       self.assertFalse(
+            code == 0 and document.get("pulled") is True
+            and document.get("selected") == ["grok/runs/run-boom"],
+            f"an inf mtime was accepted as the newest run: {document}\n{err}")
+E       AssertionError: True is not false : an inf mtime was accepted as the newest run: {'command': 'pull', 'patterns': ['grok/runs/*'], 'local_dir': 'C:\\Users\\besen\\AppData\\Local\\Temp\\dsh-xkRXSB\\rentguard-tests\\run-23100-54d6072c\\704e2e5fb1d1426e980ac7305bc20900\\artefacts', 'pulled': True, 'files': ['grok/runs/run-boom/old.json'], 'unmatched_patterns': [], 'tar_exit_code': 0, 'volume_bytes': 10000000, 'timeout_s': 120.0, 'bytes_per_second': 1000000.0, 'selected': ['grok/runs/run-boom'], 'skipped': 1}
+E       pull scope     : 1 of 2 matched entr(y/ies), 10.0 MB � bound 120s (floor 120s, 1,000,000 B/s)
+E       left on the machine: 1 older run entr(y/ies) (grok/runs/run-z-new) � `rentguard pull --all` fetches them while the machine is up
+E       pulled 1 file(s) into C:\Users\besen\AppData\Local\Temp\dsh-xkRXSB\rentguard-tests\run-23100-54d6072c\704e2e5fb1d1426e980ac7305bc20900\artefacts
+E         grok/runs/run-boom/old.json
+
+tests\test_pull_selection_attack.py:285: AssertionError
+_ TheOneRunRuleAcrossPatterns.test_a_directory_pattern_inside_one_run_carries_one_subdirectory _
+
+self = <test_pull_selection_attack.TheOneRunRuleAcrossPatterns testMethod=test_a_directory_pattern_inside_one_run_carries_one_subdirectory>
+
+    def test_a_directory_pattern_inside_one_run_carries_one_subdirectory(self) -> None:
+        """``grok/runs/run-16/*`` names the run's own output directories. Both belong to the run that
+        just finished; the rule still carries only the newest and calls the other an older run.
+    
+        Red today for the same reason one level down.
+        """
+        self.cfg.artefacts.pull = ["grok/runs/run-16/*"]
+        self.inventory_of(
+            self.line(0, "d", 900, 527 * MB, "grok/runs/run-16/cache"),
+            self.line(0, "d", 899, 172 * MB, "grok/runs/run-16/checkpoints"),
+        )
+        self.tar_members = {"grok/runs/run-16/cache/blob.bin": b"x"}
+    
+        code, err, document = self.pull()
+    
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+        self.assertIn("grok/runs/run-16/cache", archive, archive)
+>       self.assertIn("grok/runs/run-16/checkpoints", archive,
+                      f"a directory of the finished run was left behind: {archive}")
+E       AssertionError: 'grok/runs/run-16/checkpoints' not found in 'cd /workspace && tar czf - grok/runs/run-16/cache' : a directory of the finished run was left behind: cd /workspace && tar czf - grok/runs/run-16/cache
+
+tests\test_pull_selection_attack.py:391: AssertionError
+_ TheOneRunRuleAcrossPatterns.test_two_directory_patterns_carry_only_one_directory_in_total _
+
+self = <test_pull_selection_attack.TheOneRunRuleAcrossPatterns testMethod=test_two_directory_patterns_carry_only_one_directory_in_total>
+
+    def test_two_directory_patterns_carry_only_one_directory_in_total(self) -> None:
+        """``grok/runs/*`` and ``checkpoints/*`` each name a directory the just-finished run wrote.
+        The global newest is ``grok/runs/run-16``; ``checkpoints/step-100`` is skipped and described
+        as an older run entry, though it is part of the same run and was written seconds earlier.
+    
+        Red today: the second pattern's newest directory is not in the archive command at all.
+        """
+        self.cfg.artefacts.pull = ["grok/runs/*", "checkpoints/*"]
+        self.inventory_of(
+            self.line(0, "d", 900, 30 * MB, "grok/runs/run-16"),
+            self.line(1, "d", 899, 700 * MB, "checkpoints/step-100"),
+        )
+        self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
+    
+        code, err, document = self.pull()
+    
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+>       self.assertIn("checkpoints/step-100", archive,
+                      f"the second pattern's newest directory is not carried: {archive}")
+E       AssertionError: 'checkpoints/step-100' not found in 'cd /workspace && tar czf - grok/runs/run-16' : the second pattern's newest directory is not carried: cd /workspace && tar czf - grok/runs/run-16
+
+tests\test_pull_selection_attack.py:368: AssertionError
+_ TheBoundCannotBeSizedFromNothing.test_a_configured_floor_that_is_not_finite_is_refused (value='nan') _
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_configured_floor_that_is_not_finite_is_refused>
+
+    def test_a_configured_floor_that_is_not_finite_is_refused(self) -> None:
+        """``nan`` and ``inf`` are legal TOML floats, and the only validation is ``< 0``, which both
+        pass. With ``nan`` the bound is nan (and a nan ``wait`` never expires); with ``inf`` it is
+        infinite. A typo like ``1e999`` reaches inf.
+    
+        The effect asserted: the config is refused at load, or the bound it produces is finite.
+        """
+        for text in ("nan", "inf", "1e999"):
+            with self.subTest(value=text):
+                path = self.root / f"floor-{text}.toml"
+                path.write_text(f"[artefacts]\npull_timeout_s = {text}\n", encoding="utf-8")
+                try:
+                    cfg = config.load(path=path)
+                except ConfigError:
+                    continue
+                bound = cli._pull_bound(cfg, 0)
+>               self.assertTrue(math.isfinite(bound),
+                                f"pull_timeout_s = {text} produces a bound of {bound}")
+E               AssertionError: False is not true : pull_timeout_s = nan produces a bound of nan
+
+tests\test_pull_selection_attack.py:461: AssertionError
+_ TheBoundCannotBeSizedFromNothing.test_a_configured_floor_that_is_not_finite_is_refused (value='inf') _
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_configured_floor_that_is_not_finite_is_refused>
+
+    def test_a_configured_floor_that_is_not_finite_is_refused(self) -> None:
+        """``nan`` and ``inf`` are legal TOML floats, and the only validation is ``< 0``, which both
+        pass. With ``nan`` the bound is nan (and a nan ``wait`` never expires); with ``inf`` it is
+        infinite. A typo like ``1e999`` reaches inf.
+    
+        The effect asserted: the config is refused at load, or the bound it produces is finite.
+        """
+        for text in ("nan", "inf", "1e999"):
+            with self.subTest(value=text):
+                path = self.root / f"floor-{text}.toml"
+                path.write_text(f"[artefacts]\npull_timeout_s = {text}\n", encoding="utf-8")
+                try:
+                    cfg = config.load(path=path)
+                except ConfigError:
+                    continue
+                bound = cli._pull_bound(cfg, 0)
+>               self.assertTrue(math.isfinite(bound),
+                                f"pull_timeout_s = {text} produces a bound of {bound}")
+E               AssertionError: False is not true : pull_timeout_s = inf produces a bound of inf
+
+tests\test_pull_selection_attack.py:461: AssertionError
+_ TheBoundCannotBeSizedFromNothing.test_a_configured_floor_that_is_not_finite_is_refused (value='1e999') _
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_configured_floor_that_is_not_finite_is_refused>
+
+    def test_a_configured_floor_that_is_not_finite_is_refused(self) -> None:
+        """``nan`` and ``inf`` are legal TOML floats, and the only validation is ``< 0``, which both
+        pass. With ``nan`` the bound is nan (and a nan ``wait`` never expires); with ``inf`` it is
+        infinite. A typo like ``1e999`` reaches inf.
+    
+        The effect asserted: the config is refused at load, or the bound it produces is finite.
+        """
+        for text in ("nan", "inf", "1e999"):
+            with self.subTest(value=text):
+                path = self.root / f"floor-{text}.toml"
+                path.write_text(f"[artefacts]\npull_timeout_s = {text}\n", encoding="utf-8")
+                try:
+                    cfg = config.load(path=path)
+                except ConfigError:
+                    continue
+                bound = cli._pull_bound(cfg, 0)
+>               self.assertTrue(math.isfinite(bound),
+                                f"pull_timeout_s = {text} produces a bound of {bound}")
+E               AssertionError: False is not true : pull_timeout_s = 1e999 produces a bound of inf
+
+tests\test_pull_selection_attack.py:461: AssertionError
+_ TheBoundCannotBeSizedFromNothing.test_a_configured_rate_that_is_not_finite_is_refused _
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_configured_rate_that_is_not_finite_is_refused>
+
+    def test_a_configured_rate_that_is_not_finite_is_refused(self) -> None:
+        """``pull_bytes_per_second = nan`` passes ``<= 0``; the bound then calls ``math.ceil(nan)``,
+        which raises ``ValueError`` � a crash where a named failure belongs.
+        """
+        path = self.root / "rate-nan.toml"
+        path.write_text("[artefacts]\npull_bytes_per_second = nan\n", encoding="utf-8")
+        try:
+            cfg = config.load(path=path)
+        except ConfigError:
+            return
+        try:
+>           bound = cli._pull_bound(cfg, 700 * MB)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_pull_selection_attack.py:475: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cfg = Config(provider='runpod', budget=Budget(cap_usd=25.0, per_run_cap_usd=5.0, max_hours_per_run=6.0, idle_minutes=10.0, b...esen/AppData/Local/Temp/dsh-xkRXSB/rentguard-tests/run-23100-54d6072c/df768221b7b8455296c8f70d0cc5760c/rate-nan.toml'))
+total_bytes = 700000000
+
+    def _pull_bound(cfg: Config, total_bytes: int) -> float:
+        """This pull's bound: the configured floor, or the volume at the assumed throughput.
+    
+        The legacy 120 s was a constant unrelated to what was being carried; a ~700 MB run at 1 MB/s is
+        ~700 s, and the window's timeouts happened at 120 s on exactly that size. ``pull_timeout_s`` is the
+        **floor** (a small pull gets it, and it is also the allowance for connection and tar overhead), and
+        ``pull_bytes_per_second`` is the assumed throughput � conservative on purpose, because the only
+        consequence of under-estimating it is a pull that is killed while it was still arriving, and the
+        message names both numbers so the fix is one config line. The rate is validated to be positive when
+        the config loads; ``total_bytes`` of zero (a pattern that matched only empty files) leaves the floor.
+        """
+        floor = float(getattr(cfg.artefacts, "pull_timeout_s", 120.0) or 0.0)
+        rate = float(getattr(cfg.artefacts, "pull_bytes_per_second", 1_000_000.0) or 0.0)
+        if total_bytes <= 0:
+            return floor
+>       return max(floor, math.ceil(total_bytes / rate))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot convert float NaN to integer
+
+cli.py:2795: ValueError
+
+During handling of the above exception, another exception occurred:
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_configured_rate_that_is_not_finite_is_refused>
+
+    def test_a_configured_rate_that_is_not_finite_is_refused(self) -> None:
+        """``pull_bytes_per_second = nan`` passes ``<= 0``; the bound then calls ``math.ceil(nan)``,
+        which raises ``ValueError`` � a crash where a named failure belongs.
+        """
+        path = self.root / "rate-nan.toml"
+        path.write_text("[artefacts]\npull_bytes_per_second = nan\n", encoding="utf-8")
+        try:
+            cfg = config.load(path=path)
+        except ConfigError:
+            return
+        try:
+            bound = cli._pull_bound(cfg, 700 * MB)
+        except ValueError as exc:
+>           self.fail(f"pull_bytes_per_second = nan makes the bound arithmetic raise: {exc}")
+E           AssertionError: pull_bytes_per_second = nan makes the bound arithmetic raise: cannot convert float NaN to integer
+
+tests\test_pull_selection_attack.py:477: AssertionError
+_ TheBoundCannotBeSizedFromNothing.test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run _
+
+self = <test_pull_selection_attack.TheBoundCannotBeSizedFromNothing testMethod=test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run>
+
+    def test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run(self) -> None:
+        """``pull_timeout_s = 0`` is documented as "no floor, pure volume". A selection of empty
+        files measures zero bytes, so the bound is zero and the child is killed the instant it is
+        started: a pull that would have succeeded cannot. The bound must still allow a transfer.
+    
+        Red today: ``_pull_bound(cfg, 0)`` is 0.0.
+        """
+        cfg = Config(artefacts=Artefacts(pull_timeout_s=0.0, pull_bytes_per_second=1_000_000.0))
+        bound = cli._pull_bound(cfg, 0)
+>       self.assertGreater(bound, 0.0,
+                           "a zero-byte pull at a zero floor gets a zero-second bound; the child is "
+                           "killed before it can exit")
+E       AssertionError: 0.0 not greater than 0.0 : a zero-byte pull at a zero floor gets a zero-second bound; the child is killed before it can exit
+
+tests\test_pull_selection_attack.py:489: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_pull_selection_attack.py::TheSelectionTrustsTheMachine::test_a_readable_inventory_older_than_the_open_run_is_not_a_silent_success
+FAILED tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_byte_count_the_bound_cannot_convert_is_a_named_failure
+FAILED tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_duplicate_member_is_not_an_older_run
+FAILED tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_a_nan_mtime_lets_the_first_listed_directory_win
+FAILED tests/test_pull_selection_attack.py::TheArithmeticTrustsTheMeasurement::test_an_infinity_mtime_always_wins
+FAILED tests/test_pull_selection_attack.py::TheOneRunRuleAcrossPatterns::test_a_directory_pattern_inside_one_run_carries_one_subdirectory
+FAILED tests/test_pull_selection_attack.py::TheOneRunRuleAcrossPatterns::test_two_directory_patterns_carry_only_one_directory_in_total
+SUBFAILED(value='nan') tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused
+SUBFAILED(value='inf') tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused
+SUBFAILED(value='1e999') tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_floor_that_is_not_finite_is_refused
+FAILED tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_configured_rate_that_is_not_finite_is_refused
+FAILED tests/test_pull_selection_attack.py::TheBoundCannotBeSizedFromNothing::test_a_zero_floor_with_a_zero_byte_selection_still_has_time_to_run
+======================== 12 failed, 64 passed in 7.19s ========================
