@@ -595,7 +595,8 @@ def cmd_doctor(args) -> int:
     name = provider_name(cfg)
     open_run = ledger.open_run()
     readings = heartbeat_readings(cfg.heartbeat_path)
-    guard_line, guard_facts = _guard_report(readings[0] if readings else None)
+    guard_reading = readings[0] if readings else None
+    _, guard_facts = _guard_report(guard_reading)
     findings: list[Finding] = []
     # A crashed guard beside a live one is a protection **redundancy** loss: something was watching and
     # now nothing is, while the verdict line — correctly — still reports the live guard. It is a warn,
@@ -615,11 +616,12 @@ def cmd_doctor(args) -> int:
     # be visible here, because this is the one place a Bot or a person looks before renting, and a
     # refusal discovered only by trying to rent is a refusal discovered at the worst moment.
     if not cfg.allow_renting:
+        reason = (cfg.renting_disabled_reason or "").strip()
         findings.append(Finding(
             code="renting-disabled", severity="warn",
             message=f"this config refuses to rent (allow_renting = false): "
-                    f"{(cfg.renting_disabled_reason or '').strip() or 'it gives no reason'}. "
-                    f"`up` and `adopt` will refuse; `doctor`, `ledger`, `status` and `down` still work"))
+                    f"{reason or 'it gives no reason'} — `up` and `adopt` will refuse; `doctor`, "
+                    f"`ledger`, `status` and `down` still work"))
     with json_report(args):
         emit(command="doctor", version=__version__,
              config=str(cfg.source) if cfg.source else None,
@@ -668,16 +670,27 @@ def cmd_doctor(args) -> int:
         emit(malformed_ledger_lines=malformed)
 
         emit(guard=guard_facts)
-        note(f"guard heartbeat: {guard_line}")
-        set_line = _guard_set_line(readings)
-        if set_line is not None:
-            # Diagnostics, not a second verdict: the line above is the reading a caller gates on, and
-            # this one exists because a crashed guard beside a live one is otherwise invisible.
-            note(f"guard set      : {set_line}")
+
+        def note_guard(billing: bool | None = None) -> None:
+            """Print the verdict line (and the set beside it) once the account's state is known.
+
+            It is a function because the line's **tail** depends on whether anything is billing, and
+            the account cannot be listed until the provider is built — which the no-key branch below
+            never reaches. That branch prints the line with ``billing=None``, the safe direction: an
+            account nobody could inspect may be billing.
+            """
+            line, _ = _guard_report(guard_reading, billing=billing)
+            note(f"guard heartbeat: {line}")
+            set_line = _guard_set_line(readings)
+            if set_line is not None:
+                # Diagnostics, not a second verdict: the line above is the reading a caller gates on,
+                # and this one exists because a crashed guard beside a live one is otherwise invisible.
+                note(f"guard set      : {set_line}")
 
         if name != "fake" and not api_key():
             findings.append(Finding(code="no-api-key", severity="error",
                                     message="no API key: the account cannot be inspected"))
+            note_guard()
             note("")
             for finding in findings:
                 note(f"  {finding.severity.upper():<5} {finding.code}: {finding.message}")
@@ -737,6 +750,10 @@ def cmd_doctor(args) -> int:
                   + (f"  name={pod.get('name')!r}" if pod.get("name") else ""))
         if not billing:
             note("  (nothing is billing)")
+        # The verdict line goes here, after the account has been read, so its tail can be true: an
+        # account with nothing billing must not say a missing guard is a machine about to spend. A
+        # listing that failed leaves the fact unestablished, and the warning stands.
+        note_guard(None if pods_error else bool(billing))
 
         # The money figure, now that the provider can witness the open run. One figure with its parts
         # named: closed rows are *recorded*, the open run is *accruing*, and the cap is enforced
@@ -901,7 +918,8 @@ def cmd_status(args) -> int:
     provider = _provider(cfg)
     open_run = ledger.open_run()
     pod = _pod(provider, cfg)
-    guard_line, guard_facts = _guard_report(heartbeat_reading(cfg.heartbeat_path))
+    guard_reading = heartbeat_reading(cfg.heartbeat_path)
+    _, guard_facts = _guard_report(guard_reading)
     with json_report(args):
         emit(command="status", provider=provider_name(cfg),
              recorded_instance_id=_read_state(cfg).get("instance_id"),
@@ -987,6 +1005,10 @@ def cmd_status(args) -> int:
         elif snap.pricing_unknown:
             line += "  (a lower bound: this machine's own price could not be established)"
         note(line)
+        # The tail follows the machine: a stopped instance cannot bill, so the missing guard is not a
+        # warning about money. `billing=None` for any state that is not established keeps the warning.
+        billing = False if stopped else (True if is_billing(snap.status) else None)
+        guard_line, _ = _guard_report(guard_reading, billing=billing, instance_status=str(snap.status))
         note(f"guard          : {guard_line}")
         emit(instance={"id": pod.get("id"), "status": snap.status,
                        "gpu": (pod.get("gpu") or {}).get("id"),
@@ -1946,7 +1968,8 @@ def cmd_watch(args) -> int:
     return 0
 
 
-def _guard_report(reading) -> tuple[str, dict]:
+def _guard_report(reading, *, billing: bool | None = None,
+                  instance_status: str | None = None) -> tuple[str, dict]:
     """The guard's line and its structured form, from one reading: the verdict is the **process**.
 
     ``alive`` needs the writer's own mark *and* a running pid (Gilbert's ruling, 2026-10-16); the age
@@ -1954,25 +1977,42 @@ def _guard_report(reading) -> tuple[str, dict]:
     and a heartbeat nobody ever wrote are three sentences, because they are three different facts —
     and the one they used to share, `alive`, was the false one.
 
+    **The tail follows the machine, not the guard** (Gilbert's ruling, 2026-10-20). "Nothing is watching
+    this instance, so it will bill until someone stops it" was written when a missing guard always meant
+    a live machine, and it printed that sentence directly above `machine : stopped (EXITED) — nothing is
+    billing for it now`: two adjacent lines contradicting each other, on the read path people use after
+    a stop. ``billing`` is the caller's fact — ``False`` for an instance the provider reports terminal,
+    ``True`` for one that is billing, ``None`` when it could not be established — and only ``False``
+    replaces the warning. An unestablished state keeps the warning: the safe direction for a machine
+    nobody has looked at is "it may still be billing".
+
     The **set** is deliberately not part of this form. It was built here and then reverted
     (2026-10-16) when Gilbert stepped back from his own "the set goes beside it in `facts`" wording: the
     diagnostic need is met by `doctor`'s one set line and by the **warn** its findings list carries for a
     crashed guard, and a schema change for a diagnostic is not worth the surface it adds. `guard` in
-    JSON stays the one reported reading — the reading `armed` and the cap are computed from.
+    JSON stays the one reported reading — the reading `armed` and the cap are computed from. The same
+    rule applies to ``billing``: it changes a sentence and adds **no** key, because `status` already
+    carries `instance.status` and a reader can compare the two.
     """
+    def tail() -> str:
+        if billing is False:
+            return (f"and it has stopped ({instance_status}), so nothing is billing"
+                    if instance_status else "and nothing is billing on the account")
+        return "so it will bill until someone stops it"
+
     if reading is None:
-        return ("NO GUARD — nothing is watching this instance, so it will bill until someone stops it",
+        return (f"NO GUARD — nothing is watching this instance, {tail()}",
                 {"heartbeat_age_minutes": None, "stale": True, "pid": None, "running": False,
                  "ended": None})
     facts = {"heartbeat_age_minutes": reading.age_minutes, "stale": reading.stale,
              "pid": reading.pid, "running": reading.running, "ended": reading.ended}
     if reading.ended:
         return (f"finished (last heartbeat {reading.age_minutes:.1f} min ago) — nothing is watching "
-                f"this instance, so it will bill until someone stops it", facts)
+                f"this instance, {tail()}", facts)
     if not reading.running:
         return (f"not running (pid {reading.pid} is gone; last heartbeat "
-                f"{reading.age_minutes:.1f} min ago) — nothing is watching this instance, so it will "
-                f"bill until someone stops it", facts)
+                f"{reading.age_minutes:.1f} min ago) — nothing is watching this instance, {tail()}",
+                facts)
     if reading.age_minutes > GUARD_STALE_MINUTES:
         return (f"running (pid {reading.pid}) but silent for {reading.age_minutes:.1f} min — probably "
                 f"wedged", facts)

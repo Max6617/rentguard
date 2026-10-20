@@ -904,3 +904,39 @@ stops a live machine with the flag off.
 The MCP descriptions of `rentguard_start` and `rentguard_adopt` name the refusal, so a Bot reads the
 behaviour in the tool it is about to call.
 
+## A missing guard said "it will bill" on a machine that had stopped (fixed)
+
+Measured 2026-10-20 in the window root, minutes after the one-cell window closed — two adjacent lines of
+one `status` run:
+
+```
+machine        : stopped (EXITED) — nothing is billing for it now
+guard          : finished (last heartbeat 32.2 min ago) — nothing is watching this instance,
+                 so it will bill until someone stops it
+```
+
+The second sentence was written when "no guard" always meant a live machine. A stop is the **normal end**
+of a rental, and `status` (after a stop) and `doctor` (before the next rent) are exactly the read paths
+people and Bots use at that moment. The same class as the false pull note closed in the transport lane: a
+message that was true of the state it was written for, printed in a state it was not.
+
+**The fix: the tail follows the machine.** `_guard_report` takes the caller's billing fact — `False` for a
+status the provider reports terminal, `True` for one that is billing, `None` when it could not be
+established — and only `False` replaces the warning, with *"and it has stopped (EXITED), so nothing is
+billing"*. `None` keeps the warning, because a machine nobody could look at may still be spending.
+
+- `status` reads the instance it already has and passes that fact.
+- `doctor` now prints its verdict line **after** listing the account, which is what lets the tail be true
+  there (*"and nothing is billing on the account"*). The no-API-key branch, which cannot list anything,
+  prints it with the fact unestablished — the safe direction.
+- The structured `guard` document is **unchanged**: `status` already carries `instance.status`, and a
+  sentence is not worth a schema change (the same step-back as the heartbeat-set keys, 2026-10-16).
+
+**The tests** are `tests/test_guard_line_truth.py`, 7 cases, red first — 3 failed before the change (the
+stopped machine with no guard, the stopped machine with a finished guard, the stopped account), 4 passed
+and still pin the controls: a billing machine keeps "will bill until someone stops it", with no guard and
+with a finished one, and the `guard` document's keys are unchanged. The live run confirms it: the stage-0
+root now reads *"finished (last heartbeat 35.7 min ago) — nothing is watching this instance, and it has
+stopped (EXITED), so nothing is billing"*, and the decoy root's `doctor` reads *"nothing is billing on the
+account"*.
+
