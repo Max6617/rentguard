@@ -2,10 +2,12 @@
 
 Defects, each with a reproduction. A fixed defect stays here as the record: the reproduction is the
 evidence that the test which closes it is testing something real, and the fix commit is named. Entries
-say where they stand at the revision this file describes, **`1014ade`** (2026-10-16).
+are **chronological**, and each ends with the revision it was fixed at and the measurement that closed
+it; this file is not pinned to one revision, because a defect record that stopped at an old tip would
+stop being true.
 
-Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at
-`1014ade` unless the entry says otherwise.
+Where a commit is cited, it is the commit that fixed the defect; where a test is cited, it passes at the
+revision of record its own entry names.
 
 ## F-5 — the guard can stop a freshly started machine as "idle" (fixed)
 

@@ -55,11 +55,11 @@ A client entry looks like this:
 | `rentguard_status` | read-only | instance, GPU, uptime, this run's cost, total against the cap, guard heartbeat |
 | `rentguard_ledger` | read-only | every rental with wall clock and cost, and the total |
 | `rentguard_doctor` | read-only | config, key, recorded spend, heartbeat, and live instances with no ledger row |
-| `rentguard_start` | **spends** | rent or resume an instance; refuses when recorded spend reaches the cap |
+| `rentguard_start` | **spends** | rent or resume an instance; refuses when recorded spend reaches the cap, and refuses outright when the config sets `allow_renting = false` |
 | `rentguard_run` | uses a rented machine | run a shell command remotely over ssh, then pull artefacts if configured; its result carries the command's `exit_code` and its output (`stdout`, `stderr`, the byte counts, and a `truncated` flag when the tail was cut) |
 | `rentguard_pull` | reads from the machine | pull the configured artefact patterns now |
 | `rentguard_stop` | stops spend | stop the instance and close the ledger row with its cost |
-| `rentguard_adopt` | records spend | give an already-running instance a ledger row, backdated from its uptime |
+| `rentguard_adopt` | records spend | give an already-running instance a ledger row, backdated from its uptime; also refused when the config sets `allow_renting = false` |
 | `rentguard_watch_once` | stops spend if the decision says so | one poll: the guard's decision, and whether a guard was already armed |
 | `rentguard_watch` | stops spend if the decision says so | a bounded guard: poll up to `max_iterations` times, then return |
 | `rentguard_init` | writes a file, or prints | write or print the commented config template |
@@ -68,6 +68,14 @@ Arguments: `rentguard_start` needs `purpose` (optional `gpu`); `rentguard_run` n
 (optional `workdir`); `rentguard_adopt` needs `instance_id` (optional `purpose`, `uptime_hours`);
 `rentguard_watch_once` takes `interval`; `rentguard_watch` takes `max_iterations` (default 1) and
 `interval`; `rentguard_init` takes `path`, `force` and `print`. Everything else takes no arguments.
+
+**A config can close the door.** The tools resolve `./rentguard.toml` from the directory the server was
+started in, which is not always the project you meant. A config that sets `allow_renting = false` (with
+`renting_disabled_reason` for the message) makes `rentguard_start` and `rentguard_adopt` refuse **before a
+provider is built or a row opened**: the call comes back as an error naming that config file and its
+reason, with `action: "refused"` and `reason: "renting-disabled"` in the structured result, and nothing is
+spent. `rentguard_doctor`, `ledger`, `status` and — importantly — `stop` are never gated by it, so a
+machine that is already billing can always be stopped from wherever you are.
 
 ## Arming the guard from a Bot
 
