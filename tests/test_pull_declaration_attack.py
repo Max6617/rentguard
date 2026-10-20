@@ -10,11 +10,16 @@ named by both a declared and an undeclared pattern; ``--all`` with a declared co
 inventory; a declaration for a pattern whose matches are only files; and whether the "carried all of
 them" note can be wrong when one directory is named by two patterns.
 
-Found: **the "carried all of them" note can be false.** With two patterns matching the same two
-directories, one declared and one not, the declared one trims the older directory — and the
-undeclared one's note still says it "matched 2 directories … carried all of them", while the pull has
-left one of them on the machine. The note exists to make an ambiguity auditable; a false one is worse
-than no note.
+Found at ``cb7153e``: **a path matched by both a declared and an undeclared pattern is trimmed, and
+the note then says it was not.** With ``pull = ["grok/runs/*", "grok/runs/run-1*"]`` and
+``run_patterns = ["grok/runs/*"]``, the declared pattern trims ``run-15`` while the undeclared
+pattern's note says "matched 2 directories … carried all of them" — and the same pull prints "1 of 2
+matched" and names ``run-15`` as left on the machine.
+
+Gilbert's ruling (2026-10-17) is that the shared path is **carried**, with the reason named: carrying
+honours both contracts (it is the newest of the collection *and* everything the undeclared pattern
+matched), it cannot lose data, and the volume-sized bound makes the cost visible. The two tests below
+assert that ruling: red at ``cb7153e`` (pre-ruling), green from ``a1c2ca5``.
 
 Recorded rather than demanded:
 
@@ -27,6 +32,7 @@ Recorded rather than demanded:
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import io
 import json
 import re
@@ -132,12 +138,18 @@ class DeclarationCase(unittest.TestCase):
 
 
 class TheTwoContractsMeetOnOnePath(DeclarationCase):
+    """Gilbert's ruling (2026-10-17): a path matched by **both** a declared collection and an
+    undeclared pattern is **carried**, with the reason named. Carrying honours both contracts — it is
+    the newest of the collection *and* everything the undeclared pattern matched — it cannot lose
+    data, and the volume-sized bound makes the cost visible. The tests here are red at ``cb7153e``,
+    where the declaration trims the shared path and the note claims otherwise."""
+
     def setUp(self) -> None:
         super().setUp()
         self.cfg.artefacts.pull = ["grok/runs/*", "grok/runs/run-1*"]
         self.cfg.artefacts.run_patterns = ["grok/runs/*"]
-        # Both patterns match both runs: the declared collection trims, the undeclared one promises
-        # everything it matches.
+        # Both patterns match both runs: the declared collection would trim to the newest, the
+        # undeclared one promises everything it matches.
         self.inventory_of(
             self.line(0, "d", 900, 10 * MB, "grok/runs/run-16"),
             self.line(0, "d", 800, 10 * MB, "grok/runs/run-15"),
@@ -146,29 +158,35 @@ class TheTwoContractsMeetOnOnePath(DeclarationCase):
         )
         self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
 
-    def test_the_shared_path_is_trimmed_by_the_declaration_characterisation(self) -> None:
-        """Recorded, not demanded: when a path is named by both a declared and an undeclared pattern,
-        the declared one wins and the older directory is left on the machine. The two contracts
-        conflict here; this pins which one the code chose."""
+    def test_a_shared_path_is_carried_with_the_reason_named(self) -> None:
+        """The ruling: carry it, and say why. Nothing is left on the machine for a pattern that
+        promised everything it matched."""
         code, err, document = self.pull()
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(document.get("selected"), ["grok/runs/run-16"], document)
-        self.assertEqual(document.get("skipped"), 1, document)
-        self.assertIn("run-15", err, f"the trimmed run is not named:\n{err}")
+        self.assertEqual(set(document.get("selected")),
+                         {"grok/runs/run-16", "grok/runs/run-15"}, document)
+        self.assertEqual(document.get("skipped"), 0, document)
+        self.assertNotIn("left on the machine", err, f"a shared path was skipped:\n{err}")
+        reasons = [line for line in err.splitlines()
+                   if re.search(r"(?i)(declared|run_patterns|undeclared)", line)]
+        self.assertTrue(reasons, f"the shared path is carried but no note names why:\n{err}")
 
-    def test_the_carried_all_note_is_false_when_a_shared_path_is_skipped(self) -> None:
-        """The undeclared pattern ``grok/runs/run-1*`` matched two directories, and the pull carried
-        one. The note says "matched 2 directories … carried all of them", which is false; the older
-        run is still on the machine. A note that overstates what was carried is how a real skip
-        becomes invisible."""
+    def test_the_carried_all_note_is_true_for_every_pattern(self) -> None:
+        """The count in each "matched N directories" note is the number of those directories the pull
+        actually carried. A note that overstates it is the false statement this file exists to stop."""
         code, err, document = self.pull()
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(document.get("skipped"), 1, document)
-        self.assertNotIn("carried all of them", err,
-                         f"the note says every match was carried while {document.get('skipped')} "
-                         f"was left on the machine:\n{err}")
+        selected = list(document.get("selected") or [])
+        notes = re.findall(r"pattern\s*: (\S+) matched (\d+) directories", err)
+        if not notes:      # a fix may suppress the note; then it cannot be false
+            return
+        for pattern, count in notes:
+            carried = [path for path in selected if fnmatch.fnmatch(path, pattern)]
+            self.assertEqual(int(count), len(carried),
+                             f"the note says {pattern} matched {count} directories, and the pull "
+                             f"carried {len(carried)} of them: {err}")
 
 
 class TheDeclarationAppliesToDirectoriesOnly(DeclarationCase):

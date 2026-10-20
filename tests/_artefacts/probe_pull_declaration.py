@@ -29,11 +29,13 @@ entries = [
     cli.PullEntry(patterns=("grok/runs/*", "grok/runs/run-1*"), path="grok/runs/run-15",
                   kind="d", mtime=800, bytes=10_000_000),
 ]
-selected, skipped = cli._pull_selection(entries, all_entries=False,
+selected, skipped, overlap = cli._pull_selection(entries, all_entries=False,
                                         run_patterns=["grok/runs/*"])
 print("selected:", [e.path for e in selected])
 print("skipped :", [e.path for e in skipped])
-print("(the note printed beside this says 'matched 2 directories, 20.0 MB - carried all of them')")
+print("carried because of the undeclared pattern:", [e.path for e in overlap])
+print("(the ruling: a path named by both is carried with the reason named, so the note is true;")
+print(" at cb7153e, before the ruling, the declared pattern trimmed run-15 and the note was false)")
 print()
 
 print("== a declared pattern whose matches are only files ==")
@@ -41,7 +43,7 @@ files = [cli.PullEntry(patterns=("results/*",), path="results/latest.json", kind
                        bytes=100),
          cli.PullEntry(patterns=("results/*",), path="results/older.json", kind="f", mtime=800,
                        bytes=100)]
-selected, skipped = cli._pull_selection(files, all_entries=False, run_patterns=["results/*"])
+selected, skipped, overlap = cli._pull_selection(files, all_entries=False, run_patterns=["results/*"])
 print("selected:", [e.path for e in selected], "skipped:", [e.path for e in skipped])
 print()
 
@@ -50,7 +52,7 @@ mixed = [cli.PullEntry(patterns=("results/*",), path="results/latest.json", kind
                        bytes=100),
          cli.PullEntry(patterns=("results/*",), path="results/run-old", kind="d", mtime=800,
                        bytes=5000)]
-selected, skipped = cli._pull_selection(mixed, all_entries=False, run_patterns=["results/*"])
+selected, skipped, overlap = cli._pull_selection(mixed, all_entries=False, run_patterns=["results/*"])
 print("selected:", [e.path for e in selected], "skipped:", [e.path for e in skipped])
 print()
 

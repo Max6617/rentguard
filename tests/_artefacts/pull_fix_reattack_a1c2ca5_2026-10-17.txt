@@ -1,0 +1,30 @@
+﻿package: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt-carry\rentguard\cli.py
+
+== PTY archive command: the selected path, as tar receives it ==
+pty command   : cd /workspace && tar czf /tmp/.rentguard-pull-$$.tar.gz -- grok/runs/run-16; rc=$?; if [ $rc -eq 0 ]; then base64 /tmp/.rentguard-pull-$$.tar.gz | tr -d '\n' > /tmp/.rentguard-pull-$$.b64; printf 'RENTGUARD-ARCHIVE %s\n' "$(wc -c < /tmp/.rentguard-pull-$$.b64)"; cat /tmp/.rentguard-pull-$$.b64; printf '\nRENTGUARD-END\n'; fi; rm -f /tmp/.rentguard-pull-$$.tar.gz /tmp/.rentguard-pull-$$.b64; exit $rc
+direct command: cd /workspace && tar czf - -- grok/runs/run-16
+pty members   : ['grok/runs/run-16']
+direct members: ['grok/runs/run-16']
+tar on pty members: rc= 0 stderr= []
+tar on direct     : rc= 0 stderr= 
+
+== the pattern validation: a trailing newline ==
+            plain: accepted
+ trailing newline: refused - artefacts pattern 'grok/runs/*\n' contains chara
+          a space: refused - artefacts pattern 'my results/*' contains charac
+inventory command with the newline pattern:
+'RG_PULL_INVENTORY=1; cd /workspace || exit 3; printf \'RG-PULL-INVENTORY 1\\n\'; i=0; for pattern in grok/runs/*\n; do   for entry in $pattern; do     [ -e "$entry" ] || continue;     if [ -d "$entry" ]; then       printf \'%s\\td\\t%s\\t%s\\t%s\\n\' "$i" "$(stat -c %Y -- "$entry")" "$(du -sb -- "$entry" | cut -f1)" "$entry";     else       printf \'%s\\tf\\t%s\\t%s\\t%s\\n\' "$i" "$(stat -c %Y -- "$entry")" "$(stat -c %s -- "$entry")" "$entry";     fi;   done;   i=$((i + 1)); done; printf \'RG-PULL-END\\n\''
+
+== the declaration: undeclared carries everything, declared trims ==
+python : Traceback (most recent call last):
+In Zeile:1 Zeichen:465
++ ... probe ==="; python tests\_artefacts\probe_pull_fix_reattack.py 2>&1 | ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt-carry\rentguard\tests\_artefacts\probe_pull_fix_reatta
+ck.py", line 83, in <module>
+    selected, skipped = cli._pull_selection(entries, all_entries=False)
+    ^^^^^^^^^^^^^^^^^
+ValueError: too many values to unpack (expected 2)
