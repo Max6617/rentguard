@@ -111,7 +111,13 @@ class ACrashLoopIsWatched(UpCase):
         self.assertIn(("fake-1", "stop"), provider.actions,
                       f"the machine was left billing:\n{text}")
         self.assertNotEqual(code, 0, f"a machine that never became usable exited 0:\n{text}")
-        self.assertLess(elapsed, 15.0,
+        # The wait guard's own interval is 15 s (``_start_wait_guard``'s default), so its first stop
+        # lands at ~15 s and a bound of *exactly* 15 s measures the scheduler, not the guard: measured
+        # on the 3.11 CI runner 2026-10-20, 15.043 s — a red on a green tree, 43 ms over. Two intervals
+        # is the honest bound: the defect this case exists for is "nothing was watching", where `up`
+        # waits for `wait_running`'s own 12-minute timeout, so 30 s still catches it with hours to
+        # spare, and a scheduling delay can no longer decide the verdict.
+        self.assertLess(elapsed, 30.0,
                         f"`up` waited {elapsed:.1f}s: the guard did not stop the crash loop")
 
     def test_a_usable_machine_still_returns_success(self) -> None:
