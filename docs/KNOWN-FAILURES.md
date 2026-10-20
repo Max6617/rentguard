@@ -817,3 +817,49 @@ is the last line, as it was for the money and protection paths. And the **proxy 
 software**, so the only part of it still open is **hardware** — which waits on a proxy-capable card, not on
 code.
 
+## The inventory's loop globbed the pattern list, so a two-run pull refused itself (fixed)
+
+Measured on the one-cell window of **2026-10-20**, row `20261020T201419Z-86bd08` on `xq0erlbviao6ye`:
+**0.7024 h, $0.625225**, stopped by `down` and confirmed against the listing. The cell **trained fully**
+(629 of 629 cache blocks, 51.6 steps/s) and **lost its artefacts**, because the pull carried nothing and
+`down` — which stops the machine by default after a failed pull — took the machine with it.
+
+`_pull_inventory_command` built `for pattern in {members}` with `members = " ".join(patterns)`, **unquoted**.
+The shell therefore expanded the pattern list *before* the loop ran. On the shape `grok/runs/*` that is one
+iteration **per matched directory**, each tagged with an increasing index, while `_parse_pull_inventory`
+accepts only `index < len(patterns)`. One match — the smoke window — gave index 0 of 1 and passed. Two
+matches gave index 1 of 1, and the pull refused: *"an inventory line names pattern 1, and only 1 are
+configured"*. Nothing was transferred, no archive was built, and the answer was right about the data it had
+and wrong about the machine: the index was a *path's* position where the parser reads a *pattern's*.
+
+So every config whose pattern matched two or more entries pulled nothing — that is, the **second run
+onwards** in any window. The refusal was the safe direction (a failure, not a wrong archive); what it cost
+was the run.
+
+**Why no test caught it.** Every inventory test **faked the inventory lines**; nothing ever ran the command
+that was built. This is the second defect from that family in this lane — the PTY double join at `0ebf95b`
+was the first — and the same test shape let both through: inspect the string, never execute it. The string
+*was* inspected, and it was legal shell; only the shell's expansion order made it wrong.
+
+**The fix.** `members = " ".join(shlex.quote(pattern) for pattern in patterns)`: the outer loop iterates the
+configured patterns **literally**, one iteration per pattern, so the printed index is the pattern's
+position. The inner `for entry in $pattern` stays **unquoted on purpose** — that is where the glob belongs,
+and by the time it runs the index is already the pattern's. Quoting both sides would match nothing.
+
+**The tests, and the shape that would have caught it.** `tests/test_pull_inventory_runs.py`:
+- four cases **execute** the real command in a real POSIX shell against a scratch tree with **two matches**,
+  then feed its stdout to `_parse_pull_inventory`: two matches of one pattern both read as pattern 0; two
+  patterns with four matches keep their own positions; a pattern that matches nothing contributes no line;
+  a member whose name contains a space comes back whole.
+- a shell-free case pins the same defect where no POSIX shell runs: the loop's members are the patterns
+  **quoted**, one word per pattern, and the inner expansion still globs. A string assertion cannot see the
+  shell expand, but it can see whether the shell was given the chance.
+
+The executed cases skip on this host (the sandbox refuses Git Bash and WSL) and run on the CI runners, the
+same split as the archive command; the shell-free case is red before the fix and green after it, so neither
+side can lose this one silently.
+
+**Boundary, unchanged and named:** the inventory needs a POSIX `sh` with GNU `stat` and `du`; a machine that
+cannot answer names `inventory-unreadable` instead of transferring, and a size or time that is not a
+measurement is refused rather than used.
+

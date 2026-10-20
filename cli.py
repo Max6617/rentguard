@@ -2748,8 +2748,18 @@ def _pull_inventory_command(remote_dir: str, patterns: list[str]) -> str:
     Both this and the archive assume a Linux container: GNU ``tar`` was already required, and
     ``stat -c``/``du -sb`` are its siblings. The frame is what makes the answer readable on a PTY
     route, where prompt text and the command's echo share the stream.
+
+    **The loop's members are quoted; the inner expansion is not.** The outer loop iterates the
+    configured patterns *literally*, so the index it prints is the pattern's position. Joining them
+    unquoted let the shell expand the pattern list *before* the loop ran: ``grok/runs/*`` became one
+    iteration per matched directory, each tagged with an increasing index, and the parser — which
+    accepts only ``index < len(patterns)`` — refused the answer (measured 2026-10-20: two matches made
+    the second line name pattern 1 of 1, the pull transferred nothing, and ``down`` stopped the pod;
+    $0.625225 and the cell's artefacts). The inner ``for entry in $pattern`` stays unquoted on purpose:
+    that is where the glob belongs, and by then the index is already the pattern's. Quoting both sides
+    would match nothing.
     """
-    members = " ".join(patterns)
+    members = " ".join(shlex.quote(pattern) for pattern in patterns)
     return (
         f"{PULL_INVENTORY_MARKER}; cd {remote_dir} || exit 3; "
         f"printf '{PULL_INVENTORY_HEADER}\\n'; i=0; "
