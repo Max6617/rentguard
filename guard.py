@@ -520,7 +520,12 @@ def pid_running(pid: int | None, *, kill=os.kill) -> bool:
         return False
     except PermissionError:
         return True
-    except (OSError, OverflowError):
+    except (OSError, OverflowError, SystemError):
+        # os.kill can raise SystemError for a pid the host answers badly ('<class OSError> returned a
+        # result with an exception set'): measured on this host 2026-10-20, pid 26896, during a live
+        # window, which took doctor and status down — the two commands a person uses to ask *is
+        # anything billing*. A probe that failed is not proof of life, so it reads as gone with the
+        # rest of them.
         return False
     return True
 
