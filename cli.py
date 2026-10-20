@@ -3136,10 +3136,17 @@ def cmd_pull(args) -> int:
                 matched_dirs = [entry for entry in entries
                                 if entry.kind == "d" and pattern in entry.patterns]
                 if len(matched_dirs) > 1:
+                    # A directory this pattern shares with a declared one is trimmed by the
+                    # declaration, so the note counts what was carried rather than promising all of it
+                    # (attack finding at cb7153e, 2026-10-17).
+                    left = [entry for entry in matched_dirs if entry in skipped]
+                    carried = ("carried all of them" if not left else
+                               f"carried {len(matched_dirs) - len(left)}, left {len(left)} on the "
+                               f"machine because a declared collection also names "
+                               f"{'it' if len(left) == 1 else 'them'}")
                     note(f"pattern        : {pattern} matched {len(matched_dirs)} directories, "
-                         f"{_human_bytes(sum(entry.bytes for entry in matched_dirs))} — carried all "
-                         f"of them; declare it in [artefacts] run_patterns to carry only the newest "
-                         f"each pull")
+                         f"{_human_bytes(sum(entry.bytes for entry in matched_dirs))} — {carried}; "
+                         f"declare it in [artefacts] run_patterns to carry only the newest each pull")
         if not selected:
             note(f"pull failed: the configured patterns matched nothing on {pod.get('id')} "
                  f"({', '.join(patterns)}); the files may still be on the machine")
