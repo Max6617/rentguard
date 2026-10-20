@@ -863,3 +863,42 @@ side can lose this one silently.
 cannot answer names `inventory-unreadable` instead of transferring, and a size or time that is not a
 measurement is refused rather than used.
 
+## B17 — a decoy config could rent under rules nobody read (fixed)
+
+**The defect.** A config is found by looking at the **current directory** — that is what makes the tool
+usable from a Bot, an MCP client or a service. It is also what made the workspace root a rentable door:
+that directory carried a `rentguard.toml` written as a probe (COMMUNITY, one 3080 Ti, `cap_usd = 5.0`,
+`per_run_cap_usd = 0.10`) beside a `.rentguard` ledger with 7 rows and **$2.3034** that nothing in the
+project reads. A `rentguard_start` through an MCP server started there, or any shell run from that
+directory, would have rented real machines under rules its operator never chose — and every later check in
+the project root would have been reading a *different* ledger, which is how spend goes missing.
+
+Deleting the file was not the fix: its ledger is a record, and a decoy that can only be deleted leaves the
+next decoy to be discovered the same way — by a bill.
+
+**The shape.** Two top-level keys, `allow_renting = false` and `renting_disabled_reason = "…"`:
+
+- `up` and `adopt` refuse **before a provider is constructed or a row opened**, so a refused rent cannot
+  spend a cent; the message names the config file, repeats the reason, and says that `--force` does not
+  override it (a guardrail a flag walks through is not a guardrail). Exit 2; with `--json`,
+  `action: "refused"`, `reason: "renting-disabled"`, `config`, `detail`.
+- The default is `true`, so a config that has never heard of the key rents exactly as before, and a
+  non-boolean is refused at load rather than read as `true` — the direction a typo would otherwise spend.
+- `doctor` reports it as a `renting-disabled` **warn** plus a `renting :` line: the refusal must be visible
+  where a person or a Bot looks *before* renting, not only by trying.
+- `ledger`, `status` and — the one that matters — `down` are **not** gated. A live machine has to be
+  stoppable from any config, whatever that config says about renting; the alternative is a config change
+  that leaves a pod billing.
+
+**The tests** are `tests/test_renting_lock.py`, 16 cases, red first (14 failed before the change; the two
+that already passed are the controls, `down` and `ledger`/`status`): the file is read and the reason
+trimmed; the default and a missing file allow; a non-boolean and a non-string reason are refused; `up`
+refuses naming the config and the reason, `--force` included; no row, no `create`, and no provider
+constructed at all; `adopt` refuses on the same door; the JSON refusal is named; an empty reason says it has
+none; `doctor` still exits 0 and reports the warning; `ledger` and `status` still run; and `down` still
+stops a live machine with the flag off.
+
+**Then the decoy itself** (outside this repo) got the two keys, so its ledger stays and its door is closed.
+The MCP descriptions of `rentguard_start` and `rentguard_adopt` name the refusal, so a Bot reads the
+behaviour in the tool it is about to call.
+

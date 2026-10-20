@@ -63,7 +63,11 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Rent (or resume) a GPU instance. SPENDS MONEY: requires the Main Bot's approval "
             "unless the team has agreed otherwise. Refuses when recorded spend already exceeds "
-            "the cap. The config's cap is enforced independently of this tool."),
+            "the cap. The config's cap is enforced independently of this tool. A config can also "
+            "refuse renting outright (`allow_renting = false`, with `renting_disabled_reason`): "
+            "then this tool spends nothing, returns `action: \"refused\"` with "
+            "`reason: \"renting-disabled\"`, and names the config file and the reason — rent from "
+            "the config that owns the money instead."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -136,7 +140,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Record an instance that is already running but has no ledger row, backdating the start "
             "time from the provider's uptime so the money already spent is recorded rather than "
-            "hidden. Use when a live instance appears with no row."),
+            "hidden. Use when a live instance appears with no row. SPENDS NOTHING but records real "
+            "money, so a config that sets `allow_renting = false` refuses it too "
+            "(`reason: \"renting-disabled\"`); `doctor`, `ledger`, `status` and `stop` are never "
+            "gated by that flag — a live machine must always be stoppable."),
         "inputSchema": {
             "type": "object",
             "properties": {

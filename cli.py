@@ -193,6 +193,34 @@ def _config() -> Config:
     return load()
 
 
+def _refuse_renting(cfg: Config, *, command: str) -> int:
+    """Print, emit and return the refusal for a config that declares itself non-renting.
+
+    Returned as an exit code so a caller reads the same in both directions::
+
+        if not cfg.allow_renting:
+            with json_report(args):
+                return _refuse_renting(cfg, command="up")
+
+    It is checked **before** a provider is constructed or a row is opened, and `--force` does not
+    override it: a money guardrail a flag walks through is not a guardrail. ``command`` is the word the
+    operator typed, so the message says what did nothing rather than what "renting" would have done.
+    """
+    where = str(cfg.source) if cfg.source is not None else "(no config file: built-in defaults)"
+    reason = (cfg.renting_disabled_reason or "").strip()
+    note(f"error: `{command}` did nothing and no money was spent — the config {where} sets "
+         f"allow_renting = false, so this file refuses to rent.")
+    if reason:
+        note(f"       the reason it gives: {reason}")
+    else:
+        note("       it gives no reason (renting_disabled_reason is empty).")
+    note("       --force does not override this. Rent from the config that owns the money, or set "
+         "allow_renting = true in this one deliberately.")
+    emit(action="refused", reason="renting-disabled", command=command,
+         config=str(cfg.source) if cfg.source is not None else None, detail=reason or None)
+    return 2
+
+
 def _provider(cfg: Config) -> Provider:
     """The provider for this config.
 
@@ -477,6 +505,13 @@ def _template(cfg: Config) -> str:
         '# ssh_binary = "ssh"',
         '# ssh_key = ""                     # empty means: use the provider\'s own key material',
         "",
+        "# Whether this config may start a rental at all. Set it to false on a config that exists to be",
+        "# read — a decoy, a shared root, a template — and `up`/`adopt` refuse before building a provider",
+        "# or opening a row, naming this file and the reason below. --force does not override it, and",
+        "# doctor, ledger, status and down keep working, so a live machine always stays stoppable.",
+        "allow_renting = true",
+        '# renting_disabled_reason = "the project root for these runs is …"',
+        "",
         "# Keys above a [table] header are top-level; keys below one belong to that table. Keep every",
         "# top-level key above the first header, or it silently becomes part of a table and is ignored.",
         "",
@@ -575,6 +610,16 @@ def cmd_doctor(args) -> int:
                         f"last heartbeat {reading.age_minutes:.1f} min ago): its protection ended when "
                         f"its process did. The verdict line reports the best reading of the set, so "
                         f"whatever else is watching still is"))
+    # A config that refuses to rent is a **warn**, not an error: nothing is broken, and everything a
+    # `doctor` run reads — the ledger, the spend, the guard, the instances — is unaffected. But it must
+    # be visible here, because this is the one place a Bot or a person looks before renting, and a
+    # refusal discovered only by trying to rent is a refusal discovered at the worst moment.
+    if not cfg.allow_renting:
+        findings.append(Finding(
+            code="renting-disabled", severity="warn",
+            message=f"this config refuses to rent (allow_renting = false): "
+                    f"{(cfg.renting_disabled_reason or '').strip() or 'it gives no reason'}. "
+                    f"`up` and `adopt` will refuse; `doctor`, `ledger`, `status` and `down` still work"))
     with json_report(args):
         emit(command="doctor", version=__version__,
              config=str(cfg.source) if cfg.source else None,
@@ -582,6 +627,9 @@ def cmd_doctor(args) -> int:
              api_key="present" if api_key() else ("not needed" if name == "fake" else "missing"))
         note(f"rentguard      : v{__version__}")
         note(f"config         : {cfg.source or '(none — using defaults)'}")
+        if not cfg.allow_renting:
+            note(f"renting        : REFUSED by this config — "
+                 f"{(cfg.renting_disabled_reason or '').strip() or 'no reason given'}")
         note(f"state dir      : {cfg.state_dir}")
         note(f"provider       : {name}"
               + ("  (in-memory: no network, no spend)" if name == "fake" else ""))
@@ -1015,6 +1063,9 @@ def cmd_ledger(args) -> int:
 
 def cmd_up(args) -> int:
     cfg = _config()
+    if not cfg.allow_renting:
+        with json_report(args):
+            return _refuse_renting(cfg, command="up")
     ledger = Ledger(cfg.ledger_path)
     provider = _provider(cfg)
 
@@ -2019,6 +2070,10 @@ def cmd_adopt(args) -> int:
       east of UTC it reads the machine as newer than it is and can refuse a legitimate estimate.
     """
     cfg = _config()
+    if not cfg.allow_renting:
+        with json_report(args):
+            emit(command="adopt", instance_id=args.instance_id)
+            return _refuse_renting(cfg, command="adopt")
     ledger = Ledger(cfg.ledger_path)
     provider = _provider(cfg)
     with json_report(args):

@@ -87,6 +87,7 @@ shows the same text without writing. The parts worth reading:
 ```toml
 provider = "runpod"       # or "fake": in-memory, no network, no money
 state_dir = ".rentguard"  # top-level keys go ABOVE the first [table], or they land inside it
+allow_renting = true      # set false to make this file refuse to rent (see "the wrong door" below)
 
 [budget]
 cap_usd = 25.0            # hard ceiling for the whole project, across all runs
@@ -135,6 +136,27 @@ it is never merely logged.
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.
+
+### The wrong door: a config that refuses to rent
+
+Configs are found in the **current directory**, which is not always the directory you meant — an MCP
+client starts where its own configuration says, a Bot's shell starts in its workspace root, and a
+`rentguard.toml` that happens to live there then decides the rules for everything started beside it
+(measured 2026-10-20: a decoy at this workspace's root had a $0.10 cap and a ledger nobody read).
+
+So a config can say "not here":
+
+```toml
+allow_renting = false
+renting_disabled_reason = "the project root for these runs is grok/pod-timing"
+```
+
+`up` and `adopt` then refuse **before a provider is built or a row opened**, print the config path, the
+reason and the note that `--force` does not override it, and exit 2 (`--json`: `action: "refused"`,
+`reason: "renting-disabled"`). Default is `true`, so an existing config rents exactly as before, and a
+non-boolean is refused at load rather than read as yes. `doctor` reports the refusal as a
+`renting-disabled` warning and a `renting :` line; `ledger`, `status` and **`down`** are never gated,
+because a live machine must stay stoppable whatever its config says.
 
 Put the API key in the environment, never in the file:
 

@@ -147,6 +147,23 @@ class Config:
     ssh_binary: str = "ssh"
     ssh_key: str = ""  # empty means: the provider's own key material, if it has any
     state_dir: Path = Path(".rentguard")
+    #: Whether this config may **start** a rental at all. `up`, `adopt` and the MCP tools that call
+    #: them refuse when it is false, before a provider is constructed or a row is opened, and `--force`
+    #: does not override it. Everything that does not spend still works — `doctor`, `ledger`, `status`
+    #: and above all `down`, because a live machine must be stoppable whatever its config says.
+    #:
+    #: It exists because a config is found by looking at the **current directory**: the MCP tools read
+    #: `./rentguard.toml`, so a directory that happens to carry one decides the rules for everything
+    #: started in it. Measured 2026-10-20: this workspace's root carried a decoy (COMMUNITY / 3080 Ti,
+    #: a $0.10 cap, a ledger nobody read), and a rental through that door would have spent money under
+    #: rules its operator never read. A decoy that can be deleted loses the ledger beside it; a decoy
+    #: that can declare itself non-renting keeps its record and refuses out loud.
+    allow_renting: bool = True
+    #: Why this config refuses to rent — printed in the refusal and repeated by `doctor`. Optional, so a
+    #: config written before this key existed keeps loading; empty means "no reason given", which the
+    #: refusal says rather than inventing one.
+    renting_disabled_reason: str = ""
+    source: Path | None = None
     source: Path | None = None
 
     @property
@@ -203,6 +220,19 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
         cfg.ssh_binary = raw["ssh_binary"]
     if isinstance(raw.get("ssh_key"), str):
         cfg.ssh_key = raw["ssh_key"]
+    # The renting lock is read from the **file**, not defaulted into existence: a config that has never
+    # heard of it rents exactly as before, and a config that sets it wrongly is refused at load rather
+    # than read as `true` (a "no" that a typo turns into yes is the direction that spends money).
+    if "allow_renting" in raw:
+        allowed = raw["allow_renting"]
+        if not isinstance(allowed, bool):
+            raise ConfigError(f"allow_renting must be true or false, not {allowed!r}")
+        cfg.allow_renting = allowed
+    if "renting_disabled_reason" in raw:
+        reason = raw["renting_disabled_reason"]
+        if not isinstance(reason, str):
+            raise ConfigError(f"renting_disabled_reason must be a string, not {reason!r}")
+        cfg.renting_disabled_reason = reason.strip()
 
     # An absolute state dir is honoured; a relative one is relative to the project root.
     if not cfg.state_dir.is_absolute():
