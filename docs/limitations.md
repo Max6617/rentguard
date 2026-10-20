@@ -296,6 +296,22 @@ mtimes (two runs finished in the same second) are broken by path, lexicographica
 `run-10`; the loser is named as an older run though the measurement cannot establish that. Both are why the
 rule is opt-in: an undeclared pattern never makes either choice.
 
+**The two contracts meet on one path.** When a directory is named by a **declared** collection *and* by an
+**undeclared** pattern, it is **carried**, and the pull says why (`carried: … — also matched by an
+undeclared pattern`). Carrying honours both contracts — the declared collection's trim is an optimisation,
+not a promise — it cannot lose data, and the volume-sized bound makes the cost visible rather than fatal.
+An overlapping declaration is legitimate; refusing it would block a pull for no gain. The ambiguity note
+for an undeclared multi-directory match always describes what the pull **carried**, so it cannot say
+"carried all of them" while the pull's own report names a skipped run.
+
+**The tool is imported from the checkout it lives in, so a live window freezes that checkout.** A driver
+that runs `python -m rentguard.cli` from a working tree dies at **import** if the tree is mid-edit —
+measured 2026-10-20: a paid window's cell command *and* its own cleanup both failed on a `SyntaxError` in an
+in-flight edit, and the pod billed until a person stopped it by hand ($0.014092, stopped and confirmed
+against the listing). Run live windows from a **pinned copy** (a committed worktree, an installed copy), and
+treat a rented window as a freeze on any checkout it uses: write in a separate `git worktree` while it is
+up, merge once the window is closed.
+
 **The machine has to answer the inventory, and it is assumed to be Linux.** The measurement uses
 `stat -c`, `du -sb` and a POSIX `sh`, the same family as the GNU `tar` the archive already needed; a
 heartbeat-style container without them fails the pull as `inventory-unreadable` **before** anything is

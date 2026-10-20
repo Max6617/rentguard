@@ -329,6 +329,64 @@ class TheRunCollectionIsDeclared(TransportCase):
             Artefacts(pull=["grok/runs/*"], run_patterns=["grok/runs/*; rm -rf /"])
 
 
+class TheTwoContractsMeetOnOnePath(TransportCase):
+    """A directory named by a declared collection **and** by an undeclared pattern is carried, and the
+    reason is named: carrying honours both contracts, cannot lose data, and the declaration's trim is an
+    optimisation rather than a promise (Gilbert's ruling, 2026-10-20)."""
+
+    def overlap_setup(self) -> None:
+        self.cfg.artefacts.pull = ["grok/runs/*", "grok/runs/run-1*"]
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
+        self.inventory = framed("\n".join([
+            inventory_line(0, "d", 900, 10 * MB, "grok/runs/run-16"),
+            inventory_line(0, "d", 800, 10 * MB, "grok/runs/run-15"),
+            inventory_line(1, "d", 900, 10 * MB, "grok/runs/run-16"),
+            inventory_line(1, "d", 800, 10 * MB, "grok/runs/run-15"),
+        ]))
+        self.tar_members = {"grok/runs/run-16/out.json": b"{}", "grok/runs/run-15/old.json": b"{}"}
+
+    def test_a_path_named_by_both_kinds_of_pattern_is_carried_with_the_reason(self) -> None:
+        self.overlap_setup()
+
+        code, err, document = self.pull()
+
+        self.assertEqual(code, 0, err)
+        archive = self.archive_remote()
+        self.assertIn("grok/runs/run-15", archive,
+                      f"a path matched by an undeclared pattern was dropped by the declaration: {archive}")
+        self.assertEqual(document.get("skipped"), 0, document)
+        self.assertIn("also matched by an undeclared pattern", err,
+                      f"the reason it was carried is not named:\n{err}")
+        self.assertNotIn("left on the machine", err, f"nothing was skipped, but the pull says so:\n{err}")
+
+    def test_the_ambiguity_note_is_true_about_what_was_carried(self) -> None:
+        """The note describes the **carried** subset, so it cannot say "carried all of them" while the
+        pull's own report names a skipped run (attack finding, 2026-10-20)."""
+        self.overlap_setup()
+
+        code, err, document = self.pull()
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("2 of 2", err, err)                    # the scope line is the truth
+        self.assertIn("matched 2 directories", err, err)
+        self.assertIn("carried all of them", err, err)
+        self.assertNotIn("left on the machine", err, err)
+
+    def test_a_declared_collection_alone_still_trims_an_older_run(self) -> None:
+        """The ruling is about the overlap, not about the declaration: a directory named only by a
+        declared collection is still trimmed and named."""
+        self.cfg.artefacts.run_patterns = ["grok/runs/*"]
+        self.inventory = self.runs(("run-15", 200.0, 20 * MB), ("run-16", 300.0, 30 * MB))
+        self.tar_members = {"grok/runs/run-16/out.json": b"{}"}
+
+        code, err, document = self.pull()
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(document.get("skipped"), 1, document)
+        self.assertIn("left on the machine", err, err)
+        self.assertNotIn("grok/runs/run-15", self.archive_remote(), self.archive_remote())
+
+
 class TheInventoryDecidesBeforeAnythingIsTransferred(TransportCase):
     def test_an_inventory_that_matches_nothing_starts_no_transfer(self) -> None:
         """The patterns matched nothing: the pull fails as `patterns-matched-nothing` *before* an

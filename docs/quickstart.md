@@ -125,11 +125,13 @@ matches**, because a glob cannot be told apart from one run's contents by its sh
 exists to prevent: with a volume-sized bound, carrying more is a cost, not a failure. An undeclared pattern
 that matches several directories says so in the output — the count, the volume, and the declaration that
 would trim it. Pulling the root again on every run is what made each pull larger than the last (measured:
-700 MB per run, 26 timeouts in one window, one usable run out of sixteen). The pull first runs an
-**inventory** on the machine (a text answer: what matched, how large it is), and the ssh bound is then
-`max(pull_timeout_s, volume / pull_bytes_per_second)` — the floor for a small pull, the volume for a large
-one. A pull that exceeds its bound is a named failure that says the volume and the bound it hit; it is
-never merely logged.
+700 MB per run, 26 timeouts in one window, one usable run out of sixteen). **When a path is named by both a
+declared collection and an undeclared pattern it is carried**, and the output says why — carrying honours
+both contracts and cannot lose data, so an overlapping declaration is legitimate rather than refused. The
+pull first runs an **inventory** on the machine (a text answer: what matched, how large it is), and the ssh
+bound is then `max(pull_timeout_s, volume / pull_bytes_per_second)` — the floor for a small pull, the volume
+for a large one. A pull that exceeds its bound is a named failure that says the volume and the bound it hit;
+it is never merely logged.
 
 Rules that are enforced rather than suggested: `per_run_cap_usd` must not exceed `cap_usd`; both must
 be greater than zero; an unknown key in `[budget]` or `[artefacts]` is an error at startup.

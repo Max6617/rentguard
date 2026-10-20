@@ -2831,8 +2831,9 @@ def _parse_pull_inventory(text: str, patterns: list[str]) -> list[PullEntry]:
 
 
 def _pull_selection(entries: list[PullEntry], *, all_entries: bool,
-                    run_patterns: list[str] | None = None) -> tuple[list[PullEntry], list[PullEntry]]:
-    """What this pull carries, and what it deliberately leaves on the machine.
+                    run_patterns: list[str] | None = None
+                    ) -> tuple[list[PullEntry], list[PullEntry], list[PullEntry]]:
+    """``(selected, skipped, overlap_carried)``: what this pull carries, what it leaves, and why.
 
     **Declared** run collections (`[artefacts] run_patterns`) carry only the **newest** entry — the run
     just finished — and their older entries are named as skipped, with `pull --all` as the backstop.
@@ -2845,22 +2846,38 @@ def _pull_selection(entries: list[PullEntry], *, all_entries: bool,
     of a window succeeded only because one directory existed, and the pulls after it were re-sends of
     everything. What made that safe to fix by declaration rather than by inference is that the default
     now cannot skip anything: only a pattern the operator wrote down as a collection of runs is trimmed.
+
+    **The two contracts meet on one path** (Gilbert's ruling, 2026-10-20): when a directory is named by
+    a declared collection *and* by an undeclared pattern, it is **carried**, and the caller names the
+    reason. Carrying honours both contracts — the path is part of what the undeclared pattern matched,
+    and the declared collection's trim is an optimisation rather than a promise — it cannot lose data,
+    and the volume-sized bound makes the cost visible rather than fatal. An overlapping declaration is
+    legitimate; refusing it would block a pull for no gain. ``overlap_carried`` is the third answer on
+    purpose: those paths are carried *because* of the second pattern, and the output has to say so.
     """
     declared = tuple(run_patterns or ())
     if all_entries:
-        return list(entries), []
+        return list(entries), [], []
     chosen: set[str] = set()
     for pattern in declared:
         directories = [entry for entry in entries
                        if entry.kind == "d" and pattern in entry.patterns]
         if directories:
             chosen.add(max(directories, key=lambda entry: (entry.mtime, entry.path)).path)
-    selected = [entry for entry in entries
-                if entry.kind != "d"
-                or entry.path in chosen
-                or not (set(entry.patterns) & set(declared))]
+
+    def carried(entry: PullEntry) -> bool:
+        if entry.kind != "d":
+            return True
+        if entry.path in chosen:
+            return True
+        return any(pattern not in declared for pattern in entry.patterns)
+
+    selected = [entry for entry in entries if carried(entry)]
     skipped = [entry for entry in entries if entry.kind == "d" and entry not in selected]
-    return selected, skipped
+    overlap = [entry for entry in selected
+               if entry.kind == "d" and entry.path not in chosen
+               and any(pattern in declared for pattern in entry.patterns)]
+    return selected, skipped, overlap
 
 
 def _pull_bound(cfg: Config, total_bytes: int) -> float:
@@ -3121,25 +3138,38 @@ def cmd_pull(args) -> int:
                  detail=inv_why, timeout_s=floor)
             return 1
         run_patterns = list(getattr(cfg.artefacts, "run_patterns", []) or [])
-        selected, skipped = _pull_selection(entries, all_entries=bool(getattr(args, "all", False)),
-                                            run_patterns=run_patterns)
+        selected, skipped, overlap = _pull_selection(
+            entries, all_entries=bool(getattr(args, "all", False)), run_patterns=run_patterns)
         unmatched_on_machine = [pattern for pattern in patterns
                                 if not any(pattern in entry.patterns for entry in entries)]
         # A pattern the operator did not declare as a collection of runs carries everything it
         # matched. When that is several directories, say so where the ambiguity is created, with the
         # count, the volume and the declaration that would trim it: silence here is how half a run's
-        # artefacts go missing later (Gilbert's ruling, 2026-10-17).
+        # artefacts go missing later (Gilbert's ruling, 2026-10-17). The count and the volume are
+        # those of what this pull actually **carried**, so the sentence is true even when another
+        # pattern's rule changed the selection.
         if not getattr(args, "all", False):
             for pattern in patterns:
                 if pattern in run_patterns:
                     continue
                 matched_dirs = [entry for entry in entries
                                 if entry.kind == "d" and pattern in entry.patterns]
-                if len(matched_dirs) > 1:
-                    note(f"pattern        : {pattern} matched {len(matched_dirs)} directories, "
-                         f"{_human_bytes(sum(entry.bytes for entry in matched_dirs))} — carried all "
-                         f"of them; declare it in [artefacts] run_patterns to carry only the newest "
-                         f"each pull")
+                carried_dirs = [entry for entry in matched_dirs if entry in selected]
+                if len(carried_dirs) > 1:
+                    size = _human_bytes(sum(entry.bytes for entry in carried_dirs))
+                    if len(carried_dirs) == len(matched_dirs):
+                        note(f"pattern        : {pattern} matched {len(carried_dirs)} directories, "
+                             f"{size} — carried all of them; declare it in [artefacts] run_patterns "
+                             f"to carry only the newest each pull")
+                    else:
+                        note(f"pattern        : {pattern} matched {len(matched_dirs)} directories, "
+                             f"{size} — carried {len(carried_dirs)} of them; declare it in "
+                             f"[artefacts] run_patterns to carry only the newest each pull")
+        if overlap:
+            # The two contracts met on these paths. Carrying is the answer, and the reason is named
+            # rather than left for a reader to reconstruct (Gilbert's ruling, 2026-10-20).
+            note(f"carried        : {', '.join(entry.path for entry in overlap)} — also matched by an "
+                 f"undeclared pattern, so carried; a declared collection alone would have skipped it")
         if not selected:
             note(f"pull failed: the configured patterns matched nothing on {pod.get('id')} "
                  f"({', '.join(patterns)}); the files may still be on the machine")
