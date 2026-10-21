@@ -164,7 +164,6 @@ class Config:
     #: refusal says rather than inventing one.
     renting_disabled_reason: str = ""
     source: Path | None = None
-    source: Path | None = None
 
     @property
     def ledger_path(self) -> Path:
