@@ -940,3 +940,18 @@ root now reads *"finished (last heartbeat 35.7 min ago) — nothing is watching 
 stopped (EXITED), so nothing is billing"*, and the decoy root's `doctor` reads *"nothing is billing on the
 account"*.
 
+**Closure on the independent attack (2026-10-21).** Assay attacked `78fd49c` with three new files and
+found **no failure in the new code**: `tests/test_guard_line_attack.py`,
+`tests/test_pull_inventory_attack.py`, `tests/test_renting_lock_attack.py` — 22 passed / 4 skipped (the
+executed shell cases, which run on CI) / 2 subtests. The edges it took, all holding: `PROVISIONING` and a
+failed status keep the missing-guard warning (the judgement the fix names, not a measurement); `doctor`
+keeps it when `list_pods` fails and when a live pod from another root sits beside this root's stopped one,
+and says "nothing is billing on the account" only on a quiet account; the inventory command's outer words
+are quoted with the inner expansion still unquoted, including a `[0-9]` class; the renting lock refuses
+`up --force`, `adopt --uptime-hours`, `up --dry-run` and the MCP dispatch before a provider is built, with
+no ledger row, no state file, and the decoy's own ledger unchanged at **7 rows, $2.3034**; and the widened
+30-second bound is **not vacuous** — with `_start_wait_guard` patched to arm nothing, the crash-loop case
+still fails on "guard stopped the instance" (mutation probe, recorded). One nit, fixed at `3e022b8`:
+`Config` declared `source: Path | None = None` twice.
+
+

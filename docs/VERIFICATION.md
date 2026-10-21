@@ -512,6 +512,15 @@ verified inside it:
 | `422050e` — a config can refuse to rent (B17): the decoy door is closed before a provider is built or a row opened (2026-10-20) | **779 passed**, 0 failed, 15 skipped (4 are the POSIX-shell inventory-execution tests, which run on CI), 140 subtests | 3,759 / 3,825 = **98.3%, exit 0** — `cli.py` 98.0%, `config.py` 98.6%, `guard.py` 97.5%, floor 98.0 |
 | `2ed04bf` — the crash-loop bound is two guard intervals, not one: a 43 ms scheduling delay decided it on 3.11 (2026-10-20) | **779 passed**, 0 failed, 15 skipped, 140 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (47.99 s / 48.11 s) | 3,759 / 3,825 = **98.3%, exit 0** — `cli.py` 98.0%, `config.py` 98.6%, `guard.py` 97.5%, floor 98.0 |
 | `982bcb9` — the missing-guard line follows the machine: a stopped instance no longer reads as billing (2026-10-20) | **786 passed**, 0 failed, 15 skipped, 140 subtests, identical with and without `RENTGUARD_PROVIDER=fake` (48.11 s / 48.21 s) | 3,774 / 3,840 = **98.3%, exit 0** — `cli.py` 98.0%, `config.py` 98.6%, `guard.py` 97.5%, floor 98.0 |
+| `3e022b8` — Assay's three attack files land, and the duplicate `source` annotation is deleted (2026-10-21) | **808 passed**, 0 failed, 19 skipped (the POSIX-shell execution tests, which run on CI), 142 subtests | 3,773 / 3,839 = **98.3%, exit 0** — `cli.py` 98.0%, `config.py` 140/142 = 98.6%, `guard.py` 97.5%, floor 98.0 |
+
+**Two gate measurements of `3e022b8` differ by 12×, and the tree is not the difference.** The first
+reported `808 passed … in 5601.76s (1:33:21)` and the second, the same revision and the same arguments,
+`808 passed … in 455.95s (0:07:35)`; both read 98.3% / exit 0. The suite without the tracer is 60.66 s at
+this revision, and each of the three new attack files measures 19–26 s *under* the tracer on its own, so
+a 93-minute run is the host (this laptop, idle and throttled through that hour), not the code. A gate's
+duration is not a product number — worth naming here so the next 90-minute run is not read as a
+regression in the tree.
 
 **The one red gate run of the `aed798f` batch is named and fixed.** It was
 `tests/test_money_defects.py::UpNeedsMoreThanOneAliveSample::test_up_does_not_report_success_after_one_alive_sample`:
