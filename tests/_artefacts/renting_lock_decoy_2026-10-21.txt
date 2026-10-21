@@ -1,0 +1,18 @@
+﻿package: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt78\rentguard\cli.py
+
+decoy config       : C:\Users\besen\.dsh\bot\workspace\rentguard.toml
+allow_renting      : False
+reason             : the workspace root is not a project root: the runs that spend money are driven from grok/p...
+state dir          : C:\Users\besen\.dsh\bot\workspace\.rentguard
+
+decoy ledger before: 7 rows, $2.3034
+
+up --force: exit 2, action='refused', reason='renting-disabled', provider_called=False
+  prose: error: `up` did nothing and no money was spent � the config C:\Users\besen\.dsh\bot\workspace\rentguard.toml sets allow_renting = false, so this file refuses to rent. | the reason it gives: the workspace root is not a project root: the runs that spend money are driven from grok/pod-timing (config grok/pod-timing/rentguard.toml, ledger grok/pod-timing/.rentguard/runs.jsonl). Rent from there, or set allow_renting = true here deliberately.
+adopt --uptime-hours 2: exit 2, action='refused', reason='renting-disabled', provider_called=False
+  prose: error: `adopt` did nothing and no money was spent � the config C:\Users\besen\.dsh\bot\workspace\rentguard.toml sets allow_renting = false, so this file refuses to rent. | the reason it gives: the workspace root is not a project root: the runs that spend money are driven from grok/pod-timing (config grok/pod-timing/rentguard.toml, ledger grok/pod-timing/.rentguard/runs.jsonl). Rent from there, or set allow_renting = true here deliberately.
+
+decoy ledger after : 7 rows, $2.3034
+unchanged          : True
+
+duplicate `source` field annotations in Config: 2

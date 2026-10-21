@@ -1,0 +1,18 @@
+﻿package: C:\Users\besen\.dsh\bot\workspace\.rentguard-test-tmp\wt78\rentguard\cli.py
+
+patterns: ['grok/runs/*']
+  outer words: "'grok/runs/*'"
+  inner expansion unquoted: True
+
+patterns: ['grok/runs/*', 'logs/*']
+  outer words: "'grok/runs/*' 'logs/*'"
+  inner expansion unquoted: True
+
+patterns: ['results/step-[0-9]*']
+  outer words: "'results/step-[0-9]*'"
+  inner expansion unquoted: True
+
+== the answer the fixed command produces: two matches, one pattern index ==
+  grok/runs/run-16  kind=d  patterns=('grok/runs/*',)
+  grok/runs/run-15  kind=d  patterns=('grok/runs/*',)
+  declared: selected ['grok/runs/run-16'] skipped ['grok/runs/run-15']
