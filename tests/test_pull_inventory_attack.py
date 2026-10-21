@@ -165,7 +165,7 @@ class TheCommandExecutedInAShell(unittest.TestCase):
         (self.tree / "logs" / "a.log").write_text("a", encoding="utf-8")
         (self.tree / "logs" / "b.log").write_text("b", encoding="utf-8")
         (self.tree / "results").mkdir()
-        for name in ("a", "b"):
+        for name in ("1", "2"):
             (self.tree / "results" / f"step-{name}.json").write_text("{}", encoding="utf-8")
 
     def run_inventory(self, patterns: list[str]) -> tuple[str, str, str]:
@@ -209,15 +209,17 @@ class TheCommandExecutedInAShell(unittest.TestCase):
         entries = self.parse(["results/step-[0-9]*"])
 
         self.assertEqual([entry.path for entry in entries],
-                         ["results/step-a.json", "results/step-b.json"])
+                         ["results/step-1.json", "results/step-2.json"])
         for entry in entries:
             self.assertEqual(entry.patterns, ("results/step-[0-9]*",), entry)
             self.assertEqual(entry.kind, "f", entry)
 
     def test_a_symlinked_directory_is_measured_as_a_directory(self) -> None:
-        """Recorded: ``[ -d ]`` follows the link, so ``latest`` is listed as a directory; the size
-        and mtime are the link's (``du``) and the target's (``stat``). The archive carries the link,
-        not the target, which is why the selection prefers the newest *real* name on a tie."""
+        """Recorded: ``[ -d ]`` follows the link, so ``latest`` is listed as a directory, and
+        ``stat`` follows it for the mtime. Its ``du -sb`` size is the link's own (the target path's
+        length), not the target tree's — that ordering depends on the path length, so this case pins
+        the *kind* and the path, not a size comparison. The archive carries the link, not the target,
+        which is why the selection prefers the newest *real* name on a tie."""
         target = self.tree / "grok" / "runs" / "run-16"
         link = self.tree / "grok" / "runs" / "latest"
         try:
@@ -229,9 +231,10 @@ class TheCommandExecutedInAShell(unittest.TestCase):
 
         by_path = {entry.path: entry for entry in entries}
         self.assertIn("grok/runs/latest", by_path, by_path)
+        self.assertIn("grok/runs/run-16", by_path, by_path)
         self.assertEqual(by_path["grok/runs/latest"].kind, "d", by_path["grok/runs/latest"])
-        self.assertLess(by_path["grok/runs/latest"].bytes, by_path["grok/runs/run-16"].bytes,
-                        "the symlink was measured as its target")
+        self.assertEqual(by_path["grok/runs/latest"].patterns, ("grok/runs/*",),
+                         by_path["grok/runs/latest"])
 
 
 if __name__ == "__main__":
