@@ -23,7 +23,7 @@ import json
 import os
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Config
@@ -472,6 +472,17 @@ class HeartbeatReading:
     pid: int | None
     ended: bool
     running: bool
+    #: The bound this guard ends itself on, read from its own heartbeat (Gilbert's ruling, 2026-10-22).
+    #: ``max_iterations`` is absent for an unbounded `rentguard watch`; ``iterations`` is how far it had
+    #: got when it last wrote; ``ends_at`` is the latest instant its own bound allows. A guard that ends
+    #: at a bound must be **readable** as ending there — measured: a `watch --interval 30` returned after
+    #: a fraction of its bound with exit 0 while its heartbeat still read "alive", and a driver believed
+    #: the pod was guarded. These fields change no verdict (`alive` is still the process); they are what
+    #: the verdict line prints beside it.
+    max_iterations: int | None = None
+    iterations: int | None = None
+    interval_s: float | None = None
+    ends_at: datetime | None = None
 
     @property
     def alive(self) -> bool:
@@ -627,7 +638,38 @@ def _read_one(path: Path, *, kill=None) -> HeartbeatReading | None:
     pid = raw_pid if isinstance(raw_pid, int) and not isinstance(raw_pid, bool) else None
     running = pid_running(pid) if kill is None else pid_running(pid, kill=kill)
     return HeartbeatReading(age_minutes=round((now_utc() - then).total_seconds() / 60.0, 1),
-                            pid=pid, ended=bool(payload.get("ended")), running=running)
+                            pid=pid, ended=bool(payload.get("ended")), running=running,
+                            **_bound_fields(payload))
+
+
+def _bound_fields(payload: dict) -> dict:
+    """The bound a guard wrote into its own heartbeat, or nothing when it wrote none.
+
+    Judged field by field and never trusted to a shape: a hand-edited or foreign heartbeat must not be
+    able to crash `status` with a bound nobody can read (the same rule the pid follows). Anything that
+    is not the type it should be is **absent**, which reads as unbounded — the direction that does not
+    invent an end for a guard that may run for hours.
+    """
+    def whole(value) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def number(value) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    ends_at: datetime | None = None
+    raw_ends = payload.get("ends_at")
+    if isinstance(raw_ends, str) and raw_ends:
+        try:
+            ends_at = datetime.fromisoformat(raw_ends)
+        except ValueError:
+            ends_at = None
+    fields = {"max_iterations": whole(payload.get("max_iterations")),
+              "iterations": whole(payload.get("iterations")),
+              "interval_s": number(payload.get("interval_s")),
+              "ends_at": ends_at}
+    return {} if fields["max_iterations"] is None else fields
 
 
 def heartbeat_age_minutes(path: Path) -> float | None:
@@ -641,13 +683,17 @@ def heartbeat_age_minutes(path: Path) -> float | None:
 
 
 def write_heartbeat(path: Path, snap: Snapshot, note: str = "",
-                    guard_id: str | None = None) -> None:
-    """Write a reading, naming the **process** and the **guard** that wrote it, unmarked.
+                    guard_id: str | None = None, bound: dict | None = None) -> None:
+    """Write a reading, naming the **process**, the **guard** that wrote it, and its bound.
 
     ``pid`` used to be written as a placeholder (``None``), which is why `status` had nothing but the
     age to go on and read a finished guard as protection (Gilbert's ruling, 2026-10-16). ``guard_id``
     is the identity two guards in *one* process do not share: the pid cannot tell them apart, so a mark
     matched on the pid alone ended a live guard's file (finding 17, 2026-10-16).
+
+    ``bound`` is what a **bounded** watch writes so its own end is readable (Gilbert's ruling,
+    2026-10-22): ``max_iterations``, ``iterations`` so far, ``interval_s`` and ``ends_at``. It is absent
+    for an unbounded guard, and absent means unbounded — the reader never invents a limit.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(snap)
@@ -655,6 +701,11 @@ def write_heartbeat(path: Path, snap: Snapshot, note: str = "",
     payload["pid"] = os.getpid()
     payload["guard_id"] = guard_id
     payload["ended"] = False
+    if bound is not None:
+        payload["max_iterations"] = bound.get("max_iterations")
+        payload["iterations"] = bound.get("iterations")
+        payload["interval_s"] = bound.get("interval_s")
+        payload["ends_at"] = bound.get("ends_at")
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     _prune_finished_heartbeats(path)
 
@@ -793,20 +844,37 @@ def watch(cfg: Config, provider: Provider, ledger: Ledger, *, instance_id: str,
     started = now_utc()
     iterations = 0
 
+    def bound_now() -> dict | None:
+        """What this guard's own bound is, as of this iteration — written into every heartbeat.
+
+        ``ends_at`` is the latest instant the bound allows *if every remaining poll takes its interval*:
+        an estimate, and labelled as one, because a slow provider read makes the real end later. What it
+        is for is the question a reader actually has after a bounded watch: *when does this protection
+        stop by itself?* An unbounded watch returns ``None`` and writes no bound.
+        """
+        if max_iterations is None:
+            return None
+        remaining = max(0, max_iterations - iterations)
+        ends = now_utc() + timedelta(seconds=remaining * max(interval, 0.0))
+        return {"max_iterations": max_iterations, "iterations": iterations,
+                "interval_s": interval, "ends_at": iso(ends)}
+
     def heartbeat(snap: Snapshot, note: str = "") -> bool:
         """Write the heartbeat, unless the caller has released this guard.
 
         The check and the write are one step when the release handle carries a gate
         (``ReleaseGate.attempt``), so a guard released during a slow provider read — the case a
         bounded join could not close — cannot land a heartbeat afterwards. The write names this guard
-        (``guard_id``), so a second guard in the same process is not mistaken for it later.
+        (``guard_id``), so a second guard in the same process is not mistaken for it later, and carries
+        this guard's own bound so its end is readable before it happens.
         """
+        bound = bound_now()
         gate = getattr(stop_event, "attempt", None)
         if gate is None:
-            write_heartbeat(heartbeat_path, snap, note=note, guard_id=guard_id)
+            write_heartbeat(heartbeat_path, snap, note=note, guard_id=guard_id, bound=bound)
             return True
         return bool(gate(lambda: write_heartbeat(heartbeat_path, snap, note=note,
-                                                 guard_id=guard_id)))
+                                                 guard_id=guard_id, bound=bound)))
 
     while True:
         if stop_event is not None and stop_event.is_set():

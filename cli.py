@@ -410,20 +410,72 @@ def _ssh_pty(provider: Provider, pod: dict) -> bool:
     return bool(ask(pod)) if callable(ask) else False
 
 
-def _require_alive(provider: Provider, pod: dict) -> None:
-    """Refuse to touch a machine that is not usable.
+#: How many readings the usability gate takes before it refuses a machine, and how far apart (Gilbert's
+#: ruling, 2026-10-22). **One listing is not a verdict**: measured on the grid, cell 3 of the 2026-10-22
+#: window trained to its last step and its upload was refused as a crash loop because the fetched listing
+#: was a moment old, while `down`'s pull carried the same 73 files seconds later — a wasted window, $1.92.
+#: The cost of waiting here is seconds of a billed machine; the cost of being wrong is the window.
+USABLE_READ_ATTEMPTS = 3
+USABLE_READ_INTERVAL_S = 45.0
+#: The wait, as a module attribute, so a test pins it instead of paying it. Production passes `time.sleep`.
+_USABLE_SLEEP = time.sleep
 
-    ``RUNNING`` is a claim. A positive uptime and a port set are the evidence, and this is the
-    single place that decides what the evidence means.
+
+def _require_alive(provider: Provider, pod: dict, *, attempts: int | None = None,
+                   interval_s: float | None = None, sleep=None) -> dict:
+    """Return a **usable** reading of this machine, or refuse — reading again before the refusal.
+
+    ``RUNNING`` is a claim. A positive uptime and a port set are the evidence, and this is the single
+    place that decides what the evidence means. What it no longer does is decide on **one** reading:
+    measured 2026-10-22 (row `20261021T215143Z-bdb358`, 2.16 h, $1.92), a cell's own `run` refused a
+    working machine as crash-looping — *"reports RUNNING but is not usable (uptime=None, ports=NULL) …
+    Not uploading to it"* — because the listing it fetched was a moment old, and `down`'s pull landed
+    the same 73 files seconds later.
+
+    So the gate reads up to ``attempts`` times, ``interval_s`` apart, and refuses only a machine that is
+    still unusable on the **last** read. A read that cannot be made (a provider error) is not evidence of
+    a usable machine: the last reading stands and the refusal names the failed read.
+
+    It returns the reading it **verified**, not a boolean, so a caller's ssh target comes from the same
+    listing the gate accepted; a stale reading's ports are exactly what must not be used.
     """
-    if not is_alive(pod):
-        runtime = pod.get("runtime") or {}
-        raise SystemExit(
-            f"error: instance {pod.get('id')} reports {pod.get('status')} but is not usable "
-            f"(uptime={runtime.get('uptime')}, ports="
-            f"{'set' if runtime.get('ports') else 'NULL'}).\n"
-            "A pod that stays RUNNING with uptime 0 and null ports is crash-looping. "
-            "Not uploading to it.")
+    attempts = USABLE_READ_ATTEMPTS if attempts is None else attempts
+    interval_s = USABLE_READ_INTERVAL_S if interval_s is None else interval_s
+    sleep = _USABLE_SLEEP if sleep is None else sleep
+    current = pod
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        if is_alive(current):
+            if attempt > 1:
+                runtime = current.get("runtime") or {}
+                note(f"usable         : read {attempt} of {attempts} reports uptime="
+                     f"{runtime.get('uptime')} and ports set — the earlier reading was stale, "
+                     f"continuing")
+            return current
+        runtime = current.get("runtime") or {}
+        if attempt == attempts:
+            break
+        note(f"usable         : read {attempt} of {attempts} reports {current.get('status')} with "
+             f"uptime={runtime.get('uptime')}, ports="
+             f"{'set' if runtime.get('ports') else 'NULL'} — reading again in {interval_s:g}s before "
+             f"refusing (one stale listing is not a crash loop)")
+        sleep(interval_s)
+        try:
+            fresh = provider.get(pod.get("id"))
+        except ProviderError as exc:
+            last_error = str(exc)
+            note(f"usable         : the re-read failed ({exc}); the last reading stands")
+            continue
+        if fresh is not None:
+            current = fresh
+    runtime = current.get("runtime") or {}
+    raise SystemExit(
+        f"error: instance {pod.get('id')} reports {current.get('status')} but is not usable on "
+        f"{attempts} reads, {interval_s:g}s apart (last read: uptime={runtime.get('uptime')}, ports="
+        f"{'set' if runtime.get('ports') else 'NULL'}). A pod that stays RUNNING with uptime 0 and "
+        f"null ports is crash-looping."
+        + (f" The re-read could not be made: {last_error}." if last_error else "")
+        + " Not uploading to it.")
 
 
 def _findings_dicts(findings: list[Finding]) -> list[dict]:
@@ -1940,6 +1992,12 @@ def cmd_watch(args) -> int:
               f"never proof that it is still running")
         guard_id = f"watch-{uuid.uuid4().hex[:8]}"
         heartbeat = guard_heartbeat_path(cfg.heartbeat_path, guard_id)
+        bounded_hours = None
+        if max_iterations is not None and not once:
+            bounded_hours = max_iterations * max(interval, 0.0) / 3600.0
+            note(f"bounded : at most {max_iterations} polls every {interval:g}s = {bounded_hours:.2f} h; "
+                 f"protection ENDS when that bound is reached and this command returns — the bound must "
+                 f"outlast the window it guards")
         reason = guard_watch(cfg, provider, ledger, instance_id=pod["id"], interval=interval,
                              log=note, max_iterations=max_iterations, guard_id=guard_id,
                              heartbeat_path=heartbeat)
@@ -1948,8 +2006,16 @@ def cmd_watch(args) -> int:
         # already-stopped machine, an instance that vanished, an iteration limit, a provider error —
         # in its **own** file, so a sibling guard's reading is untouched (finding 17).
         end_heartbeat(heartbeat, guard_id=guard_id)
+        written = _heartbeat_payload(heartbeat)
+        iterations = written.get("iterations")
+        ends_at = written.get("ends_at")
         stopped = _guard_stopped_a_machine(reason)
         note(f"guard finished: {reason}")
+        # A guard that ended at **its own bound** did not fail, and it did not succeed either: nothing
+        # is watching now. Exit 0 here is what let a driver read twelve such returns as protection and
+        # leave a pod unguarded (measured 2026-10-22), so the bound is a non-zero end — 2, the code this
+        # tool uses for "nothing was done for you", and the JSON says which.
+        ended_at_bound = (not once and reason == "guard-iteration-limit")
         if stopped:
             note(f"the guard stopped the machine: {reason}")
         elif reason == "already stopped":
@@ -1958,14 +2024,29 @@ def cmd_watch(args) -> int:
         elif str(reason).startswith("provider-error"):
             note("stopped      : nothing — the guard could not read the provider, so it cannot be "
                  "trusted to have been watching. Protection is NOT armed now")
+        elif ended_at_bound:
+            note(f"protection : ENDED — this watch reached its own bound after {iterations or '?'} of "
+                 f"{max_iterations} polls ({bounded_hours:.2f} h at {interval:g}s). NOTHING is watching "
+                 f"the machine now: arm it again, or run `rentguard watch` without --max-iterations")
         else:
             # A bounded watch arms protection only while it runs. Say what is true on return.
             note("protection : NOT armed now — a watch stops when it returns, so run it again (or "
                  "keep `rentguard watch` running in a terminal) or the machine is unguarded")
         emit(reason=reason, instance_id=pod.get("id"), stopped=stopped, armed=False,
-             armed_before=armed_before,
+             armed_before=armed_before, iterations=iterations, max_iterations=max_iterations,
+             interval_seconds=interval, bounded_hours=bounded_hours,
+             protection_ended_at_bound=ended_at_bound, ends_at=ends_at,
              total_usd=ledger.total_usd(), cap_usd=cfg.budget.cap_usd)
-    return 0
+        return 2 if ended_at_bound else 0
+
+
+def _heartbeat_payload(path: Path) -> dict:
+    """The guard's own last heartbeat, or ``{}``: how far a bounded watch got, and when it must end."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _guard_report(reading, *, billing: bool | None = None,
@@ -2015,8 +2096,28 @@ def _guard_report(reading, *, billing: bool | None = None,
                 facts)
     if reading.age_minutes > GUARD_STALE_MINUTES:
         return (f"running (pid {reading.pid}) but silent for {reading.age_minutes:.1f} min — probably "
-                f"wedged", facts)
-    return f"alive (pid {reading.pid}, heartbeat {reading.age_minutes:.1f} min ago)", facts
+                f"wedged{_guard_bound_text(reading)}", facts)
+    return (f"alive (pid {reading.pid}, heartbeat {reading.age_minutes:.1f} min ago)"
+            f"{_guard_bound_text(reading)}"), facts
+
+
+def _guard_bound_text(reading) -> str:
+    """The bound a live guard will end itself on, beside the verdict — or nothing when unbounded.
+
+    A bounded `watch` ends **by itself**, and until this line existed the read path could not say when:
+    measured 2026-10-22, a `watch --interval 30` returned at its own bound with exit 0 while the
+    heartbeat still read "alive", and a driver re-armed by hand twelve times believing the pod was
+    guarded. The verdict stays single — this is the same sentence, with the limit it runs under.
+    """
+    if reading.max_iterations is None:
+        return ""
+    so_far = "?" if reading.iterations is None else str(reading.iterations)
+    every = f" every {reading.interval_s:g}s" if reading.interval_s else ""
+    ends = ""
+    if reading.ends_at is not None:
+        ends = f", ends by {reading.ends_at.astimezone().strftime('%Y-%m-%d %H:%M')}"
+    return (f" — bounded: poll {so_far} of {reading.max_iterations}{every}{ends}; protection ends "
+            f"when it returns")
 
 
 def _guard_set_line(readings: list) -> str | None:
@@ -2573,7 +2674,7 @@ def cmd_run(args) -> int:
             note("error: nothing is rented. `rentguard up` first.")
             emit(ran=False, reason="nothing-rented")
             return 1
-        _require_alive(provider, pod)
+        pod = _require_alive(provider, pod)
 
         command = list(args.command)
         while command and command[0] == "--":
@@ -3193,7 +3294,7 @@ def cmd_pull(args) -> int:
                           unmatched_patterns=[])
             emit(pulled=False, reason="nothing-configured", files=[])
             return 0
-        _require_alive(provider, pod)
+        pod = _require_alive(provider, pod)
 
         dest = Path(cfg.artefacts.local_dir)
         try:
@@ -3478,7 +3579,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--once", action="store_true",
                     help="take one reading and report the decision; does not keep a guard alive")
     sp.add_argument("--max-iterations", type=int, default=None,
-                    help="bounded: stop after N polls instead of running until the cap or a stop")
+                    help="stop after N polls and RETURN: protection ENDS at that bound (exit 2, nothing "
+                         "is watching), so make N x --interval outlast the window you are guarding")
     structured(sp)
     sp.set_defaults(func=cmd_watch)
 

@@ -372,12 +372,20 @@ class CrashLoop(MoneyCase):
         provider = self.machine("pod-A", uptime=0.0, ports=False)
         args = cli_args("run", "--", "python", "train.py")
 
-        with mock.patch("rentguard.cli.subprocess.call") as ssh_call:
+        # The usability gate reads three times, ~45 s apart, before it refuses (2026-10-22): one stale
+        # listing is not a crash loop. This case is about the refusal, not about paying 90 s for it, so
+        # the wait is pinned — a suite that waits is a suite people stop running.
+        with mock.patch.object(cli, "USABLE_READ_INTERVAL_S", 0.0), \
+                mock.patch.object(cli, "_USABLE_SLEEP", lambda seconds: None), \
+                mock.patch("rentguard.cli.subprocess.call") as ssh_call:
             code, out = self.invoke(cli.cmd_run, args, provider)
 
         self.assertFalse(ssh_call.called,
                          f"uploaded to a crash-looping pod.\noutput:\n{out}")
         self.assertNotEqual(code, 0, f"crash loop was reported as success.\noutput:\n{out}")
+        # The refusal **message** ("not usable on 3 reads, 45s apart") is pinned in
+        # `tests/test_usable_reread.py`, which calls the gate directly; this helper drops the
+        # SystemExit text, and widening it would change what every money case here reports.
 
     def test_status_marks_a_running_pod_with_zero_uptime_as_not_usable(self):
         """Sequence: the pod reports RUNNING, uptime 0, null ports; `status` runs.

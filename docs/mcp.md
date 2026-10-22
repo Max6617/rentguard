@@ -61,7 +61,7 @@ A client entry looks like this:
 | `rentguard_stop` | stops spend | stop the instance and close the ledger row with its cost |
 | `rentguard_adopt` | records spend | give an already-running instance a ledger row, backdated from its uptime; also refused when the config sets `allow_renting = false` |
 | `rentguard_watch_once` | stops spend if the decision says so | one poll: the guard's decision, and whether a guard was already armed |
-| `rentguard_watch` | stops spend if the decision says so | a bounded guard: poll up to `max_iterations` times, then return |
+| `rentguard_watch` | stops spend if the decision says so | a bounded guard: poll up to `max_iterations` times, then return — reaching that bound **ends protection** and is reported as an error |
 | `rentguard_init` | writes a file, or prints | write or print the commented config template |
 
 Arguments: `rentguard_start` needs `purpose` (optional `gpu`); `rentguard_run` needs `command`
@@ -87,6 +87,15 @@ guard alive, and the result says so with `armed: false`.
 `rentguard_watch` is the same loop under a bound: it polls up to `max_iterations` times, then returns
 the reason, whether it stopped anything, and `armed: false`. Use it when a Bot must hold protection for
 a while; use `watch_once` when the Bot is driving the machine itself and only wants a reading.
+
+**The bound is a hard end to protection** (2026-10-22). When the loop reaches `max_iterations` it returns
+`reason: "guard-iteration-limit"`, `iterations`, `max_iterations`, `interval_seconds`, `bounded_hours`,
+`protection_ended_at_bound: true` and `armed: false`, and the call is an **error** (`isError: true`; the
+CLI exits 2) — so a zero exit never means "still guarded". It measured as a defect the other way round: a
+watch armed with a bound that did not outlast the window returned early with exit 0 and the heartbeat
+still read "alive", and a driver re-armed it by hand twelve times. Make `max_iterations` × `interval`
+outlast the window you are guarding; a watch that stops a machine, or finds it already stopped, still
+returns success.
 
 Real replies, on a machine whose per-run cap was already crossed, with no guard running beforehand:
 

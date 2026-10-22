@@ -188,12 +188,18 @@ TOOLS: list[dict[str, Any]] = [
             "Run the guard for a BOUNDED time and return the snapshot and any stop it performed. "
             "This is how a Bot arms the cap without a human terminal. It ends when its budget is "
             "spent, and protection is then no longer armed — the result says so, so a caller never "
-            "believes a guard is still running."),
+            "believes a guard is still running. `max_iterations` is a **hard end to protection**: at "
+            "that bound the call returns with `reason: \"guard-iteration-limit\"`, `armed: false`, "
+            "`iterations` and `max_iterations`, and exits non-zero (the CLI exits 2), so a zero exit "
+            "never means \"still guarded\". Make `max_iterations` x `interval` outlast the window you "
+            "are guarding; `rentguard_watch_once` is the one-poll form and does not claim protection."),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "max_iterations": {"type": "integer",
-                                   "description": "poll at most this many times; omit for one poll"},
+                                   "description": "poll at most this many times; omit for one poll. The "
+                                                  "bound ENDS protection: it is reported and exits "
+                                                  "non-zero"},
                 "interval": {"type": "number", "description": "seconds between polls; default 60"},
             },
             "additionalProperties": False,

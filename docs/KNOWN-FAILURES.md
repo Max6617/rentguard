@@ -954,4 +954,73 @@ no ledger row, no state file, and the decoy's own ledger unchanged at **7 rows, 
 still fails on "guard stopped the instance" (mutation probe, recorded). One nit, fixed at `3e022b8`:
 `Config` declared `source: Path | None = None` twice.
 
+## The usability gate refused on one stale reading, and cost a window (fixed)
+
+Measured 2026-10-22: the grid's cell 3 (`batchB-lr3e-4-s2`, row `20261021T215143Z-bdb358`, 2.16 h,
+**$1.92**) trained to its last step, and the cell's own `run` was refused with
+
+```
+error: instance … reports RUNNING but is not usable (uptime=None, ports=NULL).
+A pod that stays RUNNING with uptime 0 and null ports is crash-looping. Not uploading to it.
+```
+
+The machine was usable: `down`'s own pull carried the same **73 files** seconds later. The window ended on
+the no-artefact rule — correct for a lost artefact, and the wrong answer here, because nothing had been
+lost except a listing that was a moment old.
+
+**One reading is not a verdict.** `_require_alive` is the single place that decides what `RUNNING` plus
+`(uptime, ports)` means, and it now reads up to **three** times, `USABLE_READ_INTERVAL_S` = **45 s**
+apart, refusing only a machine that is still unusable on the **last** read. A read that cannot be made (a
+provider error) is not evidence of a usable machine: the last reading stands and the refusal names the
+failed read. The cost of waiting is seconds of a billed machine; the cost of being wrong is the window —
+this one was $1.92 and a lost cell.
+
+It returns the reading it **verified**, not a boolean, and both callers (`run`, `pull` — and therefore
+`down`'s pull) build their ssh target from that reading: a stale listing's ports are exactly what must not
+be used.
+
+**The tests** are `tests/test_usable_reread.py`, 6 cases, red first at the pre-fix revision (**all six**
+failed there — each pins the seam the fix adds, `USABLE_READ_INTERVAL_S` and `_USABLE_SLEEP`, and the
+first behaviour it pins is that a healthy machine pays nothing): two unusable readings and a usable one
+let a real pull run and land its file; a machine that stays unusable is refused with the read count; a
+usable first reading costs no wait and no extra read; a later read says which read agreed; a provider that
+cannot be re-read is not counted as usable; and the ssh command is built from the reading the gate
+verified. One existing case pinned its wait (`test_money_paths.CrashLoop`), because the gate made it 90 s
+long — a suite that waits is a suite people stop running.
+
+## A bounded `watch` ended early with exit 0, and the read path still said "alive" (fixed)
+
+Measured 2026-10-22: a guard armed as `watch --interval 30 --max-iterations 1000` (8.3 h) returned long
+before its bound with **exit 0**, leaving the pod unguarded; the heartbeat kept reading "alive" for
+minutes afterwards, so `status` and every Bot reading `armed` said protected while the process was gone.
+**Twelve such calls and a hand re-arming loop** kept one pod watched for three hours.
+
+Two things were wrong, and only one of them could be fixed by honouring the flag (the loop **does** stop
+at `max_iterations` — measured, 5 polls for 5): a bound is a *hard end*, and the tool let it look like
+success, and nothing in the heartbeat said a guard would ever end by itself.
+
+**The bound is now explicit in three places:**
+
+- the arming line says *"protection ENDS when that bound is reached"* and how many hours the bound covers;
+- ending at the bound is **exit 2** with `protection_ended_at_bound: true`, `iterations`,
+  `max_iterations`, `interval_seconds`, `bounded_hours` and `ends_at` in the JSON, and a closing line that
+  says *"NOTHING is watching the machine now"*. A watch that **stopped** a machine, or found it already
+  stopped, still exits 0 — that is the guard doing its job;
+- the guard writes `max_iterations`, `iterations`, `interval_s` and `ends_at` into **its own heartbeat**,
+  and `status` prints them beside the verdict: *"alive (pid …, heartbeat 0.0 min ago) — bounded: poll 3 of
+  5 every 30s, ends by 2026-10-22 18:42; protection ends when it returns"*. The fields change no verdict
+  (`alive` is still the process) and a malformed bound reads as **unbounded** rather than inventing an
+  end.
+
+The help text and the MCP description of `rentguard_watch` say the same thing, because the caller that
+read exit 0 as success was following the documentation it had.
+
+**The tests** are `tests/test_watch_bound.py`, 10 cases, red first at the pre-fix revision (7 of the 10
+failed; the three controls passed and still pin that `--once` is a successful sample, that a guard which
+stopped a machine exits 0, and that a returned guard does not read as protection): the poll count is the
+bound; ending at the bound is exit 2 with the flag set; the arming line states the bound; the heartbeat
+carries the bound and the progress; `status` shows it; the help text and the MCP description say it; and
+the no-sleep cases keep the suite fast.
+
+
 
