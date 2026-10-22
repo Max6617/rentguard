@@ -324,10 +324,15 @@ guard          : alive (pid <pid>, heartbeat 0.3 min ago)
 never reported as protection. The same line reads, in the other three cases:
 
 ```console
-guard          : finished (last heartbeat 0.1 min ago) — nothing is watching this instance, so it will bill until someone stops it
+guard          : finished (last heartbeat 0.1 min ago) — nothing is watching this instance, and it has stopped (EXITED), so nothing is billing
 guard          : not running (pid <pid> is gone; last heartbeat 12.4 min ago) — nothing is watching this instance, so it will bill until someone stops it
-guard          : NO GUARD — nothing is watching this instance, so it will bill until someone stops it
+guard          : NO GUARD — nothing is watching this instance, and nothing is billing on the account
 ```
+
+The tail follows the **machine** (2026-10-20): a stopped instance cannot bill, a running one can, and a
+state that could not be established keeps the warning. A bounded `watch` adds its limit to a live reading
+(2026-10-22): `— bounded: poll 3 of 5 every 30s, ends by 2026-10-22 18:42; protection ends when it
+returns`.
 
 The first is the ordinary one — `watch` stops at a cap, on idle, or when the machine is already stopped,
 and says so rather than leaving a fresh file behind that reads like protection. The age is printed in
@@ -358,13 +363,16 @@ rentguard run --require-artefacts -- python validate.py
 `--require-artefacts` makes the run fail unless the pull delivered something; a pull that *broke* fails
 the run either way, because there the files may exist and be lost.
 
-If the machine reports `RUNNING` but has zero uptime and no ports, it is crash-looping and `run`
-refuses to touch it:
+If the machine reports `RUNNING` but has zero uptime and no ports, `run` and `pull` refuse to touch it —
+after **three readings, 45 s apart** (2026-10-22): one listing that is a moment old is not a crash loop,
+and refusing on it cost a window ($1.92, a cell trained to its last step). A machine that becomes usable
+on a later read is used, and the line says which read agreed:
 
 ```console
 $ rentguard run -- python train.py
-error: instance ea0si2rzoyw8e4 reports RUNNING but is not usable (uptime=0, ports=NULL).
-A pod that stays RUNNING with uptime 0 and null ports is crash-looping. Not uploading to it.
+usable         : read 1 of 3 reports RUNNING with uptime=None, ports=NULL — reading again in 45s before refusing (one stale listing is not a crash loop)
+$ rentguard run -- python train.py          # still unusable on the last read
+error: instance ea0si2rzoyw8e4 reports RUNNING but is not usable on 3 reads, 45s apart (last read: uptime=0, ports=NULL). A pod that stays RUNNING with uptime 0 and null ports is crash-looping. Not uploading to it.
 ```
 
 ## 7. Get the files back
