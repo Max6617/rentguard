@@ -1,0 +1,42 @@
+# Local state and build output. None of this is source, and a stray directory in a fresh checkout
+# is how a local ledger or a rented instance id ends up in a commit.
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# rentguard's own state: the ledger, the state file, the guard heartbeat, the job log, the lock.
+# `.rentguard/` is money history and machine ids; it must never be published.
+.rentguard/
+runs.jsonl
+runs.jsonl.lock/
+state.json
+heartbeat.json
+jobs.jsonl
+artefacts/
+
+# Test scratch and test tooling. `.rentguard-tmp` and `.rentguard-test-tmp` are the two scratch
+# roots the suites create; `.verif` is a hand-run verification root. All three hold local ledgers
+# and instance state, so all three must stay out.
+.pytest_cache/
+pytest-cache-files-*/
+.tmp-probe/
+.rentguard-tmp/
+.rentguard-test-tmp/
+.verif/
+
+# Local config, which is where an API key usually gets pasted by mistake.
+rentguard.toml
+*.local.toml
+.venv/
+venv/
+
+# Editor and hand-edit leftovers. `cli.py.bak` was in the tree at the first commit; a published
+# release does not ship a stale copy of a source file next to the real one.
+*.bak
+*.orig
+*.rej
+*~

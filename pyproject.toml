@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rentguard"
+version = "0.1.0"
+description = "Rent a GPU, cap the spend, keep the ledger, keep the results."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+authors = [{ name = "Max Reischl", email = "Max6617@users.noreply.github.com" }]
+keywords = ["gpu", "runpod", "budget", "cost-control", "experiments", "mcp", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: System :: Systems Administration",
+]
+
+[project.urls]
+Homepage = "https://github.com/Max6617/rentguard"
+Repository = "https://github.com/Max6617/rentguard"
+Issues = "https://github.com/Max6617/rentguard/issues"
+
+[project.scripts]
+rentguard = "rentguard.cli:main"
+
+[tool.setuptools]
+# Flat layout: the repository root *is* the package. Setuptools would otherwise look for a
+# `rentguard/` directory inside the project and fail with "package directory 'rentguard' does not
+# exist", which is what stopped `pip install -e .` from working at all. Mapping the package name to
+# "." says where it really lives, and keeps the import path `rentguard.cli` without moving a file.
+packages = ["rentguard"]
+
+[tool.setuptools.package-dir]
+rentguard = "."
+
+[tool.pytest.ini_options]
+# Keep the tree clean: with the cache provider off, pytest writes neither `.pytest_cache/` nor the
+# `pytest-cache-files-*` directories it falls back to when the cache directory is unusable. A clean
+# checkout has to stay clean for the publish checklist, and a stray directory in the repo root is
+# also how a `--basetemp` from a previous failure gets mistaken for source.
+addopts = "-p no:cacheprovider"
